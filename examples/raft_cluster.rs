@@ -7,8 +7,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 use tokio::time::sleep;
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize logging
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -62,11 +61,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         wal_flush_interval_ms: 100,
     };
 
-    // Create nodes
+    // Create nodes (must be done outside of tokio runtime to avoid nested runtime panic)
     println!("Creating nodes...");
     let node1 = OctopiiNode::new(config1)?;
     let node2 = OctopiiNode::new(config2)?;
     let node3 = OctopiiNode::new(config3)?;
+
+    // Create a tokio runtime for async operations
+    let rt = tokio::runtime::Runtime::new()?;
+    rt.block_on(async move {
+        run_cluster(node1, node2, node3).await
+    })
+}
+
+async fn run_cluster(node1: OctopiiNode, node2: OctopiiNode, node3: OctopiiNode) -> Result<(), Box<dyn std::error::Error>> {
 
     // Start nodes
     println!("Starting nodes...");

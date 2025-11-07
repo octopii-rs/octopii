@@ -1,5 +1,6 @@
 use bytes::Bytes;
 use octopii::rpc::{deserialize, RpcHandler, RpcMessage, RpcRequest, RequestPayload, ResponsePayload};
+use octopii::runtime::OctopiiRuntime;
 use octopii::transport::QuicTransport;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -15,8 +16,11 @@ async fn test_rpc_request_response() {
 
     let actual_addr2 = transport2.local_addr().unwrap();
 
-    let rpc1 = Arc::new(RpcHandler::new(Arc::clone(&transport1)));
-    let rpc2 = Arc::new(RpcHandler::new(Arc::clone(&transport2)));
+    let runtime1 = OctopiiRuntime::new(2);
+    let runtime2 = OctopiiRuntime::new(2);
+
+    let rpc1 = Arc::new(RpcHandler::new(Arc::clone(&transport1), &runtime1));
+    let rpc2 = Arc::new(RpcHandler::new(Arc::clone(&transport2), &runtime2));
 
     // Set up handler on node 2
     rpc2.set_request_handler(|_req: RpcRequest| ResponsePayload::CustomResponse {
@@ -111,7 +115,8 @@ async fn test_rpc_one_way_message() {
 
     let actual_addr2 = transport2.local_addr().unwrap();
 
-    let rpc1 = RpcHandler::new(Arc::clone(&transport1));
+    let runtime1 = OctopiiRuntime::new(2);
+    let rpc1 = RpcHandler::new(Arc::clone(&transport1), &runtime1);
 
     // Spawn acceptor
     let t2_clone = Arc::clone(&transport2);
