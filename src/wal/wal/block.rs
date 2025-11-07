@@ -1,5 +1,5 @@
-use crate::wal::config::{PREFIX_META_SIZE, checksum64, debug_print};
-use crate::wal::storage::SharedMmap;
+use crate::wal::wal::config::{PREFIX_META_SIZE, checksum64, debug_print};
+use crate::wal::wal::storage::SharedMmap;
 use rkyv::{Archive, Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -9,7 +9,6 @@ pub struct Entry {
 }
 
 #[derive(Archive, Deserialize, Serialize, Debug)]
-#[archive(check_bytes)]
 pub(crate) struct Metadata {
     pub(crate) read_size: usize,
     pub(crate) owned_by: String,
