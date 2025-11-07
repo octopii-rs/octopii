@@ -25,15 +25,51 @@ async fn test_rpc_request_response() {
     })
     .await;
 
-    // Spawn acceptor for transport2
+    // Spawn acceptor for transport2 (server) - sends response back on same connection
     let t2_clone = Arc::clone(&transport2);
-    let rpc2_clone = Arc::clone(&rpc2);
     tokio::spawn(async move {
-        if let Ok((addr, peer)) = t2_clone.accept().await {
-            while let Ok(Some(data)) = peer.recv().await {
-                if let Ok(msg) = deserialize::<RpcMessage>(&data) {
-                    let _ = rpc2_clone.notify_message(addr, msg);
-                }
+        loop {
+            if let Ok((_addr, peer)) = t2_clone.accept().await {
+                let peer = Arc::new(peer);
+                tokio::spawn(async move {
+                    while let Ok(Some(data)) = peer.recv().await {
+                        if let Ok(msg) = deserialize::<RpcMessage>(&data) {
+                            match msg {
+                                RpcMessage::Request(req) => {
+                                    // Handle request and send response back on same connection
+                                    use octopii::rpc::serialize;
+                                    let response_payload = ResponsePayload::CustomResponse {
+                                        success: true,
+                                        data: Bytes::from("response_data"),
+                                    };
+                                    let response = RpcMessage::new_response(req.id, response_payload);
+                                    if let Ok(data) = serialize(&response) {
+                                        let _ = peer.send(data).await;
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                });
+            }
+        }
+    });
+
+    // Spawn acceptor for transport1 (client) to receive responses
+    let t1_clone = Arc::clone(&transport1);
+    let rpc1_clone = Arc::clone(&rpc1);
+    tokio::spawn(async move {
+        loop {
+            if let Ok((addr, peer)) = t1_clone.accept().await {
+                let rpc = Arc::clone(&rpc1_clone);
+                tokio::spawn(async move {
+                    while let Ok(Some(data)) = peer.recv().await {
+                        if let Ok(msg) = deserialize::<RpcMessage>(&data) {
+                            let _ = rpc.notify_message(addr, msg);
+                        }
+                    }
+                });
             }
         }
     });
