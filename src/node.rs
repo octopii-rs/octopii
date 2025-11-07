@@ -415,19 +415,62 @@ impl OctopiiNode {
                         }
                     }
 
-                    // Apply committed entries to state machine
-                    for entry in ready.committed_entries().iter() {
+                    // Advance Raft state and get LightReady with committed entries
+                    let light_rd = raft.advance(ready).await;
+
+                    tracing::info!("LightReady: {} committed entries, {} messages",
+                        light_rd.committed_entries().len(),
+                        light_rd.messages().len()
+                    );
+
+                    // Apply committed entries to state machine (from LightReady)
+                    for entry in light_rd.committed_entries().iter() {
                         if !entry.data.is_empty() {
-                            tracing::debug!("Applying committed entry: index={}, term={}", entry.index, entry.term);
+                            tracing::info!("Applying committed entry: index={}, term={}, {} bytes",
+                                entry.index, entry.term, entry.data.len());
                             match state_machine.apply(&entry.data) {
-                                Ok(_) => tracing::trace!("Entry applied successfully"),
+                                Ok(result) => tracing::info!("Entry applied successfully: {:?}", result),
                                 Err(e) => tracing::error!("Failed to apply entry: {}", e),
                             }
                         }
                     }
 
-                    // Advance Raft state
-                    raft.advance(ready).await;
+                    // Send messages from LightReady
+                    for msg in light_rd.messages() {
+                        let to = msg.to;
+                        let peer_addrs_read = peer_addrs.read().await;
+
+                        if let Some(peer_addr) = peer_addrs_read.get(&to) {
+                            if let Some(payload) = raft_message_to_rpc(&msg) {
+                                tracing::debug!(
+                                    "Sending LightReady Raft message to peer {}: {:?} -> {}",
+                                    to,
+                                    msg.get_msg_type(),
+                                    peer_addr
+                                );
+
+                                let rpc_clone = Arc::clone(&rpc);
+                                let peer_addr = *peer_addr;
+                                tokio::spawn(async move {
+                                    match rpc_clone.request(
+                                        peer_addr,
+                                        payload,
+                                        Duration::from_secs(5),
+                                    ).await {
+                                        Ok(response) => {
+                                            tracing::trace!("Received Raft response from {}: {:?}", peer_addr, response.payload);
+                                        }
+                                        Err(e) => {
+                                            tracing::warn!("Failed to send Raft message to {}: {}", peer_addr, e);
+                                        }
+                                    }
+                                });
+                            }
+                        }
+                    }
+
+                    // Finish advancing (completes the apply phase)
+                    raft.advance_apply().await;
                 }
             }
         });

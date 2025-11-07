@@ -105,9 +105,17 @@ impl RaftNode {
     }
 
     /// Advance the Raft state machine after processing ready
-    pub async fn advance(&self, rd: Ready) {
+    /// Returns LightReady which contains committed entries
+    pub async fn advance(&self, rd: Ready) -> raft::LightReady {
         let mut node = self.raw_node.write().await;
-        node.advance(rd);
+        let light_rd = node.advance(rd);
+        light_rd
+    }
+
+    /// Finish applying committed entries
+    pub async fn advance_apply(&self) {
+        let mut node = self.raw_node.write().await;
+        node.advance_apply();
     }
 
     /// Persist entries from Ready to storage
