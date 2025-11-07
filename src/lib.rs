@@ -1,5 +1,6 @@
 mod runtime;
 
+pub mod chunk;
 pub mod config;
 pub mod error;
 pub mod node;
@@ -9,6 +10,7 @@ pub mod transport;
 pub mod wal;
 
 // Re-export main types
+pub use chunk::{ChunkSource, TransferResult};
 pub use config::Config;
 pub use error::{OctopiiError, Result};
 pub use node::OctopiiNode;
