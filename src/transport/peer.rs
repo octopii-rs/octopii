@@ -199,15 +199,15 @@ impl PeerConnection {
         while received < total_size {
             let to_read = std::cmp::min(BUFFER_SIZE, (total_size - received) as usize);
             match recv_stream.read(&mut buffer[..to_read]).await {
-                Ok(0) => {
-                    // Unexpected EOF
-                    let _ = send_stream.write_all(&[2u8]).await;
-                    return Err(OctopiiError::Transport("Unexpected EOF".to_string()));
-                }
-                Ok(n) => {
+                Ok(Some(n)) => {
                     hasher.update(&buffer[..n]);
                     data.extend_from_slice(&buffer[..n]);
                     received += n as u64;
+                }
+                Ok(None) => {
+                    // Stream closed before we read everything
+                    let _ = send_stream.write_all(&[2u8]).await;
+                    return Err(OctopiiError::Transport("Unexpected EOF".to_string()));
                 }
                 Err(e) => {
                     let _ = send_stream.write_all(&[2u8]).await;
@@ -228,7 +228,7 @@ impl PeerConnection {
 
         // Verify checksum
         let computed_checksum = hasher.finalize();
-        if computed_checksum.as_slice() != &received_checksum {
+        if &computed_checksum[..] != &received_checksum {
             // Send checksum mismatch ACK
             send_stream
                 .write_all(&[1u8])
