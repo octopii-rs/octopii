@@ -114,10 +114,18 @@ async fn run_cluster(node1: OctopiiNode, node2: OctopiiNode, node3: OctopiiNode)
 
     if let Some(leader) = leader_node {
         println!("\n=== Proposing commands via leader ===");
-        for i in 1..=5 {
-            let command = format!("command_{}", i).into_bytes();
-            println!("Proposing: command_{}", i);
-            leader.propose(command).await?;
+
+        let commands = vec![
+            ("SET foo bar", "Setting foo=bar"),
+            ("SET hello world", "Setting hello=world"),
+            ("GET foo", "Getting foo"),
+            ("SET count 42", "Setting count=42"),
+            ("GET hello", "Getting hello"),
+        ];
+
+        for (cmd, desc) in commands {
+            println!("Proposing: {}", desc);
+            leader.propose(cmd.as_bytes().to_vec()).await?;
             sleep(Duration::from_millis(500)).await;
         }
 
