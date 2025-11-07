@@ -1,8 +1,10 @@
 mod storage;
 mod state_machine;
+mod rpc;
 
 pub use storage::WalStorage;
 pub use state_machine::StateMachine;
+pub use rpc::*;
 
 use crate::error::Result;
 use raft::{prelude::*, Config as RaftConfig, RawNode};
