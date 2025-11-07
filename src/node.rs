@@ -492,6 +492,7 @@ mod tests {
             worker_threads: 2,
             wal_batch_size: 10,
             wal_flush_interval_ms: 100,
+            is_initial_leader: false,
         };
 
         assert_eq!(config.node_id, 1);
