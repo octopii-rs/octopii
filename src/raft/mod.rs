@@ -1,0 +1,88 @@
+mod storage;
+mod state_machine;
+
+pub use storage::WalStorage;
+pub use state_machine::StateMachine;
+
+use crate::error::Result;
+use raft::{prelude::*, Config as RaftConfig, RawNode};
+use std::sync::Arc;
+use tokio::sync::RwLock;
+
+/// Raft node wrapper
+pub struct RaftNode {
+    raw_node: Arc<RwLock<RawNode<WalStorage>>>,
+    node_id: u64,
+}
+
+impl RaftNode {
+    /// Create a new Raft node
+    pub async fn new(
+        node_id: u64,
+        peers: Vec<u64>,
+        storage: WalStorage,
+    ) -> Result<Self> {
+        let config = RaftConfig {
+            id: node_id,
+            election_tick: 10,
+            heartbeat_tick: 3,
+            ..Default::default()
+        };
+
+        config.validate()?;
+
+        let raw_node = RawNode::new(&config, storage, &slog::Logger::root(slog::Discard, slog::o!()))?;
+
+        Ok(Self {
+            raw_node: Arc::new(RwLock::new(raw_node)),
+            node_id,
+        })
+    }
+
+    /// Get the node ID
+    pub fn id(&self) -> u64 {
+        self.node_id
+    }
+
+    /// Propose a change to the state machine
+    pub async fn propose(&self, data: Vec<u8>) -> Result<()> {
+        let mut node = self.raw_node.write().await;
+        node.propose(vec![], data)?;
+        Ok(())
+    }
+
+    /// Tick the Raft node (should be called periodically)
+    pub async fn tick(&self) {
+        let mut node = self.raw_node.write().await;
+        node.tick();
+    }
+
+    /// Process a Raft message
+    pub async fn step(&self, msg: Message) -> Result<()> {
+        let mut node = self.raw_node.write().await;
+        node.step(msg)?;
+        Ok(())
+    }
+
+    /// Check if there are ready messages to process
+    pub async fn ready(&self) -> Option<Ready> {
+        let mut node = self.raw_node.write().await;
+        if node.has_ready() {
+            Some(node.ready())
+        } else {
+            None
+        }
+    }
+
+    /// Advance the Raft state machine after processing ready
+    pub async fn advance(&self, rd: Ready) {
+        let mut node = self.raw_node.write().await;
+        node.advance(rd);
+    }
+
+    /// Check if this node is the leader
+    pub async fn is_leader(&self) -> bool {
+        let node = self.raw_node.read().await;
+        node.raft.state == raft::StateRole::Leader
+    }
+}
