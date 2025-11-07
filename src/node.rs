@@ -126,6 +126,11 @@ impl OctopiiNode {
         self.raft.is_leader().await
     }
 
+    /// Trigger this node to campaign for leadership
+    pub async fn campaign(&self) -> Result<()> {
+        self.raft.campaign().await
+    }
+
     /// Get the node ID
     pub fn id(&self) -> u64 {
         self.config.node_id
@@ -337,11 +342,17 @@ impl OctopiiNode {
 
         self.runtime.spawn(async move {
             let mut checker = interval(Duration::from_millis(10));
+            let mut check_count = 0;
             loop {
                 checker.tick().await;
+                check_count += 1;
+
+                if check_count % 100 == 0 {
+                    tracing::debug!("Ready handler alive, checked {} times", check_count);
+                }
 
                 if let Some(ready) = raft.ready().await {
-                    tracing::trace!("Raft ready: has {} messages, {} committed entries",
+                    tracing::info!("Raft ready: has {} messages, {} committed entries",
                         ready.messages().len(),
                         ready.committed_entries().len()
                     );
