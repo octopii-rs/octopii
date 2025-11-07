@@ -11,8 +11,15 @@ fn test_wal_path(name: &str) -> PathBuf {
     std::env::temp_dir().join(format!("test_wal_{}.log", name))
 }
 
-// Helper to clean up a WAL file
+// Helper to clean up a WAL directory (Walrus stores in wal_files/)
 async fn cleanup_wal(path: &PathBuf) {
+    // Walrus creates wal_files/<name>/ directory
+    if let Some(file_name) = path.file_name() {
+        if let Some(name_str) = file_name.to_str() {
+            let wal_dir = PathBuf::from("wal_files").join(name_str);
+            let _ = tokio::fs::remove_dir_all(&wal_dir).await;
+        }
+    }
     let _ = tokio::fs::remove_file(path).await;
 }
 
