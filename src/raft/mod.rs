@@ -21,9 +21,20 @@ impl RaftNode {
     /// Create a new Raft node
     pub async fn new(
         node_id: u64,
-        _peers: Vec<u64>,
+        peers: Vec<u64>,
         storage: WalStorage,
     ) -> Result<Self> {
+        // Bootstrap the cluster with all peers (including self)
+        let mut all_peers = vec![node_id];
+        all_peers.extend(peers.iter());
+
+        tracing::info!("Bootstrapping Raft node {} with peers: {:?}", node_id, all_peers);
+
+        // Set initial ConfState in storage
+        let mut conf_state = ConfState::default();
+        conf_state.voters = all_peers;
+        storage.set_conf_state(conf_state);
+
         let config = RaftConfig {
             id: node_id,
             election_tick: 10,
@@ -86,5 +97,13 @@ impl RaftNode {
     pub async fn is_leader(&self) -> bool {
         let node = self.raw_node.read().await;
         node.raft.state == raft::StateRole::Leader
+    }
+
+    /// Campaign to become leader (triggers election)
+    pub async fn campaign(&self) -> Result<()> {
+        let mut node = self.raw_node.write().await;
+        node.campaign()?;
+        tracing::info!("Node {} starting election campaign", self.node_id);
+        Ok(())
     }
 }

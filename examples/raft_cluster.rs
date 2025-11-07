@@ -82,8 +82,11 @@ async fn run_cluster(node1: OctopiiNode, node2: OctopiiNode, node3: OctopiiNode)
     node2.start().await?;
     node3.start().await?;
 
-    println!("\nNodes started! Waiting for leader election...");
-    sleep(Duration::from_secs(3)).await;
+    println!("\nNodes started! Triggering election on node 1...");
+    node1.campaign().await?;
+
+    println!("Waiting for leader election...");
+    sleep(Duration::from_secs(2)).await;
 
     // Check which node is the leader
     println!("\n=== Checking leader status ===");
