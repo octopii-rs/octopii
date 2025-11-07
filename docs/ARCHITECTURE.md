@@ -42,27 +42,40 @@ Octopii is a minimal distributed file transfer and RPC system built on QUIC tran
 
 **Implementation**:
 ```
-┌─────────────────────────────────────┐
-│      OctopiiRuntime                 │
-│                                      │
-│   ┌──────────────────────────┐     │
-│   │ Tokio Multi-Thread       │     │
-│   │ Runtime                  │     │
-│   │                          │     │
-│   │  Thread 1 ┃ Thread 2    │     │
-│   │  ...      ┃ ...         │     │
-│   │  Thread N ┃ Thread N+1  │     │
-│   └──────────────────────────┘     │
-│                                      │
-│   Configurable thread count          │
-└─────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────┐
+│                  OctopiiRuntime                          │
+│                                                          │
+│  ┌────────────────────────────────────────────────┐    │
+│  │ Tokio Async Runtime (worker_threads = N)       │    │
+│  │                                                  │    │
+│  │  Thread 1 ┃ Thread 2 ┃ ... ┃ Thread N         │    │
+│  │  (async)  ┃ (async)  ┃     ┃ (async)          │    │
+│  └────────────────────────────────────────────────┘    │
+│                                                          │
+│  ┌────────────────────────────────────────────────┐    │
+│  │ Tokio Blocking Thread Pool (max 512)           │    │
+│  │                                                  │    │
+│  │  Spawned on-demand for spawn_blocking()        │    │
+│  │  - WAL operations (Walrus calls)                │    │
+│  │  - CPU-bound work                                │    │
+│  └────────────────────────────────────────────────┘    │
+│                                                          │
+│  ┌────────────────────────────────────────────────┐    │
+│  │ Walrus Native Threads (std::thread)             │    │
+│  │                                                  │    │
+│  │  - Background fsync worker (1 per instance)     │    │
+│  │  - Independent of Tokio                          │    │
+│  └────────────────────────────────────────────────┘    │
+│                                                          │
+└──────────────────────────────────────────────────────────┘
 ```
 
-**Key points**:
-- Dedicated thread pool separate from your app
-- All async operations run within this pool
-- Thread count configurable at creation
-- Uses `Runtime::block_on()` for sync/async boundary
+**Thread Model**:
+- **N async workers**: Configured via `worker_threads`, handles async I/O
+- **Up to 512 blocking threads**: Auto-managed by Tokio for CPU-bound/sync work
+- **Walrus background threads**: Native OS threads for fsync operations
+
+**Important**: `worker_threads: N` is NOT a hard cap on total threads. The system will create additional threads for blocking operations and Walrus internals.
 
 **Code location**: `src/runtime.rs`
 
@@ -167,28 +180,76 @@ Flow:
 
 **Code location**: `src/rpc/mod.rs`, `src/transport/peer.rs` (methods: `send`, `recv`)
 
-### 5. Write-Ahead Log (WAL)
+### 5. Write-Ahead Log (WAL) - Walrus Integration
 
-**Purpose**: Durable storage with batched writes for performance.
+**Purpose**: Production-grade durable storage with crash recovery and multi-tenant isolation.
 
+**Architecture**:
 ```
-┌───────────────────────────────────┐
-│         WAL Structure             │
-│                                   │
-│  [Entry 1][Entry 2][Entry 3]...  │
-│                                   │
-│  Each entry:                      │
-│    [4 bytes: length]              │
-│    [entry data]                   │
-└───────────────────────────────────┘
-
-Write Strategy:
-  - Batches writes every 100ms
-  - Reduces fsync calls
-  - Buffered writes for performance
+┌─────────────────────────────────────────────────────────┐
+│                    Walrus WAL                            │
+│                                                          │
+│  ┌────────────────────────────────────────┐            │
+│  │  Block-based Storage (10MB blocks)     │            │
+│  │                                         │            │
+│  │  Block 1 │ Block 2 │ Block 3 │ ...    │            │
+│  │  [Sealed]│ [Sealed]│ [Active]│         │            │
+│  └────────────────────────────────────────┘            │
+│                                                          │
+│  Each Entry:                                             │
+│    [64-byte metadata][data][FNV-1a checksum]           │
+│                                                          │
+│  ┌────────────────────────────────────────┐            │
+│  │  Topic-based Multi-tenancy              │            │
+│  │                                         │            │
+│  │  - Each topic has independent writer   │            │
+│  │  - Readers track position per topic    │            │
+│  │  - Tail reading from active blocks     │            │
+│  └────────────────────────────────────────┘            │
+│                                                          │
+│  ┌────────────────────────────────────────┐            │
+│  │  Background Fsync Worker (std::thread)  │            │
+│  │                                         │            │
+│  │  - Configurable schedule (time-based)  │            │
+│  │  - Uses io_uring on Linux (optional)   │            │
+│  │  - Falls back to mmap on unsupported   │            │
+│  └────────────────────────────────────────┘            │
+│                                                          │
+│  Storage Backends:                                       │
+│    - Memory-mapped files (mmap) - Default               │
+│    - File descriptors with O_SYNC - Optional            │
+│    - io_uring batched I/O - Linux only                  │
+└─────────────────────────────────────────────────────────┘
 ```
 
-**Code location**: `src/wal/mod.rs`
+**Integration with Tokio**:
+```rust
+// Async wrapper in src/wal/mod.rs
+pub async fn append(&self, data: Bytes) -> Result<u64> {
+    let walrus = self.walrus.clone();
+
+    // Bridge to sync Walrus via blocking thread pool
+    tokio::task::spawn_blocking(move || {
+        walrus.append_for_topic(&topic, &data)  // Pure sync
+    })
+    .await??;
+}
+```
+
+**Key Features**:
+- **Crash recovery**: Automatic state rebuilding from persisted blocks
+- **Checksumming**: FNV-1a for data integrity verification
+- **Read consistency**: `StrictlyAtOnce` (no duplicate reads)
+- **Batched I/O**: io_uring support with fallback to mmap
+- **Zero-copy reads**: Direct mmap access for sealed blocks
+- **Tail reading**: Readers can see active writer's uncommitted data
+
+**Code locations**:
+- Integration layer: `src/wal/mod.rs`
+- Walrus core: `src/wal/wal/` (block.rs, storage.rs, runtime/)
+- Read path: `src/wal/wal/runtime/walrus_read.rs`
+- Write path: `src/wal/wal/runtime/walrus_write.rs`
+- Background sync: `src/wal/wal/runtime/background.rs`
 
 ### 6. Raft Integration
 
@@ -264,6 +325,7 @@ All concurrent, no blocking!
    - 64KB streaming buffers (not full file)
    - `bytes::Bytes` for zero-copy
    - Controlled allocation (cap at 10MB for receive buffer)
+   - Direct mmap access for WAL reads (zero-copy)
 
 2. **Network Efficiency**:
    - Connection pooling
@@ -272,8 +334,16 @@ All concurrent, no blocking!
 
 3. **CPU Efficiency**:
    - Incremental SHA256 (computed during streaming)
-   - Batched WAL writes (reduced fsync)
+   - Batched WAL fsync (configurable schedule)
    - Isolated runtime (doesn't steal from app threads)
+   - io_uring for batched I/O on Linux (when supported)
+
+4. **Thread Efficiency**:
+   - **Async runtime**: N threads for non-blocking I/O operations
+   - **Blocking pool**: Up to 512 threads for CPU-bound/sync operations
+   - **Walrus threads**: Dedicated background fsync worker (1 per instance)
+   - **Total threads**: N + blocking_pool_size + walrus_threads
+   - **Note**: `worker_threads: N` configures only the async runtime, not total thread count
 
 ## Error Handling
 
