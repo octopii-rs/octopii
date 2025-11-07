@@ -1,4 +1,4 @@
-use crate::wal::paths::WalPathManager;
+use crate::wal::wal::paths::WalPathManager;
 use rkyv::{Archive, Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;

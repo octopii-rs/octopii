@@ -1,5 +1,5 @@
-use crate::wal::block::Block;
-use crate::wal::config::debug_print;
+use crate::wal::wal::block::Block;
+use crate::wal::wal::config::debug_print;
 use std::collections::HashMap;
 use std::io;
 use std::sync::{Arc, RwLock};

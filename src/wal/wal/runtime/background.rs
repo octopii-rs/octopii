@@ -1,5 +1,5 @@
-use crate::wal::config::{FsyncSchedule, debug_print};
-use crate::wal::storage::{StorageImpl, open_storage_for_path};
+use crate::wal::wal::config::{FsyncSchedule, debug_print};
+use crate::wal::wal::storage::{StorageImpl, open_storage_for_path};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
@@ -12,7 +12,7 @@ use std::time::Duration;
 use super::DELETION_TX;
 
 #[cfg(target_os = "linux")]
-use crate::wal::config::USE_FD_BACKEND;
+use crate::wal::wal::config::USE_FD_BACKEND;
 #[cfg(target_os = "linux")]
 use std::os::unix::io::AsRawFd;
 
@@ -40,7 +40,7 @@ pub(super) fn start_background_workers(fsync_schedule: FsyncSchedule) -> Arc<mps
         let mut delete_pending = HashSet::new();
 
         #[cfg(target_os = "linux")]
-        let mut ring = io_uring::IoUring::new(2048).expect("Failed to create io_uring");
+        let mut ring = io_uring::IoUring::new(2048).ok(); // Optional: fallback if not supported
 
         loop {
             thread::sleep(Duration::from_millis(sleep_millis));
@@ -92,52 +92,65 @@ pub(super) fn start_background_workers(fsync_schedule: FsyncSchedule) -> Arc<mps
                     }
 
                     if !fsync_batch.is_empty() {
-                        debug_print!("[flush] batching {} fsync operations", fsync_batch.len());
+                        // Try io_uring if available, otherwise fallback to sync flush
+                        if let Some(ring) = ring.as_mut() {
+                            debug_print!("[flush] batching {} fsync operations (io_uring)", fsync_batch.len());
 
-                        // Push all fsync operations to submission queue
-                        for (i, (raw_fd, _path)) in fsync_batch.iter().enumerate() {
-                            let fd = io_uring::types::Fd(*raw_fd);
+                            // Push all fsync operations to submission queue
+                            for (i, (raw_fd, _path)) in fsync_batch.iter().enumerate() {
+                                let fd = io_uring::types::Fd(*raw_fd);
 
-                            let fsync_op =
-                                io_uring::opcode::Fsync::new(fd).build().user_data(i as u64);
+                                let fsync_op =
+                                    io_uring::opcode::Fsync::new(fd).build().user_data(i as u64);
 
-                            unsafe {
-                                if ring.submission().push(&fsync_op).is_err() {
-                                    // Submission queue full, submit current batch
-                                    ring.submit().expect("Failed to submit fsync batch");
-                                    ring.submission()
-                                        .push(&fsync_op)
-                                        .expect("Failed to push fsync op");
+                                unsafe {
+                                    if ring.submission().push(&fsync_op).is_err() {
+                                        // Submission queue full, submit current batch
+                                        ring.submit().expect("Failed to submit fsync batch");
+                                        ring.submission()
+                                            .push(&fsync_op)
+                                            .expect("Failed to push fsync op");
+                                    }
                                 }
                             }
-                        }
 
-                        // Single syscall to submit all fsync operations!
-                        match ring.submit_and_wait(fsync_batch.len()) {
-                            Ok(submitted) => {
-                                debug_print!(
-                                    "[flush] submitted {} fsync ops in one syscall",
-                                    submitted
-                                );
-                            }
-                            Err(e) => {
-                                debug_print!("[flush] failed to submit fsync batch: {}", e);
-                            }
-                        }
-
-                        // Process completions
-                        for _ in 0..fsync_batch.len() {
-                            if let Some(cqe) = ring.completion().next() {
-                                let idx = cqe.user_data() as usize;
-                                let result = cqe.result();
-
-                                if result < 0 {
-                                    let (_fd, path) = &fsync_batch[idx];
+                            // Single syscall to submit all fsync operations!
+                            match ring.submit_and_wait(fsync_batch.len()) {
+                                Ok(submitted) => {
                                     debug_print!(
-                                        "[flush] fsync error for {}: error code {}",
-                                        path,
-                                        result
+                                        "[flush] submitted {} fsync ops in one syscall",
+                                        submitted
                                     );
+                                }
+                                Err(e) => {
+                                    debug_print!("[flush] failed to submit fsync batch: {}", e);
+                                }
+                            }
+
+                            // Process completions
+                            for _ in 0..fsync_batch.len() {
+                                if let Some(cqe) = ring.completion().next() {
+                                    let idx = cqe.user_data() as usize;
+                                    let result = cqe.result();
+
+                                    if result < 0 {
+                                        let (_fd, path) = &fsync_batch[idx];
+                                        debug_print!(
+                                            "[flush] fsync error for {}: error code {}",
+                                            path,
+                                            result
+                                        );
+                                    }
+                                }
+                            }
+                        } else {
+                            // Fallback: No io_uring, use sync flush
+                            debug_print!("[flush] fallback: syncing {} files without io_uring", fsync_batch.len());
+                            for (_fd, path) in fsync_batch.iter() {
+                                if let Some(storage) = pool.get_mut(path) {
+                                    if let Err(e) = storage.flush() {
+                                        debug_print!("[flush] flush error for {}: {}", path, e);
+                                    }
                                 }
                             }
                         }

@@ -1,4 +1,4 @@
-use crate::wal::config::{FsyncSchedule, USE_FD_BACKEND};
+use crate::wal::wal::config::{FsyncSchedule, USE_FD_BACKEND};
 use memmap2::MmapMut;
 use std::collections::HashMap;
 use std::fs::OpenOptions;
