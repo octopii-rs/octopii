@@ -161,4 +161,93 @@ impl PeerConnection {
             )),
         }
     }
+
+    /// Receive a chunk with checksum verification
+    ///
+    /// Protocol:
+    /// - Receive [8 bytes: chunk size]
+    /// - Receive [N bytes: chunk data] (streamed)
+    /// - Receive [32 bytes: SHA256 checksum]
+    /// - Verify checksum
+    /// - Send [1 byte: status] (0=OK, 1=checksum_fail, 2=error)
+    ///
+    /// Returns the received chunk data in memory
+    pub async fn recv_chunk_verified(&self) -> Result<Option<Bytes>> {
+        const BUFFER_SIZE: usize = 64 * 1024; // 64KB buffer
+
+        let (mut send_stream, mut recv_stream) = match self.connection.accept_bi().await {
+            Ok(stream) => stream,
+            Err(quinn::ConnectionError::ApplicationClosed(_)) => return Ok(None),
+            Err(e) => return Err(e.into()),
+        };
+
+        // Read size
+        let mut size_buf = [0u8; 8];
+        if let Err(e) = recv_stream.read_exact(&mut size_buf).await {
+            // Send error ACK
+            let _ = send_stream.write_all(&[2u8]).await;
+            return Err(OctopiiError::Transport(format!("Failed to read size: {}", e)));
+        }
+        let total_size = u64::from_le_bytes(size_buf);
+
+        // Stream data and compute checksum
+        let mut hasher = Sha256::new();
+        let mut data = BytesMut::with_capacity(std::cmp::min(total_size as usize, 10 * 1024 * 1024)); // Cap at 10MB for initial allocation
+        let mut received = 0u64;
+        let mut buffer = vec![0u8; BUFFER_SIZE];
+
+        while received < total_size {
+            let to_read = std::cmp::min(BUFFER_SIZE, (total_size - received) as usize);
+            match recv_stream.read(&mut buffer[..to_read]).await {
+                Ok(0) => {
+                    // Unexpected EOF
+                    let _ = send_stream.write_all(&[2u8]).await;
+                    return Err(OctopiiError::Transport("Unexpected EOF".to_string()));
+                }
+                Ok(n) => {
+                    hasher.update(&buffer[..n]);
+                    data.extend_from_slice(&buffer[..n]);
+                    received += n as u64;
+                }
+                Err(e) => {
+                    let _ = send_stream.write_all(&[2u8]).await;
+                    return Err(OctopiiError::Transport(format!("Read error: {}", e)));
+                }
+            }
+        }
+
+        // Read checksum
+        let mut received_checksum = [0u8; 32];
+        if let Err(e) = recv_stream.read_exact(&mut received_checksum).await {
+            let _ = send_stream.write_all(&[2u8]).await;
+            return Err(OctopiiError::Transport(format!(
+                "Failed to read checksum: {}",
+                e
+            )));
+        }
+
+        // Verify checksum
+        let computed_checksum = hasher.finalize();
+        if computed_checksum.as_slice() != &received_checksum {
+            // Send checksum mismatch ACK
+            send_stream
+                .write_all(&[1u8])
+                .await
+                .map_err(|e| OctopiiError::Transport(format!("Failed to send ACK: {}", e)))?;
+            return Err(OctopiiError::Transport(
+                "Checksum verification failed".to_string(),
+            ));
+        }
+
+        // Send success ACK
+        send_stream
+            .write_all(&[0u8])
+            .await
+            .map_err(|e| OctopiiError::Transport(format!("Failed to send ACK: {}", e)))?;
+        send_stream
+            .finish()
+            .map_err(|e| OctopiiError::Transport(format!("Stream closed: {}", e)))?;
+
+        Ok(Some(data.freeze()))
+    }
 }
