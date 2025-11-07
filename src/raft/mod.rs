@@ -32,8 +32,26 @@ impl RaftNode {
 
         // Set initial ConfState in storage
         let mut conf_state = ConfState::default();
-        conf_state.voters = all_peers;
+        conf_state.voters = all_peers.clone();
         storage.set_conf_state(conf_state);
+
+        // Add initial empty entry to the log so Raft can campaign
+        // Without this, Raft refuses to campaign on an empty log
+        let mut initial_entry = Entry::default();
+        initial_entry.entry_type = EntryType::EntryNormal.into();
+        initial_entry.term = 1;
+        initial_entry.index = 1;
+        initial_entry.data = vec![].into();
+
+        storage.append_entries(&[initial_entry]).await?;
+
+        // Set initial HardState with term 1
+        let mut hard_state = HardState::default();
+        hard_state.term = 1;
+        hard_state.commit = 0;
+        storage.set_hard_state(hard_state);
+
+        tracing::info!("Added initial log entry for node {}", node_id);
 
         let config = RaftConfig {
             id: node_id,
