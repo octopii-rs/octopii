@@ -26,13 +26,11 @@ pub struct OctopiiNode {
     state_machine: Arc<StateMachine>,
     /// Map peer ID to socket address
     peer_addrs: Arc<RwLock<HashMap<u64, SocketAddr>>>,
-    /// Track pending Raft request types for response handling
-    pending_raft_requests: Arc<RwLock<HashMap<u64, MessageType>>>,
 }
 
 impl OctopiiNode {
     /// Create a new Octopii node
-    pub async fn new(config: Config) -> Result<Self> {
+    pub fn new(config: Config) -> Result<Self> {
         // Create isolated runtime
         let runtime = OctopiiRuntime::new(config.worker_threads);
 
@@ -80,7 +78,6 @@ impl OctopiiNode {
             raft,
             state_machine,
             peer_addrs: Arc::new(RwLock::new(peer_addrs_map)),
-            pending_raft_requests: Arc::new(RwLock::new(HashMap::new())),
         };
 
         tracing::info!(
@@ -90,15 +87,15 @@ impl OctopiiNode {
             node.config.peers
         );
 
-        // Set up RPC request handler
-        node.setup_rpc_handler().await;
-
         Ok(node)
     }
 
     /// Start the node
     pub async fn start(&self) -> Result<()> {
         tracing::info!("Starting Octopii node {}", self.config.node_id);
+
+        // Set up RPC request handler
+        self.setup_rpc_handler().await;
 
         // Spawn network acceptor task
         self.spawn_network_acceptor();

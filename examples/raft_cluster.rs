@@ -64,9 +64,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create nodes
     println!("Creating nodes...");
-    let node1 = OctopiiNode::new(config1).await?;
-    let node2 = OctopiiNode::new(config2).await?;
-    let node3 = OctopiiNode::new(config3).await?;
+    let node1 = OctopiiNode::new(config1)?;
+    let node2 = OctopiiNode::new(config2)?;
+    let node3 = OctopiiNode::new(config3)?;
 
     // Start nodes
     println!("Starting nodes...");
