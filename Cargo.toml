@@ -17,3 +17,4 @@ rustls = { version = "0.23", features = ["ring"] }
 rcgen = "0.13"
 slog = "2.8"
 protobuf = "2.28"
+sha2 = "0.10"
