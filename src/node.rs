@@ -1,16 +1,19 @@
 use crate::chunk::{ChunkSource, TransferResult};
 use crate::config::Config;
 use crate::error::Result;
-use crate::raft::{RaftNode, StateMachine, WalStorage};
-use crate::rpc::{deserialize, RpcHandler, RpcMessage, RpcRequest, ResponsePayload};
+use crate::raft::{RaftNode, StateMachine, WalStorage, raft_message_to_rpc, rpc_to_raft_message};
+use crate::rpc::{deserialize, RpcHandler, RpcMessage, RpcRequest, RequestPayload, ResponsePayload};
 use crate::runtime::OctopiiRuntime;
 use crate::transport::QuicTransport;
 use crate::wal::WriteAheadLog;
 use bytes::Bytes;
 use futures::future::join_all;
+use raft::prelude::MessageType;
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Instant;
+use tokio::sync::RwLock;
 use tokio::time::{interval, timeout, Duration};
 
 /// Main Octopii node that orchestrates all components
@@ -21,6 +24,10 @@ pub struct OctopiiNode {
     rpc: Arc<RpcHandler>,
     raft: Arc<RaftNode>,
     state_machine: Arc<StateMachine>,
+    /// Map peer ID to socket address
+    peer_addrs: Arc<RwLock<HashMap<u64, SocketAddr>>>,
+    /// Track pending Raft request types for response handling
+    pending_raft_requests: Arc<RwLock<HashMap<u64, MessageType>>>,
 }
 
 impl OctopiiNode {
@@ -45,7 +52,21 @@ impl OctopiiNode {
 
         // Create Raft storage and node
         let storage = WalStorage::new(Arc::clone(&wal));
-        let peer_ids: Vec<u64> = (1..=config.peers.len() as u64 + 1).collect();
+
+        // Build peer ID mapping (peer ID = index + 1, but skip our own ID)
+        let mut peer_addrs_map = HashMap::new();
+        for (idx, addr) in config.peers.iter().enumerate() {
+            let peer_id = (idx + 1) as u64;
+            let peer_id_adjusted = if peer_id >= config.node_id {
+                peer_id + 1  // Skip our own ID
+            } else {
+                peer_id
+            };
+            peer_addrs_map.insert(peer_id_adjusted, *addr);
+            tracing::info!("Mapped peer {} -> {}", peer_id_adjusted, addr);
+        }
+
+        let peer_ids: Vec<u64> = peer_addrs_map.keys().copied().collect();
         let raft = Arc::new(runtime.block_on(RaftNode::new(config.node_id, peer_ids, storage))?);
 
         // Create state machine
@@ -58,7 +79,16 @@ impl OctopiiNode {
             rpc,
             raft,
             state_machine,
+            peer_addrs: Arc::new(RwLock::new(peer_addrs_map)),
+            pending_raft_requests: Arc::new(RwLock::new(HashMap::new())),
         };
+
+        tracing::info!(
+            "Octopii node {} created: bind_addr={}, peers={:?}",
+            node.config.node_id,
+            node.config.bind_addr,
+            node.config.peers
+        );
 
         // Set up RPC request handler
         node.setup_rpc_handler().await;
@@ -84,6 +114,7 @@ impl OctopiiNode {
 
     /// Propose a change to the distributed state machine
     pub async fn propose(&self, command: Vec<u8>) -> Result<()> {
+        tracing::info!("Proposing command to Raft: {} bytes", command.len());
         self.raft.propose(command).await
     }
 
@@ -191,31 +222,28 @@ impl OctopiiNode {
             .collect()
     }
 
-    /// Set up RPC request handler
+    /// Set up RPC request handler for application-level RPCs
+    /// Note: Raft RPCs are handled directly in the network acceptor for async processing
     async fn setup_rpc_handler(&self) {
-        let _raft = Arc::clone(&self.raft);
+        tracing::info!("Setting up application RPC handler");
 
         self.rpc
             .set_request_handler(move |req: RpcRequest| {
-                // Handle Raft RPCs
                 match &req.payload {
-                    crate::rpc::RequestPayload::AppendEntries { .. } => {
-                        // In a full implementation, convert to Raft message and call raft.step()
-                        ResponsePayload::AppendEntriesResponse {
-                            term: 0,
+                    RequestPayload::AppendEntries { .. } | RequestPayload::RequestVote { .. } => {
+                        // Raft messages are handled in network acceptor, this shouldn't be reached
+                        tracing::warn!("Raft message reached RPC handler (should be handled in acceptor)");
+                        ResponsePayload::Error {
+                            message: "Raft messages handled separately".to_string(),
+                        }
+                    }
+                    RequestPayload::Custom { operation, data } => {
+                        tracing::debug!("Handling custom RPC: operation={}, data={} bytes", operation, data.len());
+                        ResponsePayload::CustomResponse {
                             success: true,
+                            data: Bytes::from("OK"),
                         }
                     }
-                    crate::rpc::RequestPayload::RequestVote { .. } => {
-                        ResponsePayload::RequestVoteResponse {
-                            term: 0,
-                            vote_granted: false,
-                        }
-                    }
-                    crate::rpc::RequestPayload::Custom { .. } => ResponsePayload::CustomResponse {
-                        success: true,
-                        data: Bytes::from("OK"),
-                    },
                 }
             })
             .await;
@@ -225,16 +253,55 @@ impl OctopiiNode {
     fn spawn_network_acceptor(&self) {
         let transport = Arc::clone(&self.transport);
         let rpc = Arc::clone(&self.rpc);
+        let raft = Arc::clone(&self.raft);
+        let node_id = self.config.node_id;
+
+        tracing::info!("Spawning network acceptor for node {}", node_id);
 
         self.runtime.spawn(async move {
             loop {
                 match transport.accept().await {
                     Ok((addr, peer)) => {
+                        tracing::debug!("Accepted connection from {}", addr);
+
                         let rpc_clone = Arc::clone(&rpc);
+                        let raft_clone = Arc::clone(&raft);
+                        let peer = Arc::new(peer);
+
                         tokio::spawn(async move {
                             while let Ok(Some(data)) = peer.recv().await {
                                 if let Ok(msg) = deserialize::<RpcMessage>(&data) {
-                                    let _ = rpc_clone.notify_message(addr, msg);
+                                    // Handle Raft messages directly for async processing
+                                    match &msg {
+                                        RpcMessage::Request(req) => {
+                                            match &req.payload {
+                                                RequestPayload::AppendEntries { .. } | RequestPayload::RequestVote { .. } => {
+                                                    tracing::debug!("Received Raft request from {}: {:?}", addr, req.payload);
+
+                                                    // Convert RPC to Raft message
+                                                    if let Some(raft_msg) = rpc_to_raft_message(0, node_id, &req.payload) {
+                                                        // Step the Raft state machine
+                                                        match raft_clone.step(raft_msg).await {
+                                                            Ok(_) => {
+                                                                tracing::trace!("Raft message processed successfully");
+                                                                // Response will be sent from ready handler
+                                                            }
+                                                            Err(e) => {
+                                                                tracing::error!("Failed to step Raft: {}", e);
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                _ => {
+                                                    // Non-Raft messages go through normal RPC handler
+                                                    let _ = rpc_clone.notify_message(addr, msg);
+                                                }
+                                            }
+                                        }
+                                        _ => {
+                                            let _ = rpc_clone.notify_message(addr, msg);
+                                        }
+                                    }
                                 }
                             }
                         });
@@ -251,11 +318,14 @@ impl OctopiiNode {
     fn spawn_raft_ticker(&self) {
         let raft = Arc::clone(&self.raft);
 
+        tracing::info!("Spawning Raft ticker (100ms interval)");
+
         self.runtime.spawn(async move {
             let mut ticker = interval(Duration::from_millis(100));
             loop {
                 ticker.tick().await;
                 raft.tick().await;
+                tracing::trace!("Raft ticked");
             }
         });
     }
@@ -264,6 +334,10 @@ impl OctopiiNode {
     fn spawn_raft_ready_handler(&self) {
         let raft = Arc::clone(&self.raft);
         let state_machine = Arc::clone(&self.state_machine);
+        let rpc = Arc::clone(&self.rpc);
+        let peer_addrs = Arc::clone(&self.peer_addrs);
+
+        tracing::info!("Spawning Raft ready handler");
 
         self.runtime.spawn(async move {
             let mut checker = interval(Duration::from_millis(10));
@@ -271,10 +345,57 @@ impl OctopiiNode {
                 checker.tick().await;
 
                 if let Some(ready) = raft.ready().await {
+                    tracing::trace!("Raft ready: has {} messages, {} committed entries",
+                        ready.messages().len(),
+                        ready.committed_entries().len()
+                    );
+
+                    // Send outgoing Raft messages to peers
+                    for msg in ready.messages() {
+                        let to = msg.to;
+                        let peer_addrs_read = peer_addrs.read().await;
+
+                        if let Some(peer_addr) = peer_addrs_read.get(&to) {
+                            if let Some(payload) = raft_message_to_rpc(&msg) {
+                                tracing::debug!(
+                                    "Sending Raft message to peer {}: {:?} -> {}",
+                                    to,
+                                    msg.get_msg_type(),
+                                    peer_addr
+                                );
+
+                                // Send message via RPC
+                                let rpc_clone = Arc::clone(&rpc);
+                                let peer_addr = *peer_addr;
+                                tokio::spawn(async move {
+                                    match rpc_clone.request(
+                                        peer_addr,
+                                        payload,
+                                        Duration::from_secs(5),
+                                    ).await {
+                                        Ok(response) => {
+                                            tracing::trace!("Received Raft response from {}: {:?}", peer_addr, response.payload);
+                                            // TODO: Feed response back to Raft
+                                        }
+                                        Err(e) => {
+                                            tracing::warn!("Failed to send Raft message to {}: {}", peer_addr, e);
+                                        }
+                                    }
+                                });
+                            }
+                        } else {
+                            tracing::warn!("No address found for peer {}", to);
+                        }
+                    }
+
                     // Apply committed entries to state machine
                     for entry in ready.committed_entries().iter() {
                         if !entry.data.is_empty() {
-                            let _ = state_machine.apply(&entry.data);
+                            tracing::debug!("Applying committed entry: index={}, term={}", entry.index, entry.term);
+                            match state_machine.apply(&entry.data) {
+                                Ok(_) => tracing::trace!("Entry applied successfully"),
+                                Err(e) => tracing::error!("Failed to apply entry: {}", e),
+                            }
                         }
                     }
 
