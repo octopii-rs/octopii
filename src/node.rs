@@ -64,7 +64,12 @@ impl OctopiiNode {
         }
 
         let peer_ids: Vec<u64> = peer_addrs_map.keys().copied().collect();
-        let raft = Arc::new(runtime.block_on(RaftNode::new(config.node_id, peer_ids, storage))?);
+        let raft = Arc::new(runtime.block_on(RaftNode::new(
+            config.node_id,
+            peer_ids,
+            storage,
+            config.is_initial_leader,
+        ))?);
 
         // Create state machine
         let state_machine = Arc::new(StateMachine::new());
@@ -352,10 +357,25 @@ impl OctopiiNode {
                 }
 
                 if let Some(ready) = raft.ready().await {
-                    tracing::info!("Raft ready: has {} messages, {} committed entries",
+                    tracing::info!("Raft ready: has {} messages, {} committed entries, {} new entries, snapshot: {}",
                         ready.messages().len(),
-                        ready.committed_entries().len()
+                        ready.committed_entries().len(),
+                        ready.entries().len(),
+                        !ready.snapshot().is_empty()
                     );
+
+                    // Persist hard state if it changed
+                    if let Some(hs) = ready.hs() {
+                        tracing::debug!("Persisting HardState: term={}, vote={}, commit={}",
+                            hs.term, hs.vote, hs.commit);
+                        raft.persist_hard_state(hs.clone()).await;
+                    }
+
+                    // Persist new entries to storage (must be done before sending messages)
+                    if !ready.entries().is_empty() {
+                        tracing::debug!("Persisting {} new entries to storage", ready.entries().len());
+                        raft.persist_entries(ready.entries()).await;
+                    }
 
                     // Send outgoing Raft messages to peers
                     for msg in ready.messages() {
