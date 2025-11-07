@@ -19,7 +19,7 @@ impl RaftNode {
     /// Create a new Raft node
     pub async fn new(
         node_id: u64,
-        peers: Vec<u64>,
+        _peers: Vec<u64>,
         storage: WalStorage,
     ) -> Result<Self> {
         let config = RaftConfig {

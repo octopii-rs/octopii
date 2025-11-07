@@ -4,7 +4,7 @@ use bytes::{Bytes, BytesMut};
 use quinn::Connection;
 use sha2::{Digest, Sha256};
 use tokio::fs::File;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncReadExt;
 
 /// A connection to a peer
 pub struct PeerConnection {
@@ -116,7 +116,6 @@ impl PeerConnection {
                 let mut file = File::open(path).await?;
                 let mut hasher = Sha256::new();
                 let mut buffer = vec![0u8; BUFFER_SIZE];
-                let mut total_written = 0u64;
 
                 loop {
                     let n = file.read(&mut buffer).await?;
@@ -129,7 +128,6 @@ impl PeerConnection {
 
                     // Write to stream
                     send_stream.write_all(&buffer[..n]).await?;
-                    total_written += n as u64;
                 }
 
                 hasher.finalize().to_vec()

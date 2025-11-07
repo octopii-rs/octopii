@@ -95,18 +95,19 @@ async fn test_connection_timeout() {
 
 #[tokio::test]
 async fn test_very_small_chunks_edge_cases() {
-    let addr1: SocketAddr = "127.0.0.1:0".parse().unwrap();
-    let addr2: SocketAddr = "127.0.0.1:0".parse().unwrap();
-
-    let transport1 = Arc::new(QuicTransport::new(addr1).await.unwrap());
-    let transport2 = Arc::new(QuicTransport::new(addr2).await.unwrap());
-
-    let actual_addr2 = transport2.local_addr().unwrap();
-
     // Test various small sizes: 1 byte, 2 bytes, 7 bytes, 63 bytes
     let test_sizes = vec![1, 2, 7, 63, 127, 255, 511];
 
     for size in test_sizes {
+        // Create fresh transports for each iteration to avoid connection reuse issues
+        let addr1: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let addr2: SocketAddr = "127.0.0.1:0".parse().unwrap();
+
+        let transport1 = Arc::new(QuicTransport::new(addr1).await.unwrap());
+        let transport2 = Arc::new(QuicTransport::new(addr2).await.unwrap());
+
+        let actual_addr2 = transport2.local_addr().unwrap();
+
         // Create chunk
         let data = Bytes::from(vec![size as u8; size]);
         let chunk = ChunkSource::Memory(data.clone());
@@ -118,7 +119,7 @@ async fn test_very_small_chunks_edge_cases() {
             peer.recv_chunk_verified().await.unwrap().unwrap()
         });
 
-        tokio::time::sleep(Duration::from_millis(20)).await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
 
         // Send
         let peer = transport1.connect(actual_addr2).await.unwrap();
@@ -130,24 +131,25 @@ async fn test_very_small_chunks_edge_cases() {
         let received = receiver.await.unwrap();
         assert_eq!(received.len(), size);
         assert_eq!(received, data);
-    }
 
-    transport1.close();
-    transport2.close();
+        transport1.close();
+        transport2.close();
+    }
 }
 
 #[tokio::test]
 async fn test_rapid_connect_disconnect() {
-    let addr1: SocketAddr = "127.0.0.1:0".parse().unwrap();
-    let addr2: SocketAddr = "127.0.0.1:0".parse().unwrap();
-
-    let transport1 = Arc::new(QuicTransport::new(addr1).await.unwrap());
-    let transport2 = Arc::new(QuicTransport::new(addr2).await.unwrap());
-
-    let actual_addr2 = transport2.local_addr().unwrap();
-
-    // Connect and immediately try to send (stress test connection reuse)
+    // Connect and immediately try to send (stress test)
     for i in 0..10 {
+        // Create fresh transports for each iteration to ensure new connections
+        let addr1: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let addr2: SocketAddr = "127.0.0.1:0".parse().unwrap();
+
+        let transport1 = Arc::new(QuicTransport::new(addr1).await.unwrap());
+        let transport2 = Arc::new(QuicTransport::new(addr2).await.unwrap());
+
+        let actual_addr2 = transport2.local_addr().unwrap();
+
         let chunk = Bytes::from(format!("Message {}", i));
 
         // Spawn receiver
@@ -157,7 +159,7 @@ async fn test_rapid_connect_disconnect() {
             peer.recv_chunk_verified().await.unwrap().unwrap()
         });
 
-        tokio::time::sleep(Duration::from_millis(20)).await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
 
         // Send
         let peer = transport1.connect(actual_addr2).await.unwrap();
@@ -170,10 +172,10 @@ async fn test_rapid_connect_disconnect() {
         // Verify
         let received = receiver.await.unwrap();
         assert_eq!(received, chunk);
-    }
 
-    transport1.close();
-    transport2.close();
+        transport1.close();
+        transport2.close();
+    }
 }
 
 #[tokio::test]

@@ -203,21 +203,31 @@ async fn test_sequential_large_transfers() {
         create_large_test_file(path, *size).await;
     }
 
-    // Connect once
-    let peer1 = transport1.connect(actual_addr2).await.unwrap();
+    // Accept connection on receiver side
+    let t2_clone = Arc::clone(&transport2);
+    let accept_handle = tokio::spawn(async move {
+        let (_, peer) = t2_clone.accept().await.unwrap();
+        Arc::new(peer)
+    });
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // Connect from sender side
+    let peer1 = Arc::new(transport1.connect(actual_addr2).await.unwrap());
+    let peer2 = accept_handle.await.unwrap();
 
     println!("Sending 5 x 10MB chunks sequentially on same connection...");
     let total_start = std::time::Instant::now();
 
     for (i, (path, _)) in test_files.iter().enumerate() {
         // Spawn receiver for this transfer
-        let t2_clone = Arc::clone(&transport2);
+        let peer2_clone = Arc::clone(&peer2);
         let receiver_handle = tokio::spawn(async move {
-            let (_, peer) = t2_clone.accept().await.unwrap();
-            peer.recv_chunk_verified().await.unwrap()
+            peer2_clone.recv_chunk_verified().await.unwrap()
         });
 
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        // Small delay to ensure receiver is ready
+        tokio::time::sleep(Duration::from_millis(10)).await;
 
         let chunk = ChunkSource::File(path.clone());
         let bytes_sent = peer1.send_chunk_verified(&chunk).await.unwrap();
