@@ -1,5 +1,6 @@
 use super::{serialize, MessageId, RpcMessage, RpcRequest, RpcResponse, ResponsePayload};
 use crate::error::{OctopiiError, Result};
+use crate::runtime::OctopiiRuntime;
 use crate::transport::QuicTransport;
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -22,7 +23,7 @@ pub struct RpcHandler {
 
 impl RpcHandler {
     /// Create a new RPC handler
-    pub fn new(transport: Arc<QuicTransport>) -> Self {
+    pub fn new(transport: Arc<QuicTransport>, runtime: &OctopiiRuntime) -> Self {
         let (message_tx, message_rx) = mpsc::unbounded_channel();
 
         let handler = Self {
@@ -33,9 +34,9 @@ impl RpcHandler {
             message_tx,
         };
 
-        // Spawn message receiver task
+        // Spawn message receiver task on the isolated runtime
         let h = handler.clone();
-        tokio::spawn(async move {
+        runtime.spawn(async move {
             h.message_receiver_task(message_rx).await;
         });
 

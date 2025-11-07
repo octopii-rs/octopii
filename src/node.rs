@@ -8,7 +8,6 @@ use crate::transport::QuicTransport;
 use crate::wal::WriteAheadLog;
 use bytes::Bytes;
 use futures::future::join_all;
-use raft::prelude::MessageType;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -36,7 +35,7 @@ impl OctopiiNode {
 
         // Initialize components on the isolated runtime
         let transport = Arc::new(runtime.block_on(QuicTransport::new(config.bind_addr))?);
-        let rpc = Arc::new(RpcHandler::new(Arc::clone(&transport)));
+        let rpc = Arc::new(RpcHandler::new(Arc::clone(&transport), &runtime));
 
         // Create WAL
         let wal_path = config.wal_dir.join(format!("node_{}.wal", config.node_id));
