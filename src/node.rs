@@ -1,3 +1,4 @@
+use crate::chunk::{ChunkSource, TransferResult};
 use crate::config::Config;
 use crate::error::Result;
 use crate::raft::{RaftNode, StateMachine, WalStorage};
@@ -6,8 +7,11 @@ use crate::runtime::OctopiiRuntime;
 use crate::transport::QuicTransport;
 use crate::wal::WriteAheadLog;
 use bytes::Bytes;
+use futures::future::join_all;
+use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::time::{interval, Duration};
+use std::time::Instant;
+use tokio::time::{interval, timeout, Duration};
 
 /// Main Octopii node that orchestrates all components
 pub struct OctopiiNode {
@@ -98,6 +102,93 @@ impl OctopiiNode {
     /// Get the node ID
     pub fn id(&self) -> u64 {
         self.config.node_id
+    }
+
+    /// Transfer a chunk to multiple peers in parallel with verification
+    ///
+    /// This method sends a chunk (from file or memory) to multiple peers
+    /// concurrently. Each transfer is verified with SHA256 checksum and
+    /// application-level acknowledgment.
+    ///
+    /// # Arguments
+    /// * `chunk` - Source of the chunk data (file or memory)
+    /// * `peers` - List of peer addresses to send to
+    /// * `timeout_duration` - Timeout for each individual peer transfer
+    ///
+    /// # Returns
+    /// Vector of `TransferResult`, one per peer, indicating success/failure
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use octopii::{OctopiiNode, Config, ChunkSource};
+    /// # use std::time::Duration;
+    /// # async fn example(node: OctopiiNode) {
+    /// let results = node.transfer_chunk_to_peers(
+    ///     ChunkSource::File("/data/chunk_1.dat".into()),
+    ///     vec!["10.0.0.1:5000".parse().unwrap()],
+    ///     Duration::from_secs(60),
+    /// ).await;
+    /// # }
+    /// ```
+    pub async fn transfer_chunk_to_peers(
+        &self,
+        chunk: ChunkSource,
+        peers: Vec<SocketAddr>,
+        timeout_duration: Duration,
+    ) -> Vec<TransferResult> {
+        // Create Arc for shared access across tasks
+        let chunk = Arc::new(chunk);
+
+        // Spawn one task per peer
+        let tasks: Vec<_> = peers
+            .into_iter()
+            .map(|peer| {
+                let transport = Arc::clone(&self.transport);
+                let chunk = Arc::clone(&chunk);
+                let runtime = self.runtime.clone();
+
+                runtime.spawn(async move {
+                    let start = Instant::now();
+
+                    // Apply timeout to the entire transfer
+                    let result = timeout(timeout_duration, async {
+                        // Get or create connection to peer
+                        let peer_conn = transport.connect(peer).await?;
+
+                        // Send chunk with verification
+                        let bytes_transferred = peer_conn.send_chunk_verified(&chunk).await?;
+
+                        Ok::<_, crate::error::OctopiiError>(bytes_transferred)
+                    })
+                    .await;
+
+                    let duration = start.elapsed();
+
+                    match result {
+                        Ok(Ok(bytes)) => TransferResult::success(peer, bytes, duration),
+                        Ok(Err(e)) => TransferResult::failure(peer, e.to_string()),
+                        Err(_) => TransferResult::failure(
+                            peer,
+                            format!("Transfer timeout after {:?}", timeout_duration),
+                        ),
+                    }
+                })
+            })
+            .collect();
+
+        // Wait for all tasks to complete
+        let results = join_all(tasks).await;
+
+        // Unwrap JoinHandle results (panics are propagated as errors)
+        results
+            .into_iter()
+            .map(|r| r.unwrap_or_else(|e| {
+                TransferResult::failure(
+                    "0.0.0.0:0".parse().unwrap(),
+                    format!("Task panicked: {}", e),
+                )
+            }))
+            .collect()
     }
 
     /// Set up RPC request handler
