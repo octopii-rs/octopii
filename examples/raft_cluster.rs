@@ -1,0 +1,128 @@
+//! Example demonstrating a 3-node Raft cluster
+//!
+//! Run with: RUST_LOG=info cargo run --example raft_cluster
+
+use octopii::{Config, OctopiiNode};
+use std::path::PathBuf;
+use std::time::Duration;
+use tokio::time::sleep;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Initialize logging
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::from_default_env()
+                .add_directive("octopii=debug".parse().unwrap())
+                .add_directive("raft=debug".parse().unwrap()),
+        )
+        .init();
+
+    println!("Starting 3-node Raft cluster...\n");
+
+    // Node 1 configuration
+    let config1 = Config {
+        node_id: 1,
+        bind_addr: "127.0.0.1:5001".parse()?,
+        peers: vec![
+            "127.0.0.1:5002".parse()?,
+            "127.0.0.1:5003".parse()?,
+        ],
+        wal_dir: PathBuf::from("/tmp/octopii_node1"),
+        worker_threads: 2,
+        wal_batch_size: 100,
+        wal_flush_interval_ms: 100,
+    };
+
+    // Node 2 configuration
+    let config2 = Config {
+        node_id: 2,
+        bind_addr: "127.0.0.1:5002".parse()?,
+        peers: vec![
+            "127.0.0.1:5001".parse()?,
+            "127.0.0.1:5003".parse()?,
+        ],
+        wal_dir: PathBuf::from("/tmp/octopii_node2"),
+        worker_threads: 2,
+        wal_batch_size: 100,
+        wal_flush_interval_ms: 100,
+    };
+
+    // Node 3 configuration
+    let config3 = Config {
+        node_id: 3,
+        bind_addr: "127.0.0.1:5003".parse()?,
+        peers: vec![
+            "127.0.0.1:5001".parse()?,
+            "127.0.0.1:5002".parse()?,
+        ],
+        wal_dir: PathBuf::from("/tmp/octopii_node3"),
+        worker_threads: 2,
+        wal_batch_size: 100,
+        wal_flush_interval_ms: 100,
+    };
+
+    // Create nodes
+    println!("Creating nodes...");
+    let node1 = OctopiiNode::new(config1).await?;
+    let node2 = OctopiiNode::new(config2).await?;
+    let node3 = OctopiiNode::new(config3).await?;
+
+    // Start nodes
+    println!("Starting nodes...");
+    node1.start().await?;
+    node2.start().await?;
+    node3.start().await?;
+
+    println!("\nNodes started! Waiting for leader election...");
+    sleep(Duration::from_secs(3)).await;
+
+    // Check which node is the leader
+    println!("\n=== Checking leader status ===");
+    let is_leader1 = node1.is_leader().await;
+    let is_leader2 = node2.is_leader().await;
+    let is_leader3 = node3.is_leader().await;
+
+    println!("Node 1 is leader: {}", is_leader1);
+    println!("Node 2 is leader: {}", is_leader2);
+    println!("Node 3 is leader: {}", is_leader3);
+
+    // Propose some commands
+    let leader_node = if is_leader1 {
+        Some(&node1)
+    } else if is_leader2 {
+        Some(&node2)
+    } else if is_leader3 {
+        Some(&node3)
+    } else {
+        None
+    };
+
+    if let Some(leader) = leader_node {
+        println!("\n=== Proposing commands via leader ===");
+        for i in 1..=5 {
+            let command = format!("command_{}", i).into_bytes();
+            println!("Proposing: command_{}", i);
+            leader.propose(command).await?;
+            sleep(Duration::from_millis(500)).await;
+        }
+
+        println!("\nCommands proposed! Waiting for replication...");
+        sleep(Duration::from_secs(2)).await;
+    } else {
+        println!("\nNo leader elected yet (this is normal for initial startup)");
+        println!("In a real deployment, you would wait longer for leader election");
+    }
+
+    println!("\n=== Cluster Demo Complete ===");
+    println!("Check the logs to see:");
+    println!("  - Leader election messages");
+    println!("  - Raft heartbeats between nodes");
+    println!("  - Log replication messages");
+    println!("  - State machine updates");
+
+    println!("\nPress Ctrl+C to exit...");
+    sleep(Duration::from_secs(3600)).await; // Keep running
+
+    Ok(())
+}
