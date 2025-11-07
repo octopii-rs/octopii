@@ -19,7 +19,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Starting 3-node Raft cluster...\n");
 
-    // Node 1 configuration
+    // Node 1 configuration (initial leader)
     let config1 = Config {
         node_id: 1,
         bind_addr: "127.0.0.1:5001".parse()?,
@@ -31,9 +31,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         worker_threads: 2,
         wal_batch_size: 100,
         wal_flush_interval_ms: 100,
+        is_initial_leader: true,
     };
 
-    // Node 2 configuration
+    // Node 2 configuration (follower)
     let config2 = Config {
         node_id: 2,
         bind_addr: "127.0.0.1:5002".parse()?,
@@ -45,9 +46,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         worker_threads: 2,
         wal_batch_size: 100,
         wal_flush_interval_ms: 100,
+        is_initial_leader: false,
     };
 
-    // Node 3 configuration
+    // Node 3 configuration (follower)
     let config3 = Config {
         node_id: 3,
         bind_addr: "127.0.0.1:5003".parse()?,
@@ -59,6 +61,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         worker_threads: 2,
         wal_batch_size: 100,
         wal_flush_interval_ms: 100,
+        is_initial_leader: false,
     };
 
     // Create nodes (must be done outside of tokio runtime to avoid nested runtime panic)

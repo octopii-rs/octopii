@@ -19,39 +19,35 @@ pub struct RaftNode {
 
 impl RaftNode {
     /// Create a new Raft node
+    ///
+    /// For a fresh cluster:
+    /// - Leader node (is_leader=true): Initializes with a snapshot containing only itself as voter
+    /// - Follower nodes (is_leader=false): Start with empty storage, will initialize when receiving first message
     pub async fn new(
         node_id: u64,
         peers: Vec<u64>,
         storage: WalStorage,
+        is_leader: bool,
     ) -> Result<Self> {
-        // Bootstrap the cluster with all peers (including self)
-        let mut all_peers = vec![node_id];
-        all_peers.extend(peers.iter());
+        if is_leader {
+            // Leader initializes with snapshot containing only itself
+            let mut snapshot = Snapshot::default();
+            snapshot.mut_metadata().index = 1;
+            snapshot.mut_metadata().term = 1;
+            snapshot.mut_metadata().mut_conf_state().voters = vec![node_id];
 
-        tracing::info!("Bootstrapping Raft node {} with peers: {:?}", node_id, all_peers);
+            storage.apply_snapshot(snapshot)?;
 
-        // Set initial ConfState in storage
-        let mut conf_state = ConfState::default();
-        conf_state.voters = all_peers.clone();
-        storage.set_conf_state(conf_state);
-
-        // Add initial empty entry to the log so Raft can campaign
-        // Without this, Raft refuses to campaign on an empty log
-        let mut initial_entry = Entry::default();
-        initial_entry.entry_type = EntryType::EntryNormal.into();
-        initial_entry.term = 1;
-        initial_entry.index = 1;
-        initial_entry.data = vec![].into();
-
-        storage.append_entries(&[initial_entry]).await?;
-
-        // Set initial HardState with term 1
-        let mut hard_state = HardState::default();
-        hard_state.term = 1;
-        hard_state.commit = 0;
-        storage.set_hard_state(hard_state);
-
-        tracing::info!("Added initial log entry for node {}", node_id);
+            tracing::info!(
+                "Bootstrapped Raft LEADER node {} (will add {} peers via ConfChange)",
+                node_id,
+                peers.len()
+            );
+        } else {
+            // Followers start with minimal state
+            // They will initialize properly when receiving first message from leader
+            tracing::info!("Created Raft FOLLOWER node {} (will initialize from leader)", node_id);
+        }
 
         let config = RaftConfig {
             id: node_id,
@@ -78,7 +74,10 @@ impl RaftNode {
     /// Propose a change to the state machine
     pub async fn propose(&self, data: Vec<u8>) -> Result<()> {
         let mut node = self.raw_node.write().await;
+        let last_index_before = node.raft.raft_log.last_index();
         node.propose(vec![], data)?;
+        tracing::debug!("Proposed entry, last_index was {} (role: {:?})",
+            last_index_before, node.raft.state);
         Ok(())
     }
 
@@ -109,6 +108,19 @@ impl RaftNode {
     pub async fn advance(&self, rd: Ready) {
         let mut node = self.raw_node.write().await;
         node.advance(rd);
+    }
+
+    /// Persist entries from Ready to storage
+    pub async fn persist_entries(&self, entries: &[Entry]) {
+        let node = self.raw_node.read().await;
+        node.store().append_entries_sync(entries);
+        tracing::debug!("Persisted {} entries to storage", entries.len());
+    }
+
+    /// Persist hard state from Ready to storage
+    pub async fn persist_hard_state(&self, hs: HardState) {
+        let node = self.raw_node.read().await;
+        node.store().set_hard_state(hs);
     }
 
     /// Check if this node is the leader

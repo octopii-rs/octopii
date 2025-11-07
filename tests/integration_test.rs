@@ -14,6 +14,7 @@ async fn test_single_node_startup() {
         worker_threads: 2,
         wal_batch_size: 10,
         wal_flush_interval_ms: 100,
+        is_initial_leader: false,
     };
 
     let node = OctopiiNode::new(config).unwrap();
@@ -42,6 +43,7 @@ async fn test_node_state_machine_query() {
         worker_threads: 2,
         wal_batch_size: 10,
         wal_flush_interval_ms: 100,
+        is_initial_leader: false,
     };
 
     let node = OctopiiNode::new(config).unwrap();
@@ -77,6 +79,7 @@ async fn test_multiple_nodes_communication() {
         worker_threads: 2,
         wal_batch_size: 10,
         wal_flush_interval_ms: 100,
+        is_initial_leader: false,
     };
 
     let config2 = Config {
@@ -87,6 +90,7 @@ async fn test_multiple_nodes_communication() {
         worker_threads: 2,
         wal_batch_size: 10,
         wal_flush_interval_ms: 100,
+        is_initial_leader: false,
     };
 
     let node1 = OctopiiNode::new(config1).unwrap();
