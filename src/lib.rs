@@ -1,4 +1,4 @@
-mod runtime;
+pub mod runtime;
 
 pub mod chunk;
 pub mod config;

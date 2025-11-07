@@ -1,6 +1,5 @@
 use bytes::Bytes;
 use octopii::{Config, OctopiiNode};
-use std::path::PathBuf;
 
 #[tokio::test]
 async fn test_single_node_startup() {
@@ -17,7 +16,7 @@ async fn test_single_node_startup() {
         wal_flush_interval_ms: 100,
     };
 
-    let node = OctopiiNode::new(config).await.unwrap();
+    let node = OctopiiNode::new(config).unwrap();
     assert_eq!(node.id(), 1);
 
     // Start the node
@@ -45,7 +44,7 @@ async fn test_node_state_machine_query() {
         wal_flush_interval_ms: 100,
     };
 
-    let node = OctopiiNode::new(config).await.unwrap();
+    let node = OctopiiNode::new(config).unwrap();
 
     // Test state machine operations
     let result = node.query(b"SET foo bar").await.unwrap();
@@ -90,8 +89,8 @@ async fn test_multiple_nodes_communication() {
         wal_flush_interval_ms: 100,
     };
 
-    let node1 = OctopiiNode::new(config1).await.unwrap();
-    let node2 = OctopiiNode::new(config2).await.unwrap();
+    let node1 = OctopiiNode::new(config1).unwrap();
+    let node2 = OctopiiNode::new(config2).unwrap();
 
     // Start both nodes
     node1.start().await.unwrap();
