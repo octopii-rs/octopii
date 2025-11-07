@@ -1,15 +1,15 @@
 use super::allocator::BlockStateTracker;
 use super::reader::ColReaderInfo;
 use super::{ReadConsistency, Walrus};
-use crate::wal::block::{Block, Entry, Metadata};
-use crate::wal::config::{MAX_BATCH_ENTRIES, PREFIX_META_SIZE, checksum64, debug_print};
+use crate::wal::wal::block::{Block, Entry, Metadata};
+use crate::wal::wal::config::{MAX_BATCH_ENTRIES, PREFIX_META_SIZE, checksum64, debug_print};
 use std::io;
 use std::sync::{Arc, RwLock};
 
 use rkyv::{AlignedVec, Deserialize};
 
 #[cfg(target_os = "linux")]
-use crate::wal::config::USE_FD_BACKEND;
+use crate::wal::wal::config::USE_FD_BACKEND;
 #[cfg(target_os = "linux")]
 use std::sync::atomic::Ordering;
 

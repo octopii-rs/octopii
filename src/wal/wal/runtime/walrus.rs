@@ -1,9 +1,9 @@
-use crate::wal::block::{Block, Metadata};
-use crate::wal::config::{
+use crate::wal::wal::block::{Block, Metadata};
+use crate::wal::wal::config::{
     DEFAULT_BLOCK_SIZE, FsyncSchedule, MAX_FILE_SIZE, PREFIX_META_SIZE, debug_print,
 };
-use crate::wal::paths::WalPathManager;
-use crate::wal::storage::{SharedMmapKeeper, set_fsync_schedule};
+use crate::wal::wal::paths::WalPathManager;
+use crate::wal::wal::storage::{SharedMmapKeeper, set_fsync_schedule};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::sync::mpsc;
