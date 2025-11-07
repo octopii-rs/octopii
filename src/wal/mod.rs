@@ -108,9 +108,9 @@ impl WriteAheadLog {
             let mut all_entries = Vec::new();
 
             // Use batch_read to efficiently read all entries
-            // Read in 10MB chunks, without checkpointing
+            // Read in 10MB chunks, with checkpointing to advance reader position
             loop {
-                match walrus.batch_read_for_topic(&topic, 10 * 1024 * 1024, false) {
+                match walrus.batch_read_for_topic(&topic, 10 * 1024 * 1024, true) {
                     Ok(batch) => {
                         if batch.is_empty() {
                             // No more entries
@@ -121,9 +121,8 @@ impl WriteAheadLog {
                             all_entries.push(Bytes::from(entry.data));
                         }
                     }
-                    Err(e) => {
+                    Err(_e) => {
                         // Error reading - stop here
-                        tracing::debug!("WAL batch read error: {}", e);
                         break;
                     }
                 }
@@ -144,6 +143,12 @@ mod tests {
     async fn test_wal_write_and_read() {
         let temp_dir = std::env::temp_dir();
         let wal_path = temp_dir.join("test_walrus_basic.log");
+
+        // Clean up any existing test WAL files
+        let wal_files_dir = std::path::PathBuf::from("wal_files/test_walrus_basic.log");
+        if wal_files_dir.exists() {
+            let _ = std::fs::remove_dir_all(&wal_files_dir);
+        }
 
         let wal = WriteAheadLog::new(
             wal_path.clone(),

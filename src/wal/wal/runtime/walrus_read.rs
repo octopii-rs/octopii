@@ -536,71 +536,89 @@ impl Walrus {
         // 3) Read ranges via io_uring (FD backend) or mmap
         #[cfg(target_os = "linux")]
         let buffers = if USE_FD_BACKEND.load(Ordering::Relaxed) {
-            // io_uring path
+            // io_uring path - try to initialize, fall back to mmap if not supported
             let ring_size = (plan.len() + 64).min(4096) as u32;
-            let mut ring = io_uring::IoUring::new(ring_size).map_err(|e| {
-                io::Error::new(io::ErrorKind::Other, format!("io_uring init failed: {}", e))
-            })?;
-
-            let mut temp_buffers: Vec<Vec<u8>> = vec![Vec::new(); plan.len()];
-            let mut expected_sizes: Vec<usize> = vec![0; plan.len()];
-
-            for (plan_idx, read_plan) in plan.iter().enumerate() {
-                let size = (read_plan.end - read_plan.start) as usize;
-                expected_sizes[plan_idx] = size;
-                let mut buffer = vec![0u8; size];
-                let file_offset = read_plan.blk.offset + read_plan.start;
-
-                let fd = if let Some(fd_backend) = read_plan.blk.mmap.storage().as_fd() {
-                    io_uring::types::Fd(fd_backend.file().as_raw_fd())
-                } else {
-                    return Err(io::Error::new(
-                        io::ErrorKind::Unsupported,
-                        "batch reads require FD backend when io_uring is enabled",
-                    ));
-                };
-
-                let read_op = io_uring::opcode::Read::new(fd, buffer.as_mut_ptr(), size as u32)
-                    .offset(file_offset)
-                    .build()
-                    .user_data(plan_idx as u64);
-
-                temp_buffers[plan_idx] = buffer;
-
-                unsafe {
-                    ring.submission().push(&read_op).map_err(|e| {
-                        io::Error::new(io::ErrorKind::Other, format!("io_uring push failed: {}", e))
-                    })?;
+            let ring = match io_uring::IoUring::new(ring_size) {
+                Ok(r) => Some(r),
+                Err(_) => {
+                    // io_uring not supported, will fall back to mmap path below
+                    None
                 }
-            }
+            };
 
-            // Submit and wait for all reads
-            ring.submit_and_wait(plan.len())?;
+            if let Some(mut ring) = ring {
+                // io_uring is available, use it
+                let mut temp_buffers: Vec<Vec<u8>> = vec![Vec::new(); plan.len()];
+                let mut expected_sizes: Vec<usize> = vec![0; plan.len()];
 
-            // Process completions and validate read lengths
-            for _ in 0..plan.len() {
-                if let Some(cqe) = ring.completion().next() {
-                    let plan_idx = cqe.user_data() as usize;
-                    let got = cqe.result();
-                    if got < 0 {
+                for (plan_idx, read_plan) in plan.iter().enumerate() {
+                    let size = (read_plan.end - read_plan.start) as usize;
+                    expected_sizes[plan_idx] = size;
+                    let mut buffer = vec![0u8; size];
+                    let file_offset = read_plan.blk.offset + read_plan.start;
+
+                    let fd = if let Some(fd_backend) = read_plan.blk.mmap.storage().as_fd() {
+                        io_uring::types::Fd(fd_backend.file().as_raw_fd())
+                    } else {
                         return Err(io::Error::new(
-                            io::ErrorKind::Other,
-                            format!("io_uring read failed: {}", got),
+                            io::ErrorKind::Unsupported,
+                            "batch reads require FD backend when io_uring is enabled",
                         ));
-                    }
-                    if (got as usize) != expected_sizes[plan_idx] {
-                        return Err(io::Error::new(
-                            io::ErrorKind::UnexpectedEof,
-                            format!(
-                                "short read: got {} bytes, expected {}",
-                                got, expected_sizes[plan_idx]
-                            ),
-                        ));
+                    };
+
+                    let read_op = io_uring::opcode::Read::new(fd, buffer.as_mut_ptr(), size as u32)
+                        .offset(file_offset)
+                        .build()
+                        .user_data(plan_idx as u64);
+
+                    temp_buffers[plan_idx] = buffer;
+
+                    unsafe {
+                        ring.submission().push(&read_op).map_err(|e| {
+                            io::Error::new(io::ErrorKind::Other, format!("io_uring push failed: {}", e))
+                        })?;
                     }
                 }
-            }
 
-            temp_buffers
+                // Submit and wait for all reads
+                ring.submit_and_wait(plan.len())?;
+
+                // Process completions and validate read lengths
+                for _ in 0..plan.len() {
+                    if let Some(cqe) = ring.completion().next() {
+                        let plan_idx = cqe.user_data() as usize;
+                        let got = cqe.result();
+                        if got < 0 {
+                            return Err(io::Error::new(
+                                io::ErrorKind::Other,
+                                format!("io_uring read failed: {}", got),
+                            ));
+                        }
+                        if (got as usize) != expected_sizes[plan_idx] {
+                            return Err(io::Error::new(
+                                io::ErrorKind::UnexpectedEof,
+                                format!(
+                                    "short read: got {} bytes, expected {}",
+                                    got, expected_sizes[plan_idx]
+                                ),
+                            ));
+                        }
+                    }
+                }
+
+                temp_buffers
+            } else {
+                // io_uring not available, fall back to mmap reads
+                plan.iter()
+                    .map(|read_plan| {
+                        let size = (read_plan.end - read_plan.start) as usize;
+                        let mut buffer = vec![0u8; size];
+                        let file_offset = (read_plan.blk.offset + read_plan.start) as usize;
+                        read_plan.blk.mmap.read(file_offset, &mut buffer);
+                        buffer
+                    })
+                    .collect()
+            }
         } else {
             plan.iter()
                 .map(|read_plan| {
