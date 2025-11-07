@@ -179,7 +179,7 @@ async fn test_varying_chunk_sizes_parallel() {
 
     // Verify
     for (result, expected_size) in sent_results.iter().zip(sizes.iter()) {
-        assert_eq!(result.as_ref().unwrap(), expected_size);
+        assert_eq!(result.as_ref().unwrap(), &(*expected_size as u64));
     }
 
     for (received, expected) in received_results.iter().zip(chunks.iter()) {
