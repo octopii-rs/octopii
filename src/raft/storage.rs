@@ -26,7 +26,24 @@ impl WalStorage {
         }
     }
 
-    /// Append entries to storage
+    /// Apply a snapshot to storage
+    pub fn apply_snapshot(&self, snapshot: Snapshot) -> crate::error::Result<()> {
+        let mut snap = self.snapshot.write().unwrap();
+        *snap = snapshot.clone();
+
+        // Update conf state from snapshot metadata
+        let mut conf = self.conf_state.write().unwrap();
+        *conf = snapshot.get_metadata().get_conf_state().clone();
+
+        // Update hard state to match snapshot
+        let mut hs = self.hard_state.write().unwrap();
+        hs.term = snapshot.get_metadata().term;
+        hs.commit = snapshot.get_metadata().index;
+
+        Ok(())
+    }
+
+    /// Append entries to storage (async version for WAL persistence)
     pub async fn append_entries(&self, entries: &[Entry]) -> Result<()> {
         for entry in entries {
             // Serialize entry using protobuf
@@ -43,6 +60,16 @@ impl WalStorage {
         }
 
         Ok(())
+    }
+
+    /// Append entries synchronously (updates in-memory cache only)
+    /// WAL persistence happens separately
+    pub fn append_entries_sync(&self, entries: &[Entry]) {
+        let mut cache = self.entries.write().unwrap();
+        for entry in entries {
+            cache.push(entry.clone());
+        }
+        tracing::trace!("Appended {} entries to in-memory cache", entries.len());
     }
 
     /// Set hard state

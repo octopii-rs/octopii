@@ -25,6 +25,10 @@ pub struct Config {
 
     /// WAL flush interval in milliseconds
     pub wal_flush_interval_ms: u64,
+
+    /// Whether this node should bootstrap as the initial Raft leader
+    /// Only one node in a fresh cluster should have this set to true
+    pub is_initial_leader: bool,
 }
 
 impl Default for Config {
@@ -37,6 +41,7 @@ impl Default for Config {
             worker_threads: 4,
             wal_batch_size: 100,
             wal_flush_interval_ms: 100,
+            is_initial_leader: false,
         }
     }
 }
