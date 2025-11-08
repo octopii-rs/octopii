@@ -161,10 +161,12 @@ impl WalStorage {
     fn recover_hard_state(&self) -> crate::error::Result<HardState> {
         let walrus = &self.wal.walrus;
         let mut latest: Option<HardState> = None;
+        let mut first_read = true;
 
         loop {
-            match walrus.read_next(TOPIC_HARD_STATE, false) {
+            match walrus.read_next(TOPIC_HARD_STATE, first_read) {
                 Ok(Some(entry)) => {
+                    first_read = false;
                     // Zero-copy deserialize with rkyv
                     let archived = unsafe {
                         rkyv::archived_root::<HardStateData>(&entry.data)
@@ -186,10 +188,12 @@ impl WalStorage {
     fn recover_conf_state(&self) -> crate::error::Result<ConfState> {
         let walrus = &self.wal.walrus;
         let mut latest: Option<ConfState> = None;
+        let mut first_read = true;
 
         loop {
-            match walrus.read_next(TOPIC_CONF_STATE, false) {
+            match walrus.read_next(TOPIC_CONF_STATE, first_read) {
                 Ok(Some(entry)) => {
+                    first_read = false;
                     let archived = unsafe {
                         rkyv::archived_root::<ConfStateData>(&entry.data)
                     };
@@ -213,10 +217,12 @@ impl WalStorage {
     fn recover_snapshot(&self) -> crate::error::Result<Snapshot> {
         let walrus = &self.wal.walrus;
         let mut latest: Option<Snapshot> = None;
+        let mut first_read = true;
 
         loop {
-            match walrus.read_next(TOPIC_SNAPSHOT, false) {
+            match walrus.read_next(TOPIC_SNAPSHOT, first_read) {
                 Ok(Some(entry)) => {
+                    first_read = false;
                     let archived = unsafe {
                         rkyv::archived_root::<SnapshotData>(&entry.data)
                     };
@@ -249,10 +255,12 @@ impl WalStorage {
     fn recover_log_entries(&self) -> crate::error::Result<Vec<Entry>> {
         let walrus = &self.wal.walrus;
         let mut entries = Vec::new();
+        let mut first_read = true;
 
         loop {
-            match walrus.read_next(TOPIC_LOG, false) {
+            match walrus.read_next(TOPIC_LOG, first_read) {
                 Ok(Some(entry_data)) => {
+                    first_read = false;
                     // Deserialize protobuf Entry (from raft-rs)
                     match protobuf::Message::parse_from_bytes(&entry_data.data) {
                         Ok(raft_entry) => {
