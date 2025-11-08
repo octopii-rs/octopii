@@ -127,6 +127,9 @@ impl WriteAheadLog {
     }
 
     /// Read all entries from the WAL (for recovery)
+    ///
+    /// This reads from the write topic using batched reads with checkpointing
+    /// to consume all available entries.
     pub async fn read_all(&self) -> Result<Vec<Bytes>> {
         let walrus = self.walrus.clone();
         let topic = self.topic.clone();
@@ -134,16 +137,22 @@ impl WriteAheadLog {
         // Use block_in_place for hard thread cap (Walrus ops are non-blocking)
         tokio::task::block_in_place(move || {
             let mut all_entries = Vec::new();
+            let mut consecutive_empty_reads = 0;
 
-            // Use batch_read to efficiently read all entries
-            // Read in 10MB chunks, with checkpointing to advance reader position
+            // Read in batches, checkpointing to advance the reader
             loop {
                 match walrus.batch_read_for_topic(&topic, 10 * 1024 * 1024, true) {
                     Ok(batch) => {
                         if batch.is_empty() {
-                            // No more entries
-                            break;
+                            consecutive_empty_reads += 1;
+                            // If we get 2 empty reads in a row, we're truly done
+                            if consecutive_empty_reads >= 2 {
+                                break;
+                            }
+                            continue;
                         }
+                        consecutive_empty_reads = 0;
+
                         // Convert to Bytes and append
                         for entry in batch {
                             all_entries.push(Bytes::from(entry.data));
@@ -167,13 +176,21 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_wal_write_and_read() {
-        let temp_dir = std::env::temp_dir();
-        let wal_path = temp_dir.join("test_walrus_basic.log");
+        // Use a unique directory for each test run to avoid conflicts
+        use std::time::SystemTime;
+        let timestamp = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
 
-        // Clean up any existing test WAL files
-        let wal_files_dir = std::path::PathBuf::from("wal_files/test_walrus_basic.log");
-        if wal_files_dir.exists() {
-            let _ = std::fs::remove_dir_all(&wal_files_dir);
+        let temp_dir = std::env::temp_dir();
+        let unique_name = format!("test_walrus_{}_{}.log", std::process::id(), timestamp);
+        let wal_path = temp_dir.join(&unique_name);
+
+        // Clean up the actual WAL directory (parent/key structure)
+        let actual_wal_dir = temp_dir.join(&unique_name);
+        if actual_wal_dir.exists() {
+            let _ = std::fs::remove_dir_all(&actual_wal_dir);
         }
 
         let wal = WriteAheadLog::new(
@@ -193,16 +210,19 @@ mod tests {
 
         assert!(offset2 > offset1);
 
-        // Flush (no-op with Walrus, but tests compatibility)
+        // Flush to ensure data is written
         wal.flush().await.unwrap();
 
-        // Small delay to ensure Walrus has fsynced
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        // Longer delay to ensure Walrus has fsynced and data is available
+        tokio::time::sleep(Duration::from_millis(500)).await;
 
         // Read back
         let entries = wal.read_all().await.unwrap();
-        assert_eq!(entries.len(), 2);
+        assert_eq!(entries.len(), 2, "Expected 2 entries, got {}", entries.len());
         assert_eq!(entries[0], data1);
         assert_eq!(entries[1], data2);
+
+        // Cleanup
+        let _ = std::fs::remove_dir_all(&actual_wal_dir);
     }
 }
