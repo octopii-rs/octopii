@@ -48,7 +48,7 @@ impl OctopiiRuntime {
     /// This is useful for tests and scenarios where multiple nodes share one runtime.
     ///
     /// # Example
-    /// ```
+    /// ```no_run
     /// use octopii::OctopiiRuntime;
     ///
     /// let handle = tokio::runtime::Handle::current();

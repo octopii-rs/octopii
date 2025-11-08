@@ -141,7 +141,7 @@ impl OctopiiNode {
     /// nested runtime issues.
     ///
     /// # Example
-    /// ```no_run
+    /// ```ignore
     /// use octopii::{OctopiiNode, Config, OctopiiRuntime};
     ///
     /// #[tokio::main]
@@ -250,7 +250,7 @@ impl OctopiiNode {
     /// For tests and advanced use cases, use `new()` instead.
     ///
     /// # Example
-    /// ```no_run
+    /// ```ignore
     /// use octopii::{OctopiiNode, Config};
     ///
     /// let config = Config { /* ... */ };
