@@ -21,8 +21,9 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn test_runtime_creation() {
-        let runtime = OctopiiRuntime::new(2);
+    async fn test_runtime_from_handle() {
+        // Test using handle from current runtime (no nested runtime creation)
+        let runtime = OctopiiRuntime::from_handle(tokio::runtime::Handle::current());
         let result = runtime.spawn(async { 42 }).await.unwrap();
         assert_eq!(result, 42);
     }
