@@ -1,5 +1,5 @@
 /// Common utilities for comprehensive Raft testing
-use octopii::{Config, OctopiiNode};
+use octopii::{Config, OctopiiNode, OctopiiRuntime};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -15,8 +15,8 @@ pub struct TestNode {
 }
 
 impl TestNode {
-    /// Create a new test node with unique isolated WAL
-    pub fn new(node_id: u64, addr: SocketAddr, peers: Vec<SocketAddr>, is_initial_leader: bool) -> Self {
+    /// Create a new test node with unique isolated WAL (async version)
+    pub async fn new(node_id: u64, addr: SocketAddr, peers: Vec<SocketAddr>, is_initial_leader: bool) -> Self {
         let temp_dir = TempDir::new().unwrap();
         let thread_id = std::thread::current().id();
         let timestamp = std::time::SystemTime::now()
@@ -37,7 +37,9 @@ impl TestNode {
             is_initial_leader,
         };
 
-        let node = OctopiiNode::new(config.clone()).unwrap();
+        // Use shared runtime from current context
+        let runtime = OctopiiRuntime::from_handle(tokio::runtime::Handle::current());
+        let node = OctopiiNode::new(config.clone(), runtime).await.unwrap();
 
         Self {
             node: Some(node),
@@ -62,19 +64,14 @@ impl TestNode {
     }
 
     /// Restart the node (simulates crash recovery)
-    /// IMPORTANT: Must be called from sync context, not from within async runtime
-    pub fn restart(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn restart(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         // Create a new node with the SAME config (including WAL directory)
         // This simulates a node restarting and recovering from persistent state
-        // We use spawn_blocking-like pattern to avoid nested runtime issues
         let config = self.config.clone();
 
-        // Create node in a separate thread to avoid nested runtime
-        let handle = std::thread::spawn(move || {
-            OctopiiNode::new(config)
-        });
-
-        self.node = Some(handle.join().unwrap()?);
+        // Use shared runtime from current context (no nesting issues!)
+        let runtime = OctopiiRuntime::from_handle(tokio::runtime::Handle::current());
+        self.node = Some(OctopiiNode::new(config, runtime).await?);
         Ok(())
     }
 
@@ -127,9 +124,8 @@ pub struct TestCluster {
 }
 
 impl TestCluster {
-    /// Create a new cluster with N nodes
-    /// NOTE: Must be called OUTSIDE of async context due to OctopiiNode::new() using block_on
-    pub fn new(node_ids: Vec<u64>, base_port: u16) -> Self {
+    /// Create a new cluster with N nodes (async version)
+    pub async fn new(node_ids: Vec<u64>, base_port: u16) -> Self {
         let mut nodes = Vec::new();
 
         // Build address list for all nodes
@@ -150,7 +146,7 @@ impl TestCluster {
                 .collect();
 
             let is_initial_leader = idx == 0; // First node starts as leader
-            let node = TestNode::new(node_id, addr, peers, is_initial_leader);
+            let node = TestNode::new(node_id, addr, peers, is_initial_leader).await;
             nodes.push(node);
         }
 
@@ -188,7 +184,7 @@ impl TestCluster {
     /// Restart specific node by node_id
     pub async fn restart_node(&mut self, node_id: u64) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(node) = self.nodes.iter_mut().find(|n| n.node_id == node_id) {
-            node.restart()?;
+            node.restart().await?;
             node.start().await?;
             Ok(())
         } else {

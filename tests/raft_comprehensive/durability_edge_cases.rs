@@ -21,7 +21,7 @@ fn test_crash_immediately_after_proposal() {
 
         tracing::info!("=== Starting crash immediately after proposal test ===");
 
-        let mut cluster = TestCluster::new(vec![1, 2, 3], 7300);
+        let mut cluster = TestCluster::new(vec![1, 2, 3], 7300).await;
         cluster.start_all().await.expect("Failed to start cluster");
 
         tokio::time::sleep(Duration::from_millis(500)).await;
@@ -74,7 +74,7 @@ fn test_durable_state_after_many_operations() {
 
         tracing::info!("=== Starting durable state after many operations test ===");
 
-        let mut cluster = TestCluster::new(vec![1, 2, 3], 7330);
+        let mut cluster = TestCluster::new(vec![1, 2, 3], 7330).await;
         cluster.start_all().await.expect("Failed to start cluster");
 
         tokio::time::sleep(Duration::from_millis(500)).await;
@@ -140,7 +140,7 @@ fn test_interleaved_operations_and_crashes() {
 
         tracing::info!("=== Starting interleaved operations and crashes test ===");
 
-        let mut cluster = TestCluster::new(vec![1, 2, 3], 7360);
+        let mut cluster = TestCluster::new(vec![1, 2, 3], 7360).await;
         cluster.start_all().await.expect("Failed to start cluster");
 
         tokio::time::sleep(Duration::from_millis(500)).await;
