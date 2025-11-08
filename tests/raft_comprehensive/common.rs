@@ -272,7 +272,8 @@ impl TestCluster {
         });
 
         if let Some(leader_node) = leader {
-            let addr: SocketAddr = format!("127.0.0.1:{}", self.base_port + node_id as u16).parse()?;
+            // Address should be base_port + (node_id - 1) to match TestCluster::new address assignment
+            let addr: SocketAddr = format!("127.0.0.1:{}", self.base_port + (node_id - 1) as u16).parse()?;
             if let Some(node) = leader_node.get_node() {
                 node.add_learner(node_id, addr).await.map_err(|e| e.to_string())?;
 
