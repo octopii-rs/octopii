@@ -188,19 +188,11 @@ impl OctopiiNode {
         let mut peer_ids: Vec<u64> = peer_addrs_map.keys().copied().collect();
         peer_ids.sort_unstable();
 
-        // Bootstrap configuration state to include the entire cluster if this is a fresh start
-        let mut initial_voters = peer_ids.clone();
-        initial_voters.push(config.node_id);
-        initial_voters.sort_unstable();
-        initial_voters.dedup();
-
-        let current_state = storage.initial_state()?;
-        if current_state.conf_state.voters != initial_voters {
-            let mut conf_state = raft::prelude::ConfState::default();
-            conf_state.voters = initial_voters.clone();
-            storage.set_conf_state(conf_state);
-            tracing::info!("Bootstrap conf state with voters: {:?}", initial_voters);
-        }
+        // IMPORTANT: Do NOT bootstrap the configuration here!
+        // The correct initialization is handled in RaftNode::new() which follows TiKV's pattern:
+        // - Leader node: Initializes with snapshot containing only itself as voter
+        // - Follower nodes: Start with empty configuration (lazy initialization from leader)
+        // Pre-populating followers with voter lists causes "to_commit out of range" panics.
 
         let raft = Arc::new(
             RaftNode::new(config.node_id, peer_ids, storage, config.is_initial_leader).await?,
@@ -491,24 +483,76 @@ impl OctopiiNode {
         tracing::info!("Proposed promotion of learner {} to voter", peer_id);
 
         // Wait for ConfChange to commit (with 10 second timeout)
-        match timeout(Duration::from_secs(10), rx).await {
+        let conf_state = match timeout(Duration::from_secs(10), rx).await {
             Ok(Ok(conf_state)) => {
                 tracing::info!("✓ Promotion completed for peer {}, voters: {:?}", peer_id, conf_state.voters);
-                Ok(conf_state)
+                conf_state
             }
             Ok(Err(_)) => {
                 self.pending_conf_changes.write().await.remove(&peer_id);
-                Err(OctopiiError::Raft(raft::Error::ConfChangeError(
+                return Err(OctopiiError::Raft(raft::Error::ConfChangeError(
                     "ConfChange notification channel closed".to_string()
-                )))
+                )));
             }
             Err(_) => {
                 self.pending_conf_changes.write().await.remove(&peer_id);
-                Err(OctopiiError::Raft(raft::Error::ConfChangeError(
+                return Err(OctopiiError::Raft(raft::Error::ConfChangeError(
                     format!("ConfChange timeout after 10s for promoting learner {}", peer_id)
-                )))
+                )));
+            }
+        };
+
+        // CRITICAL FIX: Wait for joint consensus to exit before allowing next ConfChange
+        // When promoting a learner to voter, raft-rs enters joint consensus with auto_leave=true.
+        // The cluster must fully exit joint consensus before the next ConfChange can be proposed.
+        // Check if voters_outgoing is non-empty (indicates joint consensus state)
+        if !conf_state.voters_outgoing.is_empty() {
+            tracing::info!("In joint consensus after promoting learner {} (voters_outgoing: {:?}), waiting for auto-leave...",
+                peer_id, conf_state.voters_outgoing);
+
+            // Wait for joint consensus to exit (voters_outgoing becomes empty)
+            let start = std::time::Instant::now();
+            let joint_timeout = Duration::from_secs(15);
+
+            loop {
+                if start.elapsed() > joint_timeout {
+                    return Err(OctopiiError::Raft(raft::Error::ConfChangeError(format!(
+                        "Joint consensus did not exit after {}s for peer {}",
+                        joint_timeout.as_secs(),
+                        peer_id
+                    ))));
+                }
+
+                // Give time for auto-leave to propose and apply the exit from joint consensus
+                tokio::time::sleep(Duration::from_millis(500)).await;
+
+                // Check if we've exited joint consensus by getting current raft status
+                let raft_read = self.raft.raw_node().read().await;
+                let status = raft_read.status();
+
+                // Check if voters_outgoing is empty (exited joint consensus)
+                // Status.progress contains ProgressTracker, which has Configuration
+                let still_in_joint = if let Some(progress) = status.progress {
+                    // ProgressTracker has conf() method that returns Configuration
+                    // Configuration.to_conf_state() converts to ConfState with voters_outgoing field
+                    let conf_state = progress.conf().to_conf_state();
+                    !conf_state.voters_outgoing.is_empty()
+                } else {
+                    false
+                };
+
+                drop(raft_read); // Release lock before continuing
+
+                if !still_in_joint {
+                    tracing::info!("✓ Exited joint consensus for peer {} after {:?}", peer_id, start.elapsed());
+                    break;
+                }
+
+                tracing::trace!("Still in joint consensus for peer {}, waiting... (elapsed: {:?})", peer_id, start.elapsed());
             }
         }
+
+        Ok(conf_state)
     }
 
     /// Check if a learner is caught up with the leader
@@ -710,33 +754,14 @@ impl OctopiiNode {
                                                             // Convert RPC to Raft message
                                                             if let Some(raft_msg) = rpc_to_raft_message(0, node_id, &req.payload) {
                                                                 // Step the Raft state machine
+                                                                // The main ready handler will process the resulting ready state,
+                                                                // persist entries, and send response messages
                                                                 match raft_clone.step(raft_msg).await {
                                                                     Ok(_) => {
                                                                         tracing::trace!("Raft message processed successfully");
-
-                                                                        // Check for immediate response messages
-                                                                        if let Some(ready) = raft_clone.ready().await {
-                                                                            // Send response messages immediately
-                                                                            for resp_msg in ready.messages() {
-                                                                                if let Some(resp_payload) = raft_response_to_rpc(resp_msg) {
-                                                                                    tracing::debug!("Sending immediate Raft response: {:?}", resp_msg.get_msg_type());
-
-                                                                                    let response = RpcMessage::new_response(req.id, resp_payload);
-                                                                                    if let Ok(data) = crate::rpc::serialize(&response) {
-                                                                                        if let Err(e) = peer.send(data).await {
-                                                                                            tracing::error!("Failed to send Raft response: {}", e);
-                                                                                        }
-                                                                                    }
-                                                                                }
-                                                                            }
-
-                                                                            // Advance without processing entries (ready handler will do full processing)
-                                                                            let _light_rd = raft_clone.advance(ready).await;
-                                                                            raft_clone.advance_apply().await;
-
-                                                                            // Note: We don't apply entries here - the main ready handler does that
-                                                                            // This is just for sending immediate responses to avoid latency
-                                                                        }
+                                                                        // Do NOT call ready() and advance() here!
+                                                                        // That would consume entries without persisting them.
+                                                                        // Let the main ready handler do all processing.
                                                                     }
                                                                     Err(e) => {
                                                                         tracing::error!("Failed to step Raft: {}", e);
@@ -887,7 +912,7 @@ impl OctopiiNode {
 
                         if let Some(peer_addr) = peer_addrs_read.get(&to) {
                             if let Some(payload) = raft_message_to_rpc(&msg) {
-                                tracing::debug!(
+                                tracing::info!(
                                     "Sending Raft message to peer {}: {:?} -> {}",
                                     to,
                                     msg_type,
