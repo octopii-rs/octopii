@@ -128,10 +128,13 @@ mod tests {
         let handle = tokio::runtime::Handle::current();
         let runtime = OctopiiRuntime::from_handle(handle);
 
-        let result = runtime.spawn(async {
-            tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
-            "from_handle"
-        }).await.unwrap();
+        let result = runtime
+            .spawn(async {
+                tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+                "from_handle"
+            })
+            .await
+            .unwrap();
 
         assert_eq!(result, "from_handle");
     }

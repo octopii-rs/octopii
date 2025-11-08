@@ -3,14 +3,14 @@
 //! These tests verify that all Raft state components survive crashes
 //! and are correctly recovered from Walrus.
 
+use bytes::Bytes;
 use octopii::raft::{StateMachine, WalStorage};
 use octopii::wal::WriteAheadLog;
+use raft::prelude::*;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tempfile::TempDir;
-use bytes::Bytes;
-use raft::prelude::*;
 
 /// Helper to create a temporary WAL for testing
 /// Returns (WAL, actual_path_used, temp_dir)
@@ -80,7 +80,10 @@ async fn test_hard_state_persistence_and_recovery() {
     let recovered = storage2.initial_state().unwrap();
     assert_eq!(recovered.hard_state.term, 42, "Term should survive restart");
     assert_eq!(recovered.hard_state.vote, 7, "Vote should survive restart");
-    assert_eq!(recovered.hard_state.commit, 100, "Commit should survive restart");
+    assert_eq!(
+        recovered.hard_state.commit, 100,
+        "Commit should survive restart"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -107,7 +110,10 @@ async fn test_hard_state_prevents_double_vote() {
 
     let recovered = storage2.initial_state().unwrap();
     assert_eq!(recovered.hard_state.term, 3);
-    assert_eq!(recovered.hard_state.vote, 5, "Must remember who we voted for!");
+    assert_eq!(
+        recovered.hard_state.vote, 5,
+        "Must remember who we voted for!"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -140,9 +146,20 @@ async fn test_conf_state_persistence_and_recovery() {
     let storage2 = WalStorage::new(wal2);
 
     let recovered = storage2.initial_state().unwrap();
-    assert_eq!(recovered.conf_state.voters, vec![1, 2, 3], "Voters should survive");
-    assert_eq!(recovered.conf_state.learners, vec![4, 5], "Learners should survive");
-    assert_eq!(recovered.conf_state.auto_leave, true, "auto_leave should survive");
+    assert_eq!(
+        recovered.conf_state.voters,
+        vec![1, 2, 3],
+        "Voters should survive"
+    );
+    assert_eq!(
+        recovered.conf_state.learners,
+        vec![4, 5],
+        "Learners should survive"
+    );
+    assert_eq!(
+        recovered.conf_state.auto_leave, true,
+        "auto_leave should survive"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -180,10 +197,25 @@ async fn test_snapshot_persistence_and_recovery() {
     let storage2 = WalStorage::new(wal2);
 
     let recovered = storage2.snapshot(0, 0).unwrap();
-    assert_eq!(recovered.data, Bytes::from("snapshot_data_here"), "Snapshot data should survive");
-    assert_eq!(recovered.get_metadata().index, 1000, "Snapshot index should survive");
-    assert_eq!(recovered.get_metadata().term, 5, "Snapshot term should survive");
-    assert_eq!(recovered.get_metadata().get_conf_state().voters, vec![1, 2, 3]);
+    assert_eq!(
+        recovered.data,
+        Bytes::from("snapshot_data_here"),
+        "Snapshot data should survive"
+    );
+    assert_eq!(
+        recovered.get_metadata().index,
+        1000,
+        "Snapshot index should survive"
+    );
+    assert_eq!(
+        recovered.get_metadata().term,
+        5,
+        "Snapshot term should survive"
+    );
+    assert_eq!(
+        recovered.get_metadata().get_conf_state().voters,
+        vec![1, 2, 3]
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -251,7 +283,11 @@ async fn test_state_machine_delete_with_tombstone() {
     let sm2 = StateMachine::with_wal(wal2);
 
     let result = sm2.apply(b"GET temp_key").unwrap();
-    assert_eq!(result, Bytes::from("NOT_FOUND"), "DELETE should survive restart");
+    assert_eq!(
+        result,
+        Bytes::from("NOT_FOUND"),
+        "DELETE should survive restart"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -278,7 +314,11 @@ async fn test_state_machine_overwrite_survives() {
     let sm2 = StateMachine::with_wal(wal2);
 
     let result = sm2.apply(b"GET key").unwrap();
-    assert_eq!(result, Bytes::from("v3"), "Should recover latest value after overwrites");
+    assert_eq!(
+        result,
+        Bytes::from("v3"),
+        "Should recover latest value after overwrites"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -326,11 +366,21 @@ async fn test_log_entries_persistence() {
     let wal2 = create_wal_at_path(wal_path).await;
     let storage2 = WalStorage::new(wal2);
 
-    assert_eq!(storage2.first_index().unwrap(), 1, "First index should survive");
-    assert_eq!(storage2.last_index().unwrap(), 3, "Last index should survive");
+    assert_eq!(
+        storage2.first_index().unwrap(),
+        1,
+        "First index should survive"
+    );
+    assert_eq!(
+        storage2.last_index().unwrap(),
+        3,
+        "Last index should survive"
+    );
 
     // Verify entry contents
-    let recovered = storage2.entries(1, 4, None, raft::GetEntriesContext::empty(false)).unwrap();
+    let recovered = storage2
+        .entries(1, 4, None, raft::GetEntriesContext::empty(false))
+        .unwrap();
     assert_eq!(recovered.len(), 3);
     assert_eq!(recovered[0].index, 1);
     assert_eq!(recovered[0].data, Bytes::from(&b"entry1"[..]));
@@ -365,7 +415,10 @@ async fn test_multiple_hard_state_updates_latest_wins() {
     let recovered = storage2.initial_state().unwrap();
     assert_eq!(recovered.hard_state.term, 5, "Should recover latest term");
     assert_eq!(recovered.hard_state.vote, 50, "Should recover latest vote");
-    assert_eq!(recovered.hard_state.commit, 500, "Should recover latest commit");
+    assert_eq!(
+        recovered.hard_state.commit, 500,
+        "Should recover latest commit"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -446,14 +499,30 @@ async fn test_crash_recovery_full_scenario() {
         assert_eq!(initial.hard_state.commit, 2, "Commit should survive crash");
 
         // Verify conf state recovered
-        assert_eq!(initial.conf_state.voters, vec![1, 2, 3], "Voters should survive crash");
+        assert_eq!(
+            initial.conf_state.voters,
+            vec![1, 2, 3],
+            "Voters should survive crash"
+        );
 
         // Verify log entries recovered
-        assert_eq!(storage2.last_index().unwrap(), 2, "Log entries should survive crash");
+        assert_eq!(
+            storage2.last_index().unwrap(),
+            2,
+            "Log entries should survive crash"
+        );
 
         // Verify state machine data recovered
-        assert_eq!(sm2.apply(b"GET x").unwrap(), Bytes::from("100"), "State machine data should survive crash");
-        assert_eq!(sm2.apply(b"GET y").unwrap(), Bytes::from("200"), "State machine data should survive crash");
+        assert_eq!(
+            sm2.apply(b"GET x").unwrap(),
+            Bytes::from("100"),
+            "State machine data should survive crash"
+        );
+        assert_eq!(
+            sm2.apply(b"GET y").unwrap(),
+            Bytes::from("200"),
+            "State machine data should survive crash"
+        );
 
         // Node can continue operations after crash
         sm2.apply(b"SET z 300").unwrap();

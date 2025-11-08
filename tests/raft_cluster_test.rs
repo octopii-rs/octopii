@@ -23,7 +23,7 @@ fn test_three_node_cluster_basic() {
         worker_threads: 2,
         wal_batch_size: 10,
         wal_flush_interval_ms: 100,
-        is_initial_leader: true,  // Node 1 starts as leader
+        is_initial_leader: true, // Node 1 starts as leader
     };
 
     let config2 = Config {
@@ -103,7 +103,11 @@ fn test_three_node_cluster_basic() {
 
         // If the proposal succeeded, verify we can read it
         if query_result.is_ok() {
-            assert_eq!(query_result.unwrap(), bytes::Bytes::from("bar"), "GET should return bar");
+            assert_eq!(
+                query_result.unwrap(),
+                bytes::Bytes::from("bar"),
+                "GET should return bar"
+            );
             println!("✓ Value successfully stored and retrieved on leader");
         }
 

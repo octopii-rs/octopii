@@ -189,10 +189,10 @@ async fn test_wal_large_entries() {
 
     // Create entries of various sizes
     let sizes = vec![
-        1024,           // 1 KB
-        64 * 1024,      // 64 KB
-        512 * 1024,     // 512 KB
-        1024 * 1024,    // 1 MB
+        1024,        // 1 KB
+        64 * 1024,   // 64 KB
+        512 * 1024,  // 512 KB
+        1024 * 1024, // 1 MB
     ];
 
     for size in &sizes {

@@ -46,7 +46,10 @@ fn test_batch_append_correctness() {
         tokio::time::sleep(Duration::from_secs(3)).await;
 
         // Verify cluster converged
-        cluster.verify_convergence(Duration::from_secs(5)).await.expect("Convergence failed");
+        cluster
+            .verify_convergence(Duration::from_secs(5))
+            .await
+            .expect("Convergence failed");
 
         tracing::info!("✓ All entries replicated correctly");
 
@@ -104,7 +107,11 @@ fn test_batch_recovery_performance() {
         tracing::info!("Recovery completed in {:?}", recovery_time);
 
         // With batch reads, recovery should be fast (<5 seconds for 1000 entries)
-        assert!(recovery_time < Duration::from_secs(10), "Recovery too slow: {:?}", recovery_time);
+        assert!(
+            recovery_time < Duration::from_secs(10),
+            "Recovery too slow: {:?}",
+            recovery_time
+        );
         tracing::info!("✓ Fast recovery with batch reads");
 
         cluster.shutdown_all();
@@ -156,8 +163,12 @@ fn test_high_throughput_proposals() {
         let total_time = start.elapsed();
         let throughput = count as f64 / total_time.as_secs_f64();
 
-        tracing::info!("✓ Sustained throughput: {:.0} entries/sec ({} total entries in {:?})",
-            throughput, count, total_time);
+        tracing::info!(
+            "✓ Sustained throughput: {:.0} entries/sec ({} total entries in {:?})",
+            throughput,
+            count,
+            total_time
+        );
 
         // Wait for replication to settle
         tokio::time::sleep(Duration::from_secs(3)).await;

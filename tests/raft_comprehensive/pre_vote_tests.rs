@@ -30,9 +30,13 @@ fn test_pre_vote_stable_cluster() {
         cluster.nodes[0].campaign().await.expect("Campaign failed");
         tokio::time::sleep(Duration::from_secs(2)).await;
 
-        let initial_leader = if cluster.nodes[0].is_leader().await { 1 }
-            else if cluster.nodes[1].is_leader().await { 2 }
-            else { 3 };
+        let initial_leader = if cluster.nodes[0].is_leader().await {
+            1
+        } else if cluster.nodes[1].is_leader().await {
+            2
+        } else {
+            3
+        };
 
         tracing::info!("Initial leader: node {}", initial_leader);
 
@@ -44,9 +48,13 @@ fn test_pre_vote_stable_cluster() {
         }
 
         // Verify leader remains stable (pre-vote prevents disruption)
-        let final_leader = if cluster.nodes[0].is_leader().await { 1 }
-            else if cluster.nodes[1].is_leader().await { 2 }
-            else { 3 };
+        let final_leader = if cluster.nodes[0].is_leader().await {
+            1
+        } else if cluster.nodes[1].is_leader().await {
+            2
+        } else {
+            3
+        };
 
         assert_eq!(initial_leader, final_leader, "Leader should remain stable");
         tracing::info!("✓ Leader remained stable with pre-vote enabled");
@@ -95,14 +103,20 @@ fn test_pre_vote_with_lagging_node() {
 
         tokio::time::sleep(Duration::from_secs(2)).await;
 
-        let leader_before = if cluster.nodes[0].is_leader().await { 1 }
-            else { 2 };
+        let leader_before = if cluster.nodes[0].is_leader().await {
+            1
+        } else {
+            2
+        };
 
         tracing::info!("Leader before restart: node {}", leader_before);
 
         // Restart node 3 (far behind)
         tracing::info!("Restarting node 3 (far behind)");
-        cluster.restart_node(3).await.expect("Failed to restart node 3");
+        cluster
+            .restart_node(3)
+            .await
+            .expect("Failed to restart node 3");
 
         // Wait and make more proposals
         tokio::time::sleep(Duration::from_secs(3)).await;
@@ -114,9 +128,13 @@ fn test_pre_vote_with_lagging_node() {
 
         tokio::time::sleep(Duration::from_secs(2)).await;
 
-        let leader_after = if cluster.nodes[0].is_leader().await { 1 }
-            else if cluster.nodes[1].is_leader().await { 2 }
-            else { 3 };
+        let leader_after = if cluster.nodes[0].is_leader().await {
+            1
+        } else if cluster.nodes[1].is_leader().await {
+            2
+        } else {
+            3
+        };
 
         tracing::info!("Leader after node 3 rejoined: node {}", leader_after);
 

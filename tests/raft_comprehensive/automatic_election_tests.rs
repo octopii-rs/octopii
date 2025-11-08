@@ -25,7 +25,10 @@ fn test_automatic_election_after_leader_failure() {
         // Followers will be added via ConfChange (matching TiKV pattern)
         let mut cluster = TestCluster::new(vec![1, 2, 3], 8200).await;
         // Only start the leader (node 1)
-        cluster.nodes[0].start().await.expect("Failed to start leader");
+        cluster.nodes[0]
+            .start()
+            .await
+            .expect("Failed to start leader");
 
         tokio::time::sleep(Duration::from_millis(500)).await;
 
@@ -33,7 +36,10 @@ fn test_automatic_election_after_leader_failure() {
         cluster.nodes[0].campaign().await.expect("Campaign failed");
         tokio::time::sleep(Duration::from_secs(2)).await;
 
-        assert!(cluster.nodes[0].is_leader().await, "Node 1 should be leader");
+        assert!(
+            cluster.nodes[0].is_leader().await,
+            "Node 1 should be leader"
+        );
         tracing::info!("✓ Node 1 is leader");
 
         // CRITICAL: Make proposals FIRST to advance the leader's log
@@ -41,7 +47,9 @@ fn test_automatic_election_after_leader_failure() {
         tracing::info!("Making initial proposals to advance log...");
         for i in 1..=20 {
             let cmd = format!("SET bootstrap{} value{}", i, i);
-            cluster.nodes[0].propose(cmd.as_bytes().to_vec()).await
+            cluster.nodes[0]
+                .propose(cmd.as_bytes().to_vec())
+                .await
                 .expect("Failed to propose");
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
@@ -52,18 +60,30 @@ fn test_automatic_election_after_leader_failure() {
         // This should trigger proper snapshot/entry replication from raft-rs
         tracing::info!("Adding node 2 as voter");
         let addr2 = format!("127.0.0.1:{}", 8200 + 1).parse().unwrap();
-        cluster.nodes[0].get_node().unwrap()
-            .add_peer(2, addr2).await
+        cluster.nodes[0]
+            .get_node()
+            .unwrap()
+            .add_peer(2, addr2)
+            .await
             .expect("Failed to add peer 2");
-        cluster.nodes[1].start().await.expect("Failed to start node 2");
+        cluster.nodes[1]
+            .start()
+            .await
+            .expect("Failed to start node 2");
         tokio::time::sleep(Duration::from_secs(2)).await;
 
         tracing::info!("Adding node 3 as voter");
         let addr3 = format!("127.0.0.1:{}", 8200 + 2).parse().unwrap();
-        cluster.nodes[0].get_node().unwrap()
-            .add_peer(3, addr3).await
+        cluster.nodes[0]
+            .get_node()
+            .unwrap()
+            .add_peer(3, addr3)
+            .await
             .expect("Failed to add peer 3");
-        cluster.nodes[2].start().await.expect("Failed to start node 3");
+        cluster.nodes[2]
+            .start()
+            .await
+            .expect("Failed to start node 3");
         tokio::time::sleep(Duration::from_secs(2)).await;
 
         tracing::info!("✓ All nodes added as voters: [1, 2, 3]");
@@ -86,20 +106,35 @@ fn test_automatic_election_after_leader_failure() {
         tracing::info!("Waiting for automatic leader election...");
         let start = std::time::Instant::now();
 
-        let result = cluster.wait_for_leader_election(Duration::from_secs(6)).await;
+        let result = cluster
+            .wait_for_leader_election(Duration::from_secs(6))
+            .await;
         let elapsed = start.elapsed();
 
         match result {
             Ok(new_leader_id) => {
-                tracing::info!("✓ New leader elected: node {} in {:?}", new_leader_id, elapsed);
-                assert!(elapsed < Duration::from_secs(5), "Election took too long: {:?}", elapsed);
+                tracing::info!(
+                    "✓ New leader elected: node {} in {:?}",
+                    new_leader_id,
+                    elapsed
+                );
+                assert!(
+                    elapsed < Duration::from_secs(5),
+                    "Election took too long: {:?}",
+                    elapsed
+                );
                 assert_ne!(new_leader_id, 1, "Should be a different leader");
             }
             Err(e) => {
                 // Debug: check node states
                 for (idx, node) in cluster.nodes.iter().enumerate() {
                     let is_leader = node.is_leader().await;
-                    tracing::error!("Node {} (id={}): is_leader={}", idx, node.node_id, is_leader);
+                    tracing::error!(
+                        "Node {} (id={}): is_leader={}",
+                        idx,
+                        node.node_id,
+                        is_leader
+                    );
                 }
                 panic!("Automatic election failed after {:?}: {}", elapsed, e);
             }
@@ -165,7 +200,10 @@ fn test_no_election_with_healthy_leader() {
             3
         };
 
-        assert_eq!(initial_leader, final_leader, "Leader should not have changed");
+        assert_eq!(
+            initial_leader, final_leader,
+            "Leader should not have changed"
+        );
         tracing::info!("✓ Leader remained stable: node {}", final_leader);
 
         cluster.shutdown_all();
@@ -204,8 +242,11 @@ fn test_rapid_leader_failures() {
         for peer_id in 2..=5 {
             tracing::info!("Adding peer {} via ConfChange", peer_id);
             let addr = format!("127.0.0.1:{}", 8220 + peer_id - 1).parse().unwrap();
-            cluster.nodes[0].get_node().unwrap()
-                .add_peer(peer_id, addr).await
+            cluster.nodes[0]
+                .get_node()
+                .unwrap()
+                .add_peer(peer_id, addr)
+                .await
                 .expect(&format!("Failed to add peer {}", peer_id));
             tokio::time::sleep(Duration::from_secs(1)).await;
         }
@@ -248,7 +289,11 @@ fn test_rapid_leader_failures() {
 
                 // Verify new leader elected
                 let has_new_leader = cluster.has_leader().await;
-                assert!(has_new_leader, "Should have new leader after iteration {}", iteration);
+                assert!(
+                    has_new_leader,
+                    "Should have new leader after iteration {}",
+                    iteration
+                );
                 tracing::info!("✓ New leader elected after iteration {}", iteration);
             }
         }

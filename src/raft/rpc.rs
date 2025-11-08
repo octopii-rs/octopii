@@ -1,102 +1,19 @@
-use crate::rpc::{RequestPayload, ResponsePayload};
+use crate::rpc::RequestPayload;
 use bytes::Bytes;
+use protobuf::Message as PbMessage;
 use raft::prelude::*;
 
 /// Convert a Raft Message to RPC RequestPayload
 pub fn raft_message_to_rpc(msg: &Message) -> Option<RequestPayload> {
-    match msg.get_msg_type() {
-        MessageType::MsgAppend => {
-            tracing::debug!(
-                "Converting MsgAppend: from={}, to={}, term={}, log_term={}, index={}, commit={}, entries={}",
-                msg.from,
-                msg.to,
-                msg.term,
-                msg.log_term,
-                msg.index,
-                msg.commit,
-                msg.entries.len()
-            );
-
-            Some(RequestPayload::AppendEntries {
-                term: msg.term,
-                leader_id: msg.from,
-                prev_log_index: msg.index,
-                prev_log_term: msg.log_term,
-                entries: msg.entries.iter().map(|e| Bytes::copy_from_slice(&e.data)).collect(),
-                leader_commit: msg.commit,
-            })
-        }
-        MessageType::MsgRequestVote => {
-            tracing::debug!(
-                "Converting MsgRequestVote: from={}, to={}, term={}, log_term={}, index={}",
-                msg.from,
-                msg.to,
-                msg.term,
-                msg.log_term,
-                msg.index
-            );
-
-            Some(RequestPayload::RequestVote {
-                term: msg.term,
-                candidate_id: msg.from,
-                last_log_index: msg.index,
-                last_log_term: msg.log_term,
-            })
-        }
-        MessageType::MsgHeartbeat => {
-            tracing::trace!(
-                "Converting MsgHeartbeat: from={}, to={}, term={}, commit={}",
-                msg.from,
-                msg.to,
-                msg.term,
-                msg.commit
-            );
-
-            // Heartbeats are like AppendEntries with no entries
-            Some(RequestPayload::AppendEntries {
-                term: msg.term,
-                leader_id: msg.from,
-                prev_log_index: msg.index,
-                prev_log_term: msg.log_term,
-                entries: vec![],
-                leader_commit: msg.commit,
-            })
-        }
-        MessageType::MsgSnapshot => {
-            // Access snapshot via SingularPtrField
-            if let Some(snapshot) = msg.snapshot.as_ref() {
-                tracing::info!(
-                    "Converting MsgSnapshot: from={}, to={}, term={}, snapshot_index={}, snapshot_term={}",
-                    msg.from,
-                    msg.to,
-                    msg.term,
-                    snapshot.get_metadata().index,
-                    snapshot.get_metadata().term
-                );
-
-                let metadata = snapshot.get_metadata();
-
-                // Serialize ConfState for transfer
-                let conf_state_bytes = protobuf::Message::write_to_bytes(metadata.get_conf_state())
-                    .unwrap_or_default();
-
-                Some(RequestPayload::RaftSnapshot {
-                    term: msg.term,
-                    leader_id: msg.from,
-                    snapshot_index: metadata.index,
-                    snapshot_term: metadata.term,
-                    snapshot_data: Bytes::copy_from_slice(&snapshot.data),
-                    conf_state_data: Bytes::from(conf_state_bytes),
-                })
-            } else {
-                tracing::warn!("MsgSnapshot has no snapshot data");
-                None
-            }
-        }
-        _ => {
-            tracing::warn!(
-                "Unsupported Raft message type for RPC: {:?}",
-                msg.get_msg_type()
+    match msg.write_to_bytes() {
+        Ok(bytes) => Some(RequestPayload::RaftMessage {
+            message: Bytes::from(bytes),
+        }),
+        Err(e) => {
+            tracing::error!(
+                "Failed to serialize Raft message {:?}: {}",
+                msg.get_msg_type(),
+                e
             );
             None
         }
@@ -106,234 +23,18 @@ pub fn raft_message_to_rpc(msg: &Message) -> Option<RequestPayload> {
 /// Convert RPC RequestPayload to Raft Message
 pub fn rpc_to_raft_message(_from: u64, to: u64, payload: &RequestPayload) -> Option<Message> {
     match payload {
-        RequestPayload::AppendEntries {
-            term,
-            leader_id,
-            prev_log_index,
-            prev_log_term,
-            entries,
-            leader_commit,
-        } => {
-            tracing::debug!(
-                "Converting RPC AppendEntries to Raft: from={}, to={}, term={}, entries={}",
-                leader_id,
-                to,
-                term,
-                entries.len()
-            );
-
-            let msg_type = if entries.is_empty() {
-                MessageType::MsgHeartbeat
-            } else {
-                MessageType::MsgAppend
-            };
-
-            let raft_entries: Vec<Entry> = entries
-                .iter()
-                .enumerate()
-                .map(|(i, data)| Entry {
-                    entry_type: EntryType::EntryNormal.into(),
-                    term: *term,
-                    index: prev_log_index + 1 + i as u64,
-                    data: data.to_vec().into(),
-                    ..Default::default()
-                })
-                .collect();
-
-            let mut msg = Message::default();
-            msg.set_msg_type(msg_type);
-            msg.from = *leader_id;
-            msg.to = to;
-            msg.term = *term;
-            msg.log_term = *prev_log_term;
-            msg.index = *prev_log_index;
-            msg.commit = *leader_commit;
-            msg.entries = raft_entries.into();
-
-            Some(msg)
-        }
-        RequestPayload::RequestVote {
-            term,
-            candidate_id,
-            last_log_index,
-            last_log_term,
-        } => {
-            tracing::debug!(
-                "Converting RPC RequestVote to Raft: from={}, to={}, term={}",
-                candidate_id,
-                to,
-                term
-            );
-
-            let mut msg = Message::default();
-            msg.set_msg_type(MessageType::MsgRequestVote);
-            msg.from = *candidate_id;
-            msg.to = to;
-            msg.term = *term;
-            msg.log_term = *last_log_term;
-            msg.index = *last_log_index;
-
-            Some(msg)
-        }
-        RequestPayload::RaftSnapshot {
-            term,
-            leader_id,
-            snapshot_index,
-            snapshot_term,
-            snapshot_data,
-            conf_state_data,
-        } => {
-            tracing::info!(
-                "Converting RPC RaftSnapshot to Raft: from={}, to={}, term={}, snapshot_index={}, size={}",
-                leader_id,
-                to,
-                term,
-                snapshot_index,
-                snapshot_data.len()
-            );
-
-            // Deserialize ConfState
-            let conf_state = match protobuf::Message::parse_from_bytes(conf_state_data) {
-                Ok(cs) => cs,
-                Err(e) => {
-                    tracing::error!("Failed to deserialize ConfState: {}", e);
-                    return None;
-                }
-            };
-
-            // Build snapshot
-            let mut snapshot = Snapshot::default();
-            snapshot.data = Bytes::copy_from_slice(snapshot_data);
-            let metadata = snapshot.mut_metadata();
-            metadata.index = *snapshot_index;
-            metadata.term = *snapshot_term;
-            *metadata.mut_conf_state() = conf_state;
-
-            // Build message
-            let mut msg = Message::default();
-            msg.set_msg_type(MessageType::MsgSnapshot);
-            msg.from = *leader_id;
-            msg.to = to;
-            msg.term = *term;
-            msg.snapshot = protobuf::SingularPtrField::some(snapshot);
-
-            Some(msg)
-        }
+        RequestPayload::RaftMessage { message } => match Message::parse_from_bytes(message) {
+            Ok(mut msg) => {
+                msg.to = to;
+                Some(msg)
+            }
+            Err(e) => {
+                tracing::error!("Failed to deserialize Raft message: {}", e);
+                None
+            }
+        },
         _ => None,
     }
 }
 
-/// Convert Raft Message response to RPC ResponsePayload
-pub fn raft_response_to_rpc(msg: &Message) -> Option<ResponsePayload> {
-    match msg.get_msg_type() {
-        MessageType::MsgAppendResponse | MessageType::MsgHeartbeatResponse => {
-            tracing::debug!(
-                "Converting MsgAppendResponse: from={}, to={}, term={}, reject={}",
-                msg.from,
-                msg.to,
-                msg.term,
-                msg.reject
-            );
-
-            Some(ResponsePayload::AppendEntriesResponse {
-                term: msg.term,
-                success: !msg.reject,
-            })
-        }
-        MessageType::MsgRequestVoteResponse => {
-            tracing::debug!(
-                "Converting MsgRequestVoteResponse: from={}, to={}, term={}, reject={}",
-                msg.from,
-                msg.to,
-                msg.term,
-                msg.reject
-            );
-
-            Some(ResponsePayload::RequestVoteResponse {
-                term: msg.term,
-                vote_granted: !msg.reject,
-            })
-        }
-        MessageType::MsgSnapStatus => {
-            tracing::debug!(
-                "Converting MsgSnapStatus: from={}, to={}, term={}, reject={}",
-                msg.from,
-                msg.to,
-                msg.term,
-                msg.reject
-            );
-
-            Some(ResponsePayload::SnapshotResponse {
-                term: msg.term,
-                success: !msg.reject,
-            })
-        }
-        _ => None,
-    }
-}
-
-/// Convert RPC ResponsePayload to Raft Message
-pub fn rpc_response_to_raft(from: u64, to: u64, request_type: MessageType, payload: &ResponsePayload) -> Option<Message> {
-    match payload {
-        ResponsePayload::AppendEntriesResponse { term, success } => {
-            tracing::debug!(
-                "Converting RPC AppendEntriesResponse to Raft: from={}, to={}, term={}, success={}",
-                from,
-                to,
-                term,
-                success
-            );
-
-            let msg_type = match request_type {
-                MessageType::MsgHeartbeat => MessageType::MsgHeartbeatResponse,
-                _ => MessageType::MsgAppendResponse,
-            };
-
-            let mut msg = Message::default();
-            msg.set_msg_type(msg_type);
-            msg.from = from;
-            msg.to = to;
-            msg.term = *term;
-            msg.reject = !success;
-
-            Some(msg)
-        }
-        ResponsePayload::RequestVoteResponse { term, vote_granted } => {
-            tracing::debug!(
-                "Converting RPC RequestVoteResponse to Raft: from={}, to={}, term={}, granted={}",
-                from,
-                to,
-                term,
-                vote_granted
-            );
-
-            let mut msg = Message::default();
-            msg.set_msg_type(MessageType::MsgRequestVoteResponse);
-            msg.from = from;
-            msg.to = to;
-            msg.term = *term;
-            msg.reject = !vote_granted;
-
-            Some(msg)
-        }
-        ResponsePayload::SnapshotResponse { term, success } => {
-            tracing::debug!(
-                "Converting RPC SnapshotResponse to Raft: from={}, to={}, term={}, success={}",
-                from,
-                to,
-                term,
-                success
-            );
-
-            let mut msg = Message::default();
-            msg.set_msg_type(MessageType::MsgSnapStatus);
-            msg.from = from;
-            msg.to = to;
-            msg.term = *term;
-            msg.reject = !success;
-
-            Some(msg)
-        }
-        _ => None,
-    }
-}
+// ResponsePayload conversions remain for application-level RPCs.

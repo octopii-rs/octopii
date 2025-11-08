@@ -65,10 +65,10 @@ impl StateMachine {
                 match wal.walrus.read_next(TOPIC_STATE_MACHINE_SNAPSHOT, true) {
                     Ok(Some(entry)) => {
                         // Deserialize snapshot with rkyv
-                        let archived = unsafe {
-                            rkyv::archived_root::<StateMachineSnapshot>(&entry.data)
-                        };
-                        let snapshot: Result<StateMachineSnapshot, _> = archived.deserialize(&mut rkyv::Infallible);
+                        let archived =
+                            unsafe { rkyv::archived_root::<StateMachineSnapshot>(&entry.data) };
+                        let snapshot: Result<StateMachineSnapshot, _> =
+                            archived.deserialize(&mut rkyv::Infallible);
                         let snapshot = snapshot.expect("Failed to deserialize snapshot");
                         // Load snapshot into recovered map
                         recovered.clear();
@@ -76,7 +76,10 @@ impl StateMachine {
                             recovered.insert(key, Bytes::from(value));
                         }
                         snapshot_found = true;
-                        tracing::info!("✓ Loaded state machine snapshot with {} entries", recovered.len());
+                        tracing::info!(
+                            "✓ Loaded state machine snapshot with {} entries",
+                            recovered.len()
+                        );
                     }
                     Ok(None) => break,
                     Err(_) => break,
@@ -90,16 +93,16 @@ impl StateMachine {
                     Ok(Some(entry)) => {
                         op_count += 1;
                         // Zero-copy deserialize with rkyv
-                        let archived = unsafe {
-                            rkyv::archived_root::<StateMachineEntry>(&entry.data)
-                        };
-                        let sm_entry: StateMachineEntry = match archived.deserialize(&mut rkyv::Infallible) {
-                            Ok(d) => d,
-                            Err(_) => {
-                                tracing::warn!("Failed to deserialize state machine entry");
-                                break;
-                            }
-                        };
+                        let archived =
+                            unsafe { rkyv::archived_root::<StateMachineEntry>(&entry.data) };
+                        let sm_entry: StateMachineEntry =
+                            match archived.deserialize(&mut rkyv::Infallible) {
+                                Ok(d) => d,
+                                Err(_) => {
+                                    tracing::warn!("Failed to deserialize state machine entry");
+                                    break;
+                                }
+                            };
 
                         if sm_entry.value.is_empty() {
                             // Tombstone - delete the key
@@ -115,10 +118,17 @@ impl StateMachine {
             }
 
             if snapshot_found {
-                tracing::info!("✓ Recovery complete: snapshot + {} operations = {} entries",
-                    op_count, recovered.len());
+                tracing::info!(
+                    "✓ Recovery complete: snapshot + {} operations = {} entries",
+                    op_count,
+                    recovered.len()
+                );
             } else if !recovered.is_empty() {
-                tracing::info!("✓ Recovered {} entries from {} operations", recovered.len(), op_count);
+                tracing::info!(
+                    "✓ Recovered {} entries from {} operations",
+                    recovered.len(),
+                    op_count
+                );
             } else {
                 tracing::info!("No state machine entries to recover");
             }
@@ -135,8 +145,8 @@ impl StateMachine {
     /// Apply a command to the state machine (NOW DURABLE if WAL is set!)
     pub fn apply(&self, command: &[u8]) -> Result<Bytes, String> {
         // Simple command format: "SET key value" or "GET key"
-        let cmd_str = String::from_utf8(command.to_vec())
-            .map_err(|e| format!("Invalid UTF-8: {}", e))?;
+        let cmd_str =
+            String::from_utf8(command.to_vec()).map_err(|e| format!("Invalid UTF-8: {}", e))?;
 
         let parts: Vec<&str> = cmd_str.split_whitespace().collect();
 
@@ -227,9 +237,7 @@ impl StateMachine {
             // Get current state
             let data = self.data.read().unwrap();
             let snapshot = StateMachineSnapshot {
-                entries: data.iter()
-                    .map(|(k, v)| (k.clone(), v.to_vec()))
-                    .collect(),
+                entries: data.iter().map(|(k, v)| (k.clone(), v.to_vec())).collect(),
             };
 
             // Serialize and persist snapshot
@@ -237,12 +245,15 @@ impl StateMachine {
                 .map_err(|e| format!("Snapshot serialization failed: {:?}", e))?;
 
             tokio::task::block_in_place(|| {
-                wal.walrus.append_for_topic(TOPIC_STATE_MACHINE_SNAPSHOT, &bytes)
+                wal.walrus
+                    .append_for_topic(TOPIC_STATE_MACHINE_SNAPSHOT, &bytes)
             })
             .map_err(|e| format!("Failed to persist state machine snapshot: {}", e))?;
 
-            tracing::info!("✓ State machine compaction complete: snapshot with {} entries persisted",
-                snapshot.entries.len());
+            tracing::info!(
+                "✓ State machine compaction complete: snapshot with {} entries persisted",
+                snapshot.entries.len()
+            );
 
             // Reset counter
             *self.ops_since_compaction.write().unwrap() = 0;

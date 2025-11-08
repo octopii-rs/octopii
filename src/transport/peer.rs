@@ -27,10 +27,14 @@ impl PeerConnection {
         let len = data.len() as u32;
         send.write_all(&len.to_le_bytes()).await?;
         send.write_all(&data).await?;
-        send.finish().map_err(|e| OctopiiError::Transport(format!("Stream closed: {}", e)))?;
+        send.finish()
+            .map_err(|e| OctopiiError::Transport(format!("Stream closed: {}", e)))?;
 
         // Wait for acknowledgment (empty response)
-        let _ = recv.read_to_end(0).await.map_err(|e| OctopiiError::Transport(format!("Read error: {}", e)))?;
+        let _ = recv
+            .read_to_end(0)
+            .await
+            .map_err(|e| OctopiiError::Transport(format!("Read error: {}", e)))?;
 
         Ok(())
     }
@@ -47,16 +51,21 @@ impl PeerConnection {
 
         // Read length prefix
         let mut len_buf = [0u8; 4];
-        recv.read_exact(&mut len_buf).await.map_err(|e| OctopiiError::Transport(format!("Read error: {}", e)))?;
+        recv.read_exact(&mut len_buf)
+            .await
+            .map_err(|e| OctopiiError::Transport(format!("Read error: {}", e)))?;
         let len = u32::from_le_bytes(len_buf) as usize;
 
         // Read message data
         let mut data = BytesMut::with_capacity(len);
         data.resize(len, 0);
-        recv.read_exact(&mut data).await.map_err(|e| OctopiiError::Transport(format!("Read error: {}", e)))?;
+        recv.read_exact(&mut data)
+            .await
+            .map_err(|e| OctopiiError::Transport(format!("Read error: {}", e)))?;
 
         // Send acknowledgment
-        send.finish().map_err(|e| OctopiiError::Transport(format!("Stream closed: {}", e)))?;
+        send.finish()
+            .map_err(|e| OctopiiError::Transport(format!("Stream closed: {}", e)))?;
 
         Ok(Some(data.freeze()))
     }
@@ -154,9 +163,7 @@ impl PeerConnection {
             1 => Err(OctopiiError::Transport(
                 "Checksum verification failed on peer".to_string(),
             )),
-            _ => Err(OctopiiError::Transport(
-                "Unknown error on peer".to_string(),
-            )),
+            _ => Err(OctopiiError::Transport("Unknown error on peer".to_string())),
         }
     }
 
@@ -184,13 +191,17 @@ impl PeerConnection {
         if let Err(e) = recv_stream.read_exact(&mut size_buf).await {
             // Send error ACK
             let _ = send_stream.write_all(&[2u8]).await;
-            return Err(OctopiiError::Transport(format!("Failed to read size: {}", e)));
+            return Err(OctopiiError::Transport(format!(
+                "Failed to read size: {}",
+                e
+            )));
         }
         let total_size = u64::from_le_bytes(size_buf);
 
         // Stream data and compute checksum
         let mut hasher = Sha256::new();
-        let mut data = BytesMut::with_capacity(std::cmp::min(total_size as usize, 10 * 1024 * 1024)); // Cap at 10MB for initial allocation
+        let mut data =
+            BytesMut::with_capacity(std::cmp::min(total_size as usize, 10 * 1024 * 1024)); // Cap at 10MB for initial allocation
         let mut received = 0u64;
         let mut buffer = vec![0u8; BUFFER_SIZE];
 

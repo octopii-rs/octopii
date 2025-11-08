@@ -32,19 +32,31 @@ fn test_state_machine_linearizability() {
 
         // Perform a sequence of SET/GET operations
         // SET key1 = A
-        cluster.nodes[0].propose("SET key1 A".as_bytes().to_vec()).await.ok();
+        cluster.nodes[0]
+            .propose("SET key1 A".as_bytes().to_vec())
+            .await
+            .ok();
         tokio::time::sleep(Duration::from_millis(500)).await;
 
         // SET key1 = B (overwrite)
-        cluster.nodes[0].propose("SET key1 B".as_bytes().to_vec()).await.ok();
+        cluster.nodes[0]
+            .propose("SET key1 B".as_bytes().to_vec())
+            .await
+            .ok();
         tokio::time::sleep(Duration::from_millis(500)).await;
 
         // SET key2 = C
-        cluster.nodes[0].propose("SET key2 C".as_bytes().to_vec()).await.ok();
+        cluster.nodes[0]
+            .propose("SET key2 C".as_bytes().to_vec())
+            .await
+            .ok();
         tokio::time::sleep(Duration::from_millis(500)).await;
 
         // DELETE key1
-        cluster.nodes[0].propose("DELETE key1".as_bytes().to_vec()).await.ok();
+        cluster.nodes[0]
+            .propose("DELETE key1".as_bytes().to_vec())
+            .await
+            .ok();
         tokio::time::sleep(Duration::from_secs(2)).await;
 
         // Verify operations completed
@@ -97,7 +109,10 @@ fn test_convergence_under_continuous_load() {
         tokio::time::sleep(Duration::from_secs(5)).await;
 
         // Verify all nodes converged
-        cluster.verify_convergence(Duration::from_secs(10)).await.expect("Convergence failed");
+        cluster
+            .verify_convergence(Duration::from_secs(10))
+            .await
+            .expect("Convergence failed");
 
         cluster.shutdown_all();
         tracing::info!("✓ Test passed: Convergence under continuous load");
