@@ -256,6 +256,44 @@ impl OctopiiNode {
         self.raft.campaign().await
     }
 
+    /// Add a peer to the Raft cluster dynamically
+    /// This proposes a ConfChange that will be committed through Raft consensus
+    pub async fn add_peer(&self, peer_id: u64, addr: SocketAddr) -> Result<()> {
+        tracing::info!("Adding peer {} at {}", peer_id, addr);
+
+        // Update peer address mapping immediately (optimistic)
+        self.peer_addrs.write().await.insert(peer_id, addr);
+
+        // Propose ConfChange to Raft
+        let mut cc = raft::prelude::ConfChange::default();
+        cc.set_change_type(raft::prelude::ConfChangeType::AddNode);
+        cc.node_id = peer_id;
+
+        self.raft.propose_conf_change(vec![], cc).await?;
+        tracing::info!("Proposed AddNode for peer {}", peer_id);
+        Ok(())
+    }
+
+    /// Remove a peer from the Raft cluster dynamically
+    /// This proposes a ConfChange that will be committed through Raft consensus
+    pub async fn remove_peer(&self, peer_id: u64) -> Result<()> {
+        tracing::info!("Removing peer {}", peer_id);
+
+        // Propose ConfChange to Raft
+        let mut cc = raft::prelude::ConfChange::default();
+        cc.set_change_type(raft::prelude::ConfChangeType::RemoveNode);
+        cc.node_id = peer_id;
+
+        self.raft.propose_conf_change(vec![], cc).await?;
+
+        // Remove from peer address mapping after proposal
+        // (actual removal happens when ConfChange commits)
+        self.peer_addrs.write().await.remove(&peer_id);
+
+        tracing::info!("Proposed RemoveNode for peer {}", peer_id);
+        Ok(())
+    }
+
     /// Get the node ID
     pub fn id(&self) -> u64 {
         self.config.node_id
@@ -581,8 +619,32 @@ impl OctopiiNode {
                     );
 
                     // Apply committed entries to state machine (from LightReady)
+                    let mut last_applied_index = 0u64;
                     for entry in light_rd.committed_entries().iter() {
-                        if !entry.data.is_empty() {
+                        last_applied_index = entry.index;
+                        // Check if this is a ConfChange entry
+                        if entry.get_entry_type() == raft::prelude::EntryType::EntryConfChange {
+                            tracing::info!("Applying ConfChange entry: index={}, term={}",
+                                entry.index, entry.term);
+
+                            // Decode and apply ConfChange
+                            match protobuf::Message::parse_from_bytes(&entry.data) {
+                                Ok(cc) => {
+                                    match raft.apply_conf_change(&cc).await {
+                                        Ok(conf_state) => {
+                                            tracing::info!("✓ ConfChange applied: {:?} for node {}, voters: {:?}",
+                                                cc.get_change_type(), cc.node_id, conf_state.voters);
+                                        }
+                                        Err(e) => {
+                                            tracing::error!("Failed to apply ConfChange: {}", e);
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    tracing::error!("Failed to decode ConfChange: {:?}", e);
+                                }
+                            }
+                        } else if !entry.data.is_empty() {
                             tracing::info!("Applying committed entry: index={}, term={}, {} bytes",
                                 entry.index, entry.term, entry.data.len());
 
@@ -652,6 +714,31 @@ impl OctopiiNode {
                                     }
                                 });
                             }
+                        }
+                    }
+
+                    // Trigger compaction if we applied entries
+                    if last_applied_index > 0 {
+                        // 1. Try state machine compaction (threshold-based)
+                        if let Err(e) = state_machine.compact_state_machine() {
+                            tracing::warn!("State machine compaction failed: {}", e);
+                        }
+
+                        // 2. Try log compaction (threshold-based)
+                        // Get state machine snapshot for Raft snapshot data
+                        // Convert HashMap<String, Bytes> to serializable format
+                        let sm_snapshot = state_machine.snapshot();
+                        let serializable_snapshot: Vec<(String, Vec<u8>)> = sm_snapshot
+                            .iter()
+                            .map(|(k, v)| (k.clone(), v.to_vec()))
+                            .collect();
+                        let snapshot_data = rkyv::to_bytes::<_, 4096>(&serializable_snapshot)
+                            .unwrap_or_default()
+                            .to_vec();
+
+                        // Try to compact logs (will only compact if threshold reached)
+                        if let Err(e) = raft.try_compact_logs(last_applied_index, snapshot_data).await {
+                            tracing::warn!("Log compaction failed: {}", e);
                         }
                     }
 
