@@ -21,7 +21,7 @@ fn test_state_machine_linearizability() {
 
         tracing::info!("=== Starting state machine linearizability test ===");
 
-        let mut cluster = TestCluster::new(vec![1, 2, 3], 7400);
+        let mut cluster = TestCluster::new(vec![1, 2, 3], 7400).await;
         cluster.start_all().await.expect("Failed to start cluster");
 
         tokio::time::sleep(Duration::from_millis(500)).await;
@@ -76,7 +76,7 @@ fn test_convergence_under_continuous_load() {
 
         tracing::info!("=== Starting convergence under continuous load test ===");
 
-        let mut cluster = TestCluster::new(vec![1, 2, 3, 4, 5], 7440);
+        let mut cluster = TestCluster::new(vec![1, 2, 3, 4, 5], 7440).await;
         cluster.start_all().await.expect("Failed to start cluster");
 
         tokio::time::sleep(Duration::from_millis(500)).await;
@@ -121,7 +121,7 @@ fn test_no_data_loss_after_total_outage() {
 
         tracing::info!("=== Starting no data loss after total outage test ===");
 
-        let mut cluster = TestCluster::new(vec![1, 2, 3], 7430);
+        let mut cluster = TestCluster::new(vec![1, 2, 3], 7430).await;
         cluster.start_all().await.expect("Failed to start cluster");
 
         tokio::time::sleep(Duration::from_millis(500)).await;

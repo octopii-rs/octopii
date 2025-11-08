@@ -121,24 +121,38 @@ pub struct OctopiiNode {
 }
 
 impl OctopiiNode {
-    /// Create a new Octopii node
-    pub fn new(config: Config) -> Result<Self> {
-        // Create isolated runtime
-        let runtime = OctopiiRuntime::new(config.worker_threads);
-
-        // Initialize components on the isolated runtime
-        let transport = Arc::new(runtime.block_on(QuicTransport::new(config.bind_addr))?);
+    /// Create a new Octopii node (async version - call from within async context)
+    ///
+    /// This is the primary constructor. It accepts an OctopiiRuntime that can be either:
+    /// - A dedicated runtime created with `OctopiiRuntime::new()`
+    /// - A shared runtime created with `OctopiiRuntime::from_handle()`
+    ///
+    /// The async version allows multiple nodes to be created in tests without
+    /// nested runtime issues.
+    ///
+    /// # Example
+    /// ```no_run
+    /// use octopii::{OctopiiNode, Config, OctopiiRuntime};
+    ///
+    /// #[tokio::main]
+    /// async fn main() {
+    ///     let runtime = OctopiiRuntime::new(4);
+    ///     let config = Config { /* ... */ };
+    ///     let node = OctopiiNode::new(config, runtime).await.unwrap();
+    /// }
+    /// ```
+    pub async fn new(config: Config, runtime: OctopiiRuntime) -> Result<Self> {
+        // Initialize components (now using .await instead of block_on!)
+        let transport = Arc::new(QuicTransport::new(config.bind_addr).await?);
         let rpc = Arc::new(RpcHandler::new(Arc::clone(&transport)));
 
         // Create WAL
         let wal_path = config.wal_dir.join(format!("node_{}.wal", config.node_id));
-        let wal = Arc::new(
-            runtime.block_on(WriteAheadLog::new(
-                wal_path,
-                config.wal_batch_size,
-                Duration::from_millis(config.wal_flush_interval_ms),
-            ))?,
-        );
+        let wal = Arc::new(WriteAheadLog::new(
+            wal_path,
+            config.wal_batch_size,
+            Duration::from_millis(config.wal_flush_interval_ms),
+        ).await?);
 
         // Create Raft storage and node
         let storage = WalStorage::new(Arc::clone(&wal));
@@ -157,12 +171,12 @@ impl OctopiiNode {
         }
 
         let peer_ids: Vec<u64> = peer_addrs_map.keys().copied().collect();
-        let raft = Arc::new(runtime.block_on(RaftNode::new(
+        let raft = Arc::new(RaftNode::new(
             config.node_id,
             peer_ids,
             storage,
             config.is_initial_leader,
-        ))?);
+        ).await?);
 
         // Create state machine with WAL backing (enables durability!)
         let state_machine = Arc::new(StateMachine::with_wal(Arc::clone(&wal)));
@@ -191,6 +205,45 @@ impl OctopiiNode {
             node.config.bind_addr,
             node.config.peers
         );
+
+        Ok(node)
+    }
+
+    /// Create a new Octopii node with blocking initialization (backward compatibility)
+    ///
+    /// This creates a dedicated runtime and blocks the current thread until
+    /// initialization is complete. Use this for simple use cases where you
+    /// don't need to manage the runtime yourself.
+    ///
+    /// **Note**: This cannot be called from within another async runtime.
+    /// For tests and advanced use cases, use `new()` instead.
+    ///
+    /// # Example
+    /// ```no_run
+    /// use octopii::{OctopiiNode, Config};
+    ///
+    /// let config = Config { /* ... */ };
+    /// let node = OctopiiNode::new_blocking(config).unwrap();
+    /// ```
+    pub fn new_blocking(config: Config) -> Result<Self> {
+        // Create a dedicated runtime
+        let runtime = OctopiiRuntime::new(config.worker_threads);
+
+        // We need to spawn initialization in the runtime
+        // Use Handle to spawn since we're not inside the runtime
+        let handle = runtime.handle();
+        let config_clone = config.clone();
+        let runtime_clone = runtime.clone();
+
+        // Block on initialization using the underlying tokio runtime
+        // This is safe because we're creating a NEW runtime, not nesting
+        let node = std::thread::scope(|s| {
+            s.spawn(move || {
+                handle.block_on(async move {
+                    Self::new(config_clone, runtime_clone).await
+                })
+            }).join().expect("Thread panicked")
+        })?;
 
         Ok(node)
     }
