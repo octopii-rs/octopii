@@ -1,12 +1,11 @@
 use super::{serialize, MessageId, RpcMessage, RpcRequest, RpcResponse, ResponsePayload};
 use crate::error::{OctopiiError, Result};
-use crate::runtime::OctopiiRuntime;
-use crate::transport::QuicTransport;
+use crate::transport::{PeerConnection, QuicTransport};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use tokio::sync::{mpsc, oneshot, RwLock};
+use tokio::sync::{oneshot, RwLock};
 use tokio::time::{timeout, Duration};
 
 /// Callback for handling incoming requests
@@ -18,29 +17,17 @@ pub struct RpcHandler {
     next_id: AtomicU64,
     pending_requests: Arc<RwLock<HashMap<MessageId, oneshot::Sender<RpcResponse>>>>,
     request_handler: Arc<RwLock<Option<RequestHandler>>>,
-    message_tx: mpsc::UnboundedSender<(SocketAddr, RpcMessage)>,
 }
 
 impl RpcHandler {
     /// Create a new RPC handler
-    pub fn new(transport: Arc<QuicTransport>, runtime: &OctopiiRuntime) -> Self {
-        let (message_tx, message_rx) = mpsc::unbounded_channel();
-
-        let handler = Self {
+    pub fn new(transport: Arc<QuicTransport>) -> Self {
+        Self {
             transport: Arc::clone(&transport),
             next_id: AtomicU64::new(1),
             pending_requests: Arc::new(RwLock::new(HashMap::new())),
             request_handler: Arc::new(RwLock::new(None)),
-            message_tx,
-        };
-
-        // Spawn message receiver task on the isolated runtime
-        let h = handler.clone();
-        runtime.spawn(async move {
-            h.message_receiver_task(message_rx).await;
-        });
-
-        handler
+        }
     }
 
     /// Set the request handler callback
@@ -99,32 +86,35 @@ impl RpcHandler {
     }
 
     /// Notify the handler of an incoming message
-    pub fn notify_message(&self, addr: SocketAddr, msg: RpcMessage) -> Result<()> {
-        self.message_tx
-            .send((addr, msg))
-            .map_err(|_| OctopiiError::Rpc("Message receiver task died".to_string()))
-    }
+    ///
+    /// This method handles the message inline to avoid spawning tasks,
+    /// which prevents context switching starvation with Quinn QUIC.
+    ///
+    /// The peer parameter is used to send responses back on the same connection.
+    pub async fn notify_message(&self, addr: SocketAddr, msg: RpcMessage, peer: Option<Arc<PeerConnection>>) {
+        tracing::debug!("RPC notify_message from {}: {:?}", addr, match &msg {
+            RpcMessage::Request(req) => format!("Request(id={})", req.id),
+            RpcMessage::Response(resp) => format!("Response(id={})", resp.id),
+            RpcMessage::OneWay(_) => "OneWay".to_string(),
+        });
 
-    /// Task that processes incoming messages
-    async fn message_receiver_task(&self, mut rx: mpsc::UnboundedReceiver<(SocketAddr, RpcMessage)>) {
-        while let Some((addr, msg)) = rx.recv().await {
-            match msg {
-                RpcMessage::Request(req) => {
-                    self.handle_request(addr, req).await;
-                }
-                RpcMessage::Response(resp) => {
-                    self.handle_response(resp).await;
-                }
-                RpcMessage::OneWay(_) => {
-                    // One-way messages would be handled by application logic
-                    tracing::debug!("Received one-way message from {}", addr);
-                }
+        match msg {
+            RpcMessage::Request(req) => {
+                self.handle_request(addr, req, peer).await;
+            }
+            RpcMessage::Response(resp) => {
+                tracing::debug!("RPC handler: received response {}", resp.id);
+                self.handle_response(resp).await;
+            }
+            RpcMessage::OneWay(_) => {
+                // One-way messages would be handled by application logic
+                tracing::debug!("Received one-way message from {}", addr);
             }
         }
     }
 
     /// Handle an incoming request
-    async fn handle_request(&self, addr: SocketAddr, req: RpcRequest) {
+    async fn handle_request(&self, addr: SocketAddr, req: RpcRequest, peer: Option<Arc<PeerConnection>>) {
         let handler = self.request_handler.read().await;
 
         let response_payload = match handler.as_ref() {
@@ -136,10 +126,17 @@ impl RpcHandler {
 
         let response = RpcMessage::new_response(req.id, response_payload);
 
-        // Send response
+        // Send response back on the same connection if peer is provided,
+        // otherwise fall back to creating a new connection
         if let Ok(data) = serialize(&response) {
-            if let Err(e) = self.transport.send(addr, data).await {
-                tracing::error!("Failed to send response to {}: {}", addr, e);
+            if let Some(peer) = peer {
+                if let Err(e) = peer.send(data).await {
+                    tracing::error!("Failed to send response via peer: {}", e);
+                }
+            } else {
+                if let Err(e) = self.transport.send(addr, data).await {
+                    tracing::error!("Failed to send response to {}: {}", addr, e);
+                }
             }
         }
     }
@@ -158,7 +155,6 @@ impl RpcHandler {
             next_id: AtomicU64::new(self.next_id.load(Ordering::SeqCst)),
             pending_requests: Arc::clone(&self.pending_requests),
             request_handler: Arc::clone(&self.request_handler),
-            message_tx: self.message_tx.clone(),
         }
     }
 }
