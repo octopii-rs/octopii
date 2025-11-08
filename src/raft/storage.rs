@@ -2,7 +2,93 @@ use crate::error::Result;
 use crate::wal::WriteAheadLog;
 use bytes::Bytes;
 use raft::{prelude::*, Storage};
+use rkyv::{Archive, Deserialize, Serialize};
 use std::sync::{Arc, RwLock as StdRwLock};
+
+// Walrus topic names for different Raft state components
+const TOPIC_LOG: &str = "raft_log";
+const TOPIC_HARD_STATE: &str = "raft_hard_state";
+const TOPIC_CONF_STATE: &str = "raft_conf_state";
+const TOPIC_SNAPSHOT: &str = "raft_snapshot";
+
+// Serializable wrapper types for rkyv
+
+#[derive(Archive, Deserialize, Serialize, Debug, Clone)]
+
+struct HardStateData {
+    term: u64,
+    vote: u64,
+    commit: u64,
+}
+
+impl From<&HardState> for HardStateData {
+    fn from(hs: &HardState) -> Self {
+        Self {
+            term: hs.term,
+            vote: hs.vote,
+            commit: hs.commit,
+        }
+    }
+}
+
+impl From<&HardStateData> for HardState {
+    fn from(data: &HardStateData) -> Self {
+        let mut hs = HardState::default();
+        hs.term = data.term;
+        hs.vote = data.vote;
+        hs.commit = data.commit;
+        hs
+    }
+}
+
+#[derive(Archive, Deserialize, Serialize, Debug, Clone)]
+
+struct ConfStateData {
+    voters: Vec<u64>,
+    learners: Vec<u64>,
+    voters_outgoing: Vec<u64>,
+    learners_next: Vec<u64>,
+    auto_leave: bool,
+}
+
+impl From<&ConfState> for ConfStateData {
+    fn from(cs: &ConfState) -> Self {
+        Self {
+            voters: cs.voters.clone(),
+            learners: cs.learners.clone(),
+            voters_outgoing: cs.voters_outgoing.clone(),
+            learners_next: cs.learners_next.clone(),
+            auto_leave: cs.auto_leave,
+        }
+    }
+}
+
+impl From<&ConfStateData> for ConfState {
+    fn from(data: &ConfStateData) -> Self {
+        let mut cs = ConfState::default();
+        cs.voters = data.voters.clone();
+        cs.learners = data.learners.clone();
+        cs.voters_outgoing = data.voters_outgoing.clone();
+        cs.learners_next = data.learners_next.clone();
+        cs.auto_leave = data.auto_leave;
+        cs
+    }
+}
+
+#[derive(Archive, Deserialize, Serialize, Debug, Clone)]
+
+struct SnapshotMetadataData {
+    conf_state: ConfStateData,
+    index: u64,
+    term: u64,
+}
+
+#[derive(Archive, Deserialize, Serialize, Debug, Clone)]
+
+struct SnapshotData {
+    metadata: SnapshotMetadataData,
+    data: Vec<u8>,
+}
 
 /// Raft storage implementation backed by WAL
 pub struct WalStorage {
@@ -15,27 +101,209 @@ pub struct WalStorage {
 }
 
 impl WalStorage {
-    /// Create a new WAL-backed storage
+    /// Create a new WAL-backed storage with crash recovery
     pub fn new(wal: Arc<WriteAheadLog>) -> Self {
-        Self {
+        let storage = Self {
             wal,
             entries: StdRwLock::new(Vec::new()),
             hard_state: StdRwLock::new(HardState::default()),
             conf_state: StdRwLock::new(ConfState::default()),
             snapshot: StdRwLock::new(Snapshot::default()),
-        }
+        };
+
+        // Recover state from Walrus topics
+        storage.recover_from_walrus();
+        storage
     }
 
-    /// Apply a snapshot to storage
+    /// Recover all Raft state from Walrus topics
+    fn recover_from_walrus(&self) {
+        tracing::info!("Starting Raft state recovery from Walrus...");
+
+        // 1. Recover hard state (latest entry wins)
+        if let Ok(hs) = self.recover_hard_state() {
+            if hs.term > 0 || hs.vote > 0 || hs.commit > 0 {
+                *self.hard_state.write().unwrap() = hs.clone();
+                tracing::info!("✓ Recovered hard state: term={}, vote={}, commit={}",
+                    hs.term, hs.vote, hs.commit);
+            }
+        }
+
+        // 2. Recover conf state (latest entry wins)
+        if let Ok(cs) = self.recover_conf_state() {
+            if !cs.voters.is_empty() {
+                *self.conf_state.write().unwrap() = cs.clone();
+                tracing::info!("✓ Recovered conf state: voters={:?}, learners={:?}",
+                    cs.voters, cs.learners);
+            }
+        }
+
+        // 3. Recover snapshot (latest entry wins)
+        if let Ok(snap) = self.recover_snapshot() {
+            if snap.get_metadata().index > 0 {
+                *self.snapshot.write().unwrap() = snap.clone();
+                tracing::info!("✓ Recovered snapshot at index {} (term {})",
+                    snap.get_metadata().index, snap.get_metadata().term);
+            }
+        }
+
+        // 4. Recover log entries (rebuild entire log)
+        if let Ok(entries) = self.recover_log_entries() {
+            if !entries.is_empty() {
+                *self.entries.write().unwrap() = entries.clone();
+                tracing::info!("✓ Recovered {} log entries", entries.len());
+            }
+        }
+
+        tracing::info!("Raft state recovery complete");
+    }
+
+    fn recover_hard_state(&self) -> crate::error::Result<HardState> {
+        let walrus = &self.wal.walrus;
+        let mut latest: Option<HardState> = None;
+
+        loop {
+            match walrus.read_next(TOPIC_HARD_STATE, false) {
+                Ok(Some(entry)) => {
+                    // Zero-copy deserialize with rkyv
+                    let archived = unsafe {
+                        rkyv::archived_root::<HardStateData>(&entry.data)
+                    };
+                    let data: HardStateData = match archived.deserialize(&mut rkyv::Infallible) {
+                        Ok(d) => d,
+                        Err(_) => { tracing::warn!("Failed to deserialize hard state entry"); break; }
+                    };
+                            latest = Some((&data).into());
+                }
+                Ok(None) => break,
+                Err(_) => break,
+            }
+        }
+
+        Ok(latest.unwrap_or_default())
+    }
+
+    fn recover_conf_state(&self) -> crate::error::Result<ConfState> {
+        let walrus = &self.wal.walrus;
+        let mut latest: Option<ConfState> = None;
+
+        loop {
+            match walrus.read_next(TOPIC_CONF_STATE, false) {
+                Ok(Some(entry)) => {
+                    let archived = unsafe {
+                        rkyv::archived_root::<ConfStateData>(&entry.data)
+                    };
+                    let data: ConfStateData = match archived.deserialize(&mut rkyv::Infallible) {
+                        Ok(d) => d,
+                        Err(_) => {
+                            tracing::warn!("Failed to deserialize conf state entry");
+                            break;
+                        }
+                    };
+                    latest = Some((&data).into());
+                }
+                Ok(None) => break,
+                Err(_) => break,
+            }
+        }
+
+        Ok(latest.unwrap_or_default())
+    }
+
+    fn recover_snapshot(&self) -> crate::error::Result<Snapshot> {
+        let walrus = &self.wal.walrus;
+        let mut latest: Option<Snapshot> = None;
+
+        loop {
+            match walrus.read_next(TOPIC_SNAPSHOT, false) {
+                Ok(Some(entry)) => {
+                    let archived = unsafe {
+                        rkyv::archived_root::<SnapshotData>(&entry.data)
+                    };
+                    let snap_data: SnapshotData = match archived.deserialize(&mut rkyv::Infallible) {
+                        Ok(d) => d,
+                        Err(_) => {
+                            tracing::warn!("Failed to deserialize snapshot entry");
+                            break;
+                        }
+                    };
+
+                    let mut snapshot = Snapshot::default();
+                    snapshot.data = Bytes::from(snap_data.data);
+
+                    let metadata = snapshot.mut_metadata();
+                    metadata.index = snap_data.metadata.index;
+                    metadata.term = snap_data.metadata.term;
+                    *metadata.mut_conf_state() = (&snap_data.metadata.conf_state).into();
+
+                    latest = Some(snapshot);
+                }
+                Ok(None) => break,
+                Err(_) => break,
+            }
+        }
+
+        Ok(latest.unwrap_or_default())
+    }
+
+    fn recover_log_entries(&self) -> crate::error::Result<Vec<Entry>> {
+        let walrus = &self.wal.walrus;
+        let mut entries = Vec::new();
+
+        loop {
+            match walrus.read_next(TOPIC_LOG, false) {
+                Ok(Some(entry_data)) => {
+                    // Deserialize protobuf Entry (from raft-rs)
+                    match protobuf::Message::parse_from_bytes(&entry_data.data) {
+                        Ok(raft_entry) => {
+                            entries.push(raft_entry);
+                        }
+                        Err(e) => {
+                            tracing::warn!("Failed to deserialize log entry: {}", e);
+                            break;
+                        }
+                    }
+                }
+                Ok(None) => break,
+                Err(_) => break,
+            }
+        }
+
+        Ok(entries)
+    }
+
+    /// Apply a snapshot to storage (NOW DURABLE!)
     pub fn apply_snapshot(&self, snapshot: Snapshot) -> crate::error::Result<()> {
+        // Serialize snapshot with rkyv
+        let snap_data = SnapshotData {
+            metadata: SnapshotMetadataData {
+                conf_state: ConfStateData::from(snapshot.get_metadata().get_conf_state()),
+                index: snapshot.get_metadata().index,
+                term: snapshot.get_metadata().term,
+            },
+            data: snapshot.data.to_vec(),
+        };
+
+        let bytes = rkyv::to_bytes::<_, 4096>(&snap_data)
+            .map_err(|e| crate::error::OctopiiError::Wal(
+                format!("Failed to serialize snapshot: {:?}", e)
+            ))?;
+
+        // Persist to Walrus
+        tokio::task::block_in_place(|| {
+            self.wal.walrus.append_for_topic(TOPIC_SNAPSHOT, &bytes)
+        })?;
+
+        tracing::debug!("Persisted snapshot at index {} (term {})",
+            snapshot.get_metadata().index, snapshot.get_metadata().term);
+
+        // Update in-memory state
         let mut snap = self.snapshot.write().unwrap();
         *snap = snapshot.clone();
 
-        // Update conf state from snapshot metadata
         let mut conf = self.conf_state.write().unwrap();
         *conf = snapshot.get_metadata().get_conf_state().clone();
 
-        // Update hard state to match snapshot
         let mut hs = self.hard_state.write().unwrap();
         hs.term = snapshot.get_metadata().term;
         hs.commit = snapshot.get_metadata().index;
@@ -46,13 +314,15 @@ impl WalStorage {
     /// Append entries to storage (async version for WAL persistence)
     pub async fn append_entries(&self, entries: &[Entry]) -> Result<()> {
         for entry in entries {
-            // Serialize entry using protobuf
+            // Serialize entry using protobuf (raft::Entry from raft-rs)
             let data = protobuf::Message::write_to_bytes(entry)
                 .map_err(|e| crate::error::OctopiiError::Wal(format!("Protobuf error: {}", e)))?;
-            let bytes = Bytes::from(data);
 
-            // Write to WAL
-            self.wal.append(bytes).await?;
+            // Write to Walrus with correct topic
+            let walrus = &self.wal.walrus;
+            tokio::task::block_in_place(|| {
+                walrus.append_for_topic(TOPIC_LOG, &data)
+            })?;
 
             // Add to in-memory cache
             let mut cache = self.entries.write().unwrap();
@@ -72,14 +342,44 @@ impl WalStorage {
         tracing::trace!("Appended {} entries to in-memory cache", entries.len());
     }
 
-    /// Set hard state
+    /// Set hard state (NOW DURABLE!)
     pub fn set_hard_state(&self, hs: HardState) {
+        // Serialize with rkyv
+        let data = HardStateData::from(&hs);
+        let bytes = rkyv::to_bytes::<_, 256>(&data)
+            .expect("Failed to serialize hard state");
+
+        // Persist to Walrus (sync for simplicity in ready handler)
+        tokio::task::block_in_place(|| {
+            self.wal.walrus.append_for_topic(TOPIC_HARD_STATE, &bytes)
+        })
+        .expect("Failed to persist hard state");
+
+        tracing::debug!("✓ Persisted hard state: term={}, vote={}, commit={}",
+            data.term, data.vote, data.commit);
+
+        // Update in-memory cache
         let mut state = self.hard_state.write().unwrap();
         *state = hs;
     }
 
-    /// Set conf state
+    /// Set conf state (NOW DURABLE!)
     pub fn set_conf_state(&self, cs: ConfState) {
+        // Serialize with rkyv
+        let data = ConfStateData::from(&cs);
+        let bytes = rkyv::to_bytes::<_, 256>(&data)
+            .expect("Failed to serialize conf state");
+
+        // Persist to Walrus
+        tokio::task::block_in_place(|| {
+            self.wal.walrus.append_for_topic(TOPIC_CONF_STATE, &bytes)
+        })
+        .expect("Failed to persist conf state");
+
+        tracing::debug!("✓ Persisted conf state: voters={:?}, learners={:?}",
+            data.voters, data.learners);
+
+        // Update in-memory cache
         let mut state = self.conf_state.write().unwrap();
         *state = cs;
     }

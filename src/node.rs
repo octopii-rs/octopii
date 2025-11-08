@@ -71,8 +71,8 @@ impl OctopiiNode {
             config.is_initial_leader,
         ))?);
 
-        // Create state machine
-        let state_machine = Arc::new(StateMachine::new());
+        // Create state machine with WAL backing (enables durability!)
+        let state_machine = Arc::new(StateMachine::with_wal(Arc::clone(&wal)));
 
         let node = Self {
             runtime,
