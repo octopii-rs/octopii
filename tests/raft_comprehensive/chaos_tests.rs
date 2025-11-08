@@ -21,7 +21,7 @@ fn test_crash_during_proposal() {
 
         tracing::info!("=== Starting crash during proposal test ===");
 
-        let mut cluster = TestCluster::new(vec![1, 2, 3], 7210);
+        let mut cluster = TestCluster::new(vec![1, 2, 3], 7210).await;
         cluster.start_all().await.expect("Failed to start cluster");
 
         tokio::time::sleep(Duration::from_millis(500)).await;
@@ -80,7 +80,7 @@ fn test_all_nodes_crash_and_recover() {
 
         tracing::info!("=== Starting all nodes crash and recover test ===");
 
-        let mut cluster = TestCluster::new(vec![1, 2, 3], 7220);
+        let mut cluster = TestCluster::new(vec![1, 2, 3], 7220).await;
         cluster.start_all().await.expect("Failed to start cluster");
 
         tokio::time::sleep(Duration::from_millis(500)).await;
@@ -144,7 +144,7 @@ fn test_rolling_restarts() {
 
         tracing::info!("=== Starting rolling restarts test ===");
 
-        let mut cluster = TestCluster::new(vec![1, 2, 3], 7230);
+        let mut cluster = TestCluster::new(vec![1, 2, 3], 7230).await;
         cluster.start_all().await.expect("Failed to start cluster");
 
         tokio::time::sleep(Duration::from_millis(500)).await;
@@ -203,7 +203,7 @@ fn test_rapid_crash_recovery_cycles() {
 
         tracing::info!("=== Starting rapid crash/recovery cycles test ===");
 
-        let mut cluster = TestCluster::new(vec![1, 2, 3], 7240);
+        let mut cluster = TestCluster::new(vec![1, 2, 3], 7240).await;
         cluster.start_all().await.expect("Failed to start cluster");
 
         tokio::time::sleep(Duration::from_millis(500)).await;
