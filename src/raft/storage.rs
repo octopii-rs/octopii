@@ -162,11 +162,14 @@ impl WalStorage {
         let walrus = &self.wal.walrus;
         let mut latest: Option<HardState> = None;
         let mut first_read = true;
+        let mut entry_count = 0;
 
+        // Read all entries with checkpoint=false to find the latest
         loop {
             match walrus.read_next(TOPIC_HARD_STATE, first_read) {
                 Ok(Some(entry)) => {
                     first_read = false;
+                    entry_count += 1;
                     // Zero-copy deserialize with rkyv
                     let archived = unsafe {
                         rkyv::archived_root::<HardStateData>(&entry.data)
@@ -182,6 +185,15 @@ impl WalStorage {
             }
         }
 
+        // CRITICAL: Checkpoint to allow Walrus to reclaim space for old entries
+        // Since we only care about the LATEST hard state, all previous entries can be reclaimed
+        if entry_count > 0 {
+            // One final read_next call with checkpoint=true to persist our read position
+            // This tells Walrus: "I've consumed everything, reclaim space before here"
+            let _ = walrus.read_next(TOPIC_HARD_STATE, true);
+            tracing::debug!("Checkpointed {} hard_state entries for space reclamation", entry_count);
+        }
+
         Ok(latest.unwrap_or_default())
     }
 
@@ -189,11 +201,14 @@ impl WalStorage {
         let walrus = &self.wal.walrus;
         let mut latest: Option<ConfState> = None;
         let mut first_read = true;
+        let mut entry_count = 0;
 
+        // Read all entries to find the latest
         loop {
             match walrus.read_next(TOPIC_CONF_STATE, first_read) {
                 Ok(Some(entry)) => {
                     first_read = false;
+                    entry_count += 1;
                     let archived = unsafe {
                         rkyv::archived_root::<ConfStateData>(&entry.data)
                     };
@@ -211,6 +226,12 @@ impl WalStorage {
             }
         }
 
+        // Checkpoint for space reclamation (only latest conf state matters)
+        if entry_count > 0 {
+            let _ = walrus.read_next(TOPIC_CONF_STATE, true);
+            tracing::debug!("Checkpointed {} conf_state entries for space reclamation", entry_count);
+        }
+
         Ok(latest.unwrap_or_default())
     }
 
@@ -218,11 +239,14 @@ impl WalStorage {
         let walrus = &self.wal.walrus;
         let mut latest: Option<Snapshot> = None;
         let mut first_read = true;
+        let mut entry_count = 0;
 
+        // Read all entries to find the latest snapshot
         loop {
             match walrus.read_next(TOPIC_SNAPSHOT, first_read) {
                 Ok(Some(entry)) => {
                     first_read = false;
+                    entry_count += 1;
                     let archived = unsafe {
                         rkyv::archived_root::<SnapshotData>(&entry.data)
                     };
@@ -249,6 +273,12 @@ impl WalStorage {
             }
         }
 
+        // Checkpoint for space reclamation (only latest snapshot matters)
+        if entry_count > 0 {
+            let _ = walrus.read_next(TOPIC_SNAPSHOT, true);
+            tracing::debug!("Checkpointed {} snapshot entries for space reclamation", entry_count);
+        }
+
         Ok(latest.unwrap_or_default())
     }
 
@@ -257,6 +287,7 @@ impl WalStorage {
         let mut entries = Vec::new();
         let mut first_read = true;
 
+        // Read all log entries (we need ALL of them, not just latest)
         loop {
             match walrus.read_next(TOPIC_LOG, first_read) {
                 Ok(Some(entry_data)) => {
@@ -275,6 +306,14 @@ impl WalStorage {
                 Ok(None) => break,
                 Err(_) => break,
             }
+        }
+
+        // Checkpoint after reading all entries
+        // NOTE: In the future, we should checkpoint based on snapshot index
+        // to allow reclaiming entries that have been compacted
+        if !entries.is_empty() {
+            let _ = walrus.read_next(TOPIC_LOG, true);
+            tracing::debug!("Checkpointed {} log entries (TODO: implement smarter checkpointing based on snapshots)", entries.len());
         }
 
         Ok(entries)
