@@ -29,24 +29,31 @@ impl RaftNode {
         storage: WalStorage,
         is_leader: bool,
     ) -> Result<Self> {
+        // Initialize ALL nodes (leader and followers) with the same cluster configuration
+        // This ensures followers can participate in elections immediately
+        let mut snapshot = Snapshot::default();
+        snapshot.mut_metadata().index = 1;
+        snapshot.mut_metadata().term = 1;
+
+        // Include all nodes (self + peers) as initial voters
+        let mut voters = vec![node_id];
+        voters.extend(peers.iter());
+        snapshot.mut_metadata().mut_conf_state().voters = voters.clone();
+
+        storage.apply_snapshot(snapshot)?;
+
         if is_leader {
-            // Leader initializes with snapshot containing only itself
-            let mut snapshot = Snapshot::default();
-            snapshot.mut_metadata().index = 1;
-            snapshot.mut_metadata().term = 1;
-            snapshot.mut_metadata().mut_conf_state().voters = vec![node_id];
-
-            storage.apply_snapshot(snapshot)?;
-
             tracing::info!(
-                "Bootstrapped Raft LEADER node {} (will add {} peers via ConfChange)",
+                "Bootstrapped Raft LEADER node {} with initial voters: {:?}",
                 node_id,
-                peers.len()
+                voters
             );
         } else {
-            // Followers start with minimal state
-            // They will initialize properly when receiving first message from leader
-            tracing::info!("Created Raft FOLLOWER node {} (will initialize from leader)", node_id);
+            tracing::info!(
+                "Bootstrapped Raft FOLLOWER node {} with initial voters: {:?}",
+                node_id,
+                voters
+            );
         }
 
         let config = RaftConfig {
