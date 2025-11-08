@@ -104,33 +104,27 @@ impl Clone for OctopiiRuntime {
 mod tests {
     use super::*;
 
-    #[tokio::test]
-    async fn test_isolated_runtime() {
+    #[test]
+    fn test_owned_runtime() {
+        // Test creating an owned runtime (outside async context)
         let runtime = OctopiiRuntime::new(2);
 
         let result = runtime.spawn(async {
             tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
             42
-        }).await.unwrap();
-
-        assert_eq!(result, 42);
-    }
-
-    #[tokio::test]
-    async fn test_spawn_on_runtime() {
-        let runtime = OctopiiRuntime::new(2);
-
-        let handle = runtime.spawn(async {
-            tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
-            "done"
         });
 
-        let result = handle.await.unwrap();
-        assert_eq!(result, "done");
+        // Block on the result using the underlying runtime handle
+        let handle = runtime.handle();
+        let output = handle.block_on(result).unwrap();
+        assert_eq!(output, 42);
+
+        // Runtime will be dropped cleanly here (not in async context)
     }
 
     #[tokio::test]
     async fn test_from_handle() {
+        // Test using handle from current runtime (no owned runtime to drop)
         let handle = tokio::runtime::Handle::current();
         let runtime = OctopiiRuntime::from_handle(handle);
 
@@ -140,5 +134,19 @@ mod tests {
         }).await.unwrap();
 
         assert_eq!(result, "from_handle");
+    }
+
+    #[tokio::test]
+    async fn test_clone() {
+        // Test cloning runtime handles
+        let handle = tokio::runtime::Handle::current();
+        let runtime1 = OctopiiRuntime::from_handle(handle);
+        let runtime2 = runtime1.clone();
+
+        let result1 = runtime1.spawn(async { 1 }).await.unwrap();
+        let result2 = runtime2.spawn(async { 2 }).await.unwrap();
+
+        assert_eq!(result1, 1);
+        assert_eq!(result2, 2);
     }
 }
