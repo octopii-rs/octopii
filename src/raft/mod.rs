@@ -24,15 +24,36 @@ impl RaftNode {
     /// For a fresh cluster (following TiKV five_mem_node pattern):
     /// - Leader node (is_leader=true): Initializes with a snapshot containing ONLY itself as voter
     /// - Follower nodes (is_leader=false): Start with empty storage, will initialize from leader messages
+    /// - If peers list is non-empty: Bootstrap ALL nodes with full peer list (TiKV run() pattern)
     pub async fn new(
         node_id: u64,
-        _peers: Vec<u64>,
+        peers: Vec<u64>,
         storage: WalStorage,
         is_leader: bool,
     ) -> Result<Self> {
-        if is_leader {
-            // Leader initializes with snapshot containing ONLY itself as voter
-            // This matches TiKV's pattern: voters = vec![1] (only leader)
+        // If peers list provided, bootstrap ALL nodes with all peers (like TiKV run())
+        // Otherwise use ConfChange pattern (leader=self, followers=empty)
+        if !peers.is_empty() {
+            // TiKV run() pattern: ALL nodes start with ALL peers as voters
+            let mut all_voters = peers.clone();
+            all_voters.push(node_id);
+            all_voters.sort_unstable();
+            all_voters.dedup();
+
+            let mut snapshot = Snapshot::default();
+            snapshot.mut_metadata().index = 1;
+            snapshot.mut_metadata().term = 1;
+            snapshot.mut_metadata().mut_conf_state().voters = all_voters.clone();
+
+            storage.apply_snapshot(snapshot)?;
+
+            tracing::info!(
+                "Bootstrapped Raft node {} with voters {:?} (multi-node bootstrap)",
+                node_id,
+                all_voters
+            );
+        } else if is_leader {
+            // ConfChange pattern: Leader initializes with ONLY itself as voter
             let mut snapshot = Snapshot::default();
             snapshot.mut_metadata().index = 1;
             snapshot.mut_metadata().term = 1;
@@ -45,8 +66,7 @@ impl RaftNode {
                 node_id
             );
         } else {
-            // Followers start with minimal empty state
-            // They will initialize when receiving first message from leader (lazy initialization)
+            // Followers start with minimal empty state for ConfChange pattern
             tracing::info!(
                 "Created Raft FOLLOWER node {} (will initialize from leader)",
                 node_id
