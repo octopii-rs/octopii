@@ -1,19 +1,108 @@
 use crate::chunk::{ChunkSource, TransferResult};
 use crate::config::Config;
 use crate::error::Result;
-use crate::raft::{RaftNode, StateMachine, WalStorage, raft_message_to_rpc, rpc_to_raft_message};
-use crate::rpc::{deserialize, RpcHandler, RpcMessage, RpcRequest, RequestPayload, ResponsePayload};
+use crate::raft::{RaftNode, StateMachine, WalStorage, raft_message_to_rpc, rpc_to_raft_message, raft_response_to_rpc, rpc_response_to_raft};
+use crate::rpc::{deserialize, RpcHandler, RpcMessage, RpcRequest, RequestPayload, ResponsePayload, MessageId};
 use crate::runtime::OctopiiRuntime;
 use crate::transport::QuicTransport;
 use crate::wal::WriteAheadLog;
 use bytes::Bytes;
 use futures::future::join_all;
-use std::collections::HashMap;
+use raft::prelude::MessageType;
+use std::collections::{HashMap, VecDeque};
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::Instant;
 use tokio::sync::RwLock;
+use tokio::sync::oneshot;
 use tokio::time::{interval, timeout, Duration};
+
+/// Bounded tracker for Raft message types to correlate requests with responses
+/// Uses a simple ring buffer to prevent unbounded growth
+struct MessageTypeTracker {
+    buffer: Mutex<Vec<Option<(MessageId, MessageType)>>>,
+    next_slot: Mutex<usize>,
+    capacity: usize,
+}
+
+impl MessageTypeTracker {
+    fn new(capacity: usize) -> Self {
+        Self {
+            buffer: Mutex::new(vec![None; capacity]),
+            next_slot: Mutex::new(0),
+            capacity,
+        }
+    }
+
+    /// Track a message ID and its type (overwrites oldest if full)
+    fn track(&self, msg_id: MessageId, msg_type: MessageType) {
+        let mut slot = self.next_slot.lock().unwrap();
+        let mut buffer = self.buffer.lock().unwrap();
+
+        buffer[*slot] = Some((msg_id, msg_type));
+        *slot = (*slot + 1) % self.capacity;
+    }
+
+    /// Get the message type for a given ID, removing it from tracker
+    fn take(&self, msg_id: MessageId) -> Option<MessageType> {
+        let mut buffer = self.buffer.lock().unwrap();
+
+        // Linear search - acceptable for small buffers (1024 entries)
+        for entry in buffer.iter_mut() {
+            if let Some((id, msg_type)) = entry {
+                if *id == msg_id {
+                    let result = *msg_type;
+                    *entry = None;
+                    return Some(result);
+                }
+            }
+        }
+        None
+    }
+}
+
+/// Metadata for a pending proposal (bounded queue to prevent unbounded growth)
+struct ProposalMetadata {
+    responder: oneshot::Sender<Result<Bytes>>,
+}
+
+/// Bounded proposal queue using VecDeque with max capacity
+struct ProposalQueue {
+    queue: Mutex<VecDeque<ProposalMetadata>>,
+    max_size: usize,
+}
+
+impl ProposalQueue {
+    fn new(max_size: usize) -> Self {
+        Self {
+            queue: Mutex::new(VecDeque::with_capacity(max_size)),
+            max_size,
+        }
+    }
+
+    /// Push a proposal (returns error if queue is full)
+    fn push(&self, metadata: ProposalMetadata) -> std::result::Result<(), ()> {
+        let mut queue = self.queue.lock().unwrap();
+        if queue.len() >= self.max_size {
+            return Err(());  // Queue full
+        }
+        queue.push_back(metadata);
+        Ok(())
+    }
+
+    /// Pop the oldest proposal
+    fn pop(&self) -> Option<ProposalMetadata> {
+        let mut queue = self.queue.lock().unwrap();
+        queue.pop_front()
+    }
+
+    /// Get current queue size
+    fn len(&self) -> usize {
+        let queue = self.queue.lock().unwrap();
+        queue.len()
+    }
+}
 
 /// Main Octopii node that orchestrates all components
 pub struct OctopiiNode {
@@ -25,6 +114,10 @@ pub struct OctopiiNode {
     state_machine: Arc<StateMachine>,
     /// Map peer ID to socket address
     peer_addrs: Arc<RwLock<HashMap<u64, SocketAddr>>>,
+    /// Bounded tracker for correlating Raft message requests with responses
+    msg_type_tracker: Arc<MessageTypeTracker>,
+    /// Bounded queue for pending proposals (max 10000 in-flight proposals)
+    proposal_queue: Arc<ProposalQueue>,
 }
 
 impl OctopiiNode {
@@ -74,6 +167,12 @@ impl OctopiiNode {
         // Create state machine with WAL backing (enables durability!)
         let state_machine = Arc::new(StateMachine::with_wal(Arc::clone(&wal)));
 
+        // Create bounded message type tracker (1024 in-flight messages max)
+        let msg_type_tracker = Arc::new(MessageTypeTracker::new(1024));
+
+        // Create bounded proposal queue (10000 max in-flight proposals)
+        let proposal_queue = Arc::new(ProposalQueue::new(10000));
+
         let node = Self {
             runtime,
             config,
@@ -82,6 +181,8 @@ impl OctopiiNode {
             raft,
             state_machine,
             peer_addrs: Arc::new(RwLock::new(peer_addrs_map)),
+            msg_type_tracker,
+            proposal_queue,
         };
 
         tracing::info!(
@@ -114,9 +215,28 @@ impl OctopiiNode {
     }
 
     /// Propose a change to the distributed state machine
-    pub async fn propose(&self, command: Vec<u8>) -> Result<()> {
+    /// Returns a future that resolves when the proposal is committed and applied
+    pub async fn propose(&self, command: Vec<u8>) -> Result<Bytes> {
         tracing::info!("Proposing command to Raft: {} bytes", command.len());
-        self.raft.propose(command).await
+
+        // Create oneshot channel for response
+        let (tx, rx) = oneshot::channel();
+
+        // Push to proposal queue
+        let metadata = ProposalMetadata { responder: tx };
+        self.proposal_queue.push(metadata)
+            .map_err(|_| crate::error::OctopiiError::Rpc("Proposal queue full".to_string()))?;
+
+        tracing::debug!("Proposal queued, {} proposals pending", self.proposal_queue.len());
+
+        // Propose to Raft
+        self.raft.propose(command).await?;
+
+        // Wait for proposal to be committed and applied
+        match rx.await {
+            Ok(result) => result,
+            Err(_) => Err(crate::error::OctopiiError::Rpc("Proposal response channel closed".to_string())),
+        }
     }
 
     /// Execute a read-only query on the state machine
@@ -290,7 +410,30 @@ impl OctopiiNode {
                                                         match raft_clone.step(raft_msg).await {
                                                             Ok(_) => {
                                                                 tracing::trace!("Raft message processed successfully");
-                                                                // Response will be sent from ready handler
+
+                                                                // Check for immediate response messages
+                                                                if let Some(ready) = raft_clone.ready().await {
+                                                                    // Send response messages immediately
+                                                                    for resp_msg in ready.messages() {
+                                                                        if let Some(resp_payload) = raft_response_to_rpc(resp_msg) {
+                                                                            tracing::debug!("Sending immediate Raft response: {:?}", resp_msg.get_msg_type());
+
+                                                                            let response = RpcMessage::new_response(req.id, resp_payload);
+                                                                            if let Ok(data) = crate::rpc::serialize(&response) {
+                                                                                if let Err(e) = peer.send(data).await {
+                                                                                    tracing::error!("Failed to send Raft response: {}", e);
+                                                                                }
+                                                                            }
+                                                                        }
+                                                                    }
+
+                                                                    // Advance without processing entries (ready handler will do full processing)
+                                                                    let _light_rd = raft_clone.advance(ready).await;
+                                                                    raft_clone.advance_apply().await;
+
+                                                                    // Note: We don't apply entries here - the main ready handler does that
+                                                                    // This is just for sending immediate responses to avoid latency
+                                                                }
                                                             }
                                                             Err(e) => {
                                                                 tracing::error!("Failed to step Raft: {}", e);
@@ -342,6 +485,7 @@ impl OctopiiNode {
         let state_machine = Arc::clone(&self.state_machine);
         let rpc = Arc::clone(&self.rpc);
         let peer_addrs = Arc::clone(&self.peer_addrs);
+        let proposal_queue = Arc::clone(&self.proposal_queue);
 
         tracing::info!("Spawning Raft ready handler");
 
@@ -380,6 +524,8 @@ impl OctopiiNode {
                     // Send outgoing Raft messages to peers
                     for msg in ready.messages() {
                         let to = msg.to;
+                        let from = msg.from;
+                        let msg_type = msg.get_msg_type();
                         let peer_addrs_read = peer_addrs.read().await;
 
                         if let Some(peer_addr) = peer_addrs_read.get(&to) {
@@ -387,13 +533,15 @@ impl OctopiiNode {
                                 tracing::debug!(
                                     "Sending Raft message to peer {}: {:?} -> {}",
                                     to,
-                                    msg.get_msg_type(),
+                                    msg_type,
                                     peer_addr
                                 );
 
                                 // Send message via RPC
                                 let rpc_clone = Arc::clone(&rpc);
+                                let raft_clone = Arc::clone(&raft);
                                 let peer_addr = *peer_addr;
+
                                 tokio::spawn(async move {
                                     match rpc_clone.request(
                                         peer_addr,
@@ -402,7 +550,16 @@ impl OctopiiNode {
                                     ).await {
                                         Ok(response) => {
                                             tracing::trace!("Received Raft response from {}: {:?}", peer_addr, response.payload);
-                                            // TODO: Feed response back to Raft
+
+                                            // Convert response back to Raft message and step it
+                                            // Use the captured msg_type from the original message
+                                            if let Some(raft_resp_msg) = rpc_response_to_raft(to, from, msg_type, &response.payload) {
+                                                tracing::debug!("Stepping Raft response back: {:?}", raft_resp_msg.get_msg_type());
+
+                                                if let Err(e) = raft_clone.step(raft_resp_msg).await {
+                                                    tracing::error!("Failed to step Raft response: {}", e);
+                                                }
+                                            }
                                         }
                                         Err(e) => {
                                             tracing::warn!("Failed to send Raft message to {}: {}", peer_addr, e);
@@ -428,9 +585,38 @@ impl OctopiiNode {
                         if !entry.data.is_empty() {
                             tracing::info!("Applying committed entry: index={}, term={}, {} bytes",
                                 entry.index, entry.term, entry.data.len());
-                            match state_machine.apply(&entry.data) {
-                                Ok(result) => tracing::info!("Entry applied successfully: {:?}", result),
-                                Err(e) => tracing::error!("Failed to apply entry: {}", e),
+
+                            // Apply to state machine
+                            let apply_result = state_machine.apply(&entry.data);
+
+                            // If this node is the leader, respond to the client
+                            if raft.is_leader().await {
+                                if let Some(proposal) = proposal_queue.pop() {
+                                    tracing::debug!("Responding to proposal, {} remaining in queue", proposal_queue.len());
+
+                                    let response_result = match apply_result {
+                                        Ok(result) => {
+                                            tracing::info!("Entry applied successfully: {:?}", result);
+                                            Ok(result)
+                                        }
+                                        Err(e) => {
+                                            tracing::error!("Failed to apply entry: {}", e);
+                                            Err(crate::error::OctopiiError::Rpc(e))
+                                        }
+                                    };
+
+                                    // Send response to client (ignore if client disconnected)
+                                    let _ = proposal.responder.send(response_result);
+                                } else {
+                                    // This shouldn't happen - we have a committed entry but no pending proposal
+                                    tracing::warn!("Committed entry but no pending proposal (possibly from follower sync)");
+                                }
+                            } else {
+                                // Followers just apply without responding to clients
+                                match apply_result {
+                                    Ok(result) => tracing::info!("Entry applied successfully: {:?}", result),
+                                    Err(e) => tracing::error!("Failed to apply entry: {}", e),
+                                }
                             }
                         }
                     }
