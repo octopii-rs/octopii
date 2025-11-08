@@ -201,7 +201,7 @@ Result:    Error (all 1GB wasted)
 - No multiplexing awareness
 - No backpressure
 - No streaming RPC
-- No bidirectional streams
+- No same-stream bidirectional RPC (request+response on one stream)
 - No protobuf/gRPC compatibility
 
 ### 2. Minimal Raft Integration
@@ -421,15 +421,7 @@ use std::fs::File;    // Won't work with ChunkSource::File
 
 ## Known Issues
 
-### 1. Test Hang on Interleaved RPC
-
-**Status**: `test_interleaved_rpc_and_chunk_transfer` may hang.
-
-**Impact**: CI may timeout
-
-**Workaround**: Run with timeout
-
-### 2. Connection Reuse Edge Cases
+### 1. Connection Reuse Edge Cases
 
 **Issue**: Rapid connection open/close may trigger QUIC errors.
 
