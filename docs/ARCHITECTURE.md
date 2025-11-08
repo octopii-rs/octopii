@@ -320,9 +320,35 @@ pub async fn append(&self, data: Bytes) -> Result<u64> {
    b. Recover conf_state (cluster membership)
    c. Recover snapshot (latest state snapshot)
    d. Recover log entries (rebuild log)
+   CRITICAL: All recovery uses read_next(topic, checkpoint=true)
+   - checkpoint=true advances cursor for next read (prevents infinite loop)
+   - checkpoint=true enables Walrus space reclamation for old entries
+   - Checkpoints persist across restarts (correct production behavior)
 4. StateMachine::with_wal() called
 5. recover_from_walrus() replays all operations
 6. Node ready with full state recovered
+```
+
+**Checkpointing & Space Reclamation**:
+```
+Recovery pattern (all topics):
+  loop {
+    match walrus.read_next(TOPIC, true) {  // checkpoint=true!
+      Ok(Some(entry)) => {
+        // Process entry
+        // Cursor advances automatically
+      }
+      Ok(None) => break,  // End of topic
+    }
+  }
+  // Old entries now reclaimable by Walrus
+
+Space reclamation strategy:
+- HardState: Only latest entry needed → older entries reclaimed
+- ConfState: Only latest entry needed → older entries reclaimed
+- Snapshot: Only latest entry needed → older entries reclaimed
+- Log: All entries needed → TODO: snapshot-based compaction
+- StateMachine: All operations replayed → TODO: periodic compaction
 ```
 
 **Persistence Guarantees**:
@@ -337,12 +363,70 @@ pub async fn append(&self, data: Bytes) -> Result<u64> {
 - **Log entries**: protobuf (from raft-rs, required by library)
 - **State machine**: rkyv (custom operations)
 
+**Cluster Coordination**:
+```
+Leader Node                    Follower Nodes
+    │                               │
+    │ 1. Client proposes entry     │
+    │ propose(b"SET foo bar")      │
+    │                               │
+    │ 2. Add to ProposalQueue      │
+    │    (bounded, max 10000)      │
+    │                               │
+    │ 3. Raft replicates           │
+    │────AppendEntries RPC─────────>│
+    │                               │
+    │<──────Response────────────────│
+    │                               │
+    │ 4. Entry committed            │
+    │    (majority ACK)             │
+    │                               │
+    │ 5. Apply to state machine    │
+    │    (both leader & followers) │
+    │                               │
+    │ 6. Notify client (leader)    │
+    │    via oneshot channel       │
+    │                               │
+    │ 7. Return result             │
+    │────Response: "OK"────────────>│
+```
+
+**Bounded Data Structures** (prevents unbounded growth):
+```rust
+// Message type tracking (ring buffer, 1024 capacity)
+struct MessageTypeTracker {
+    buffer: Vec<Option<(MessageId, MessageType)>>,  // Fixed size
+    next_slot: usize,  // Wraps around (ring buffer)
+}
+
+// Client proposal queue (FIFO, 10000 max)
+struct ProposalQueue {
+    queue: VecDeque<ProposalMetadata>,
+    max_size: usize,  // Enforced on push
+}
+
+// Connection pool (per-peer, reused)
+connections: HashMap<SocketAddr, PeerConnection>
+```
+
+**Bidirectional Message Handling**:
+```
+1. Receive AppendEntries request
+2. Step into Raft (raft.step(msg))
+3. Get Ready with response messages
+4. Send responses immediately
+5. Advance Raft state
+6. On receiving response, step it back into Raft
+```
+
 **Code locations**:
 - Raft core: `src/raft/mod.rs`
 - Durable storage: `src/raft/storage.rs`
 - Durable state machine: `src/raft/state_machine.rs`
 - RPC integration: `src/raft/rpc.rs`
-- Durability tests: `tests/raft_durability_test.rs`
+- Cluster coordination: `src/node.rs` (lines 250-470)
+- Durability tests: `tests/raft_durability_test.rs` (12 tests)
+- Cluster tests: `tests/raft_cluster_test.rs`
 
 ## Data Flow Examples
 
