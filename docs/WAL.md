@@ -25,7 +25,7 @@ Octopii uses Walrus as its Write-Ahead Log (WAL) for durable storage. The WAL pr
                                         ▼
                               ┌──────────────────┐
                               │   Disk Storage   │
-                              │  (mmap files)    │
+                              │   (FD backend)   │
                               └──────────────────┘
 ```
 
@@ -128,7 +128,7 @@ Client
 ┌─────────────────────────┐
 │  Walrus (sync engine)   │
 │  • Serialize with rkyv  │
-│  • Write to mmap block  │
+│  • Write via pwrite()   │
 │  • Schedule fsync       │
 └───────────┬─────────────┘
             │
@@ -147,7 +147,7 @@ wal.read_all()
   ▼
 ┌──────────────────────────┐
 │ Walrus batch_read        │
-│ • Read from mmap blocks  │
+│ • Read via pread()       │
 │ • Deserialize entries    │
 │ • Checkpoint position    │
 └──────────┬───────────────┘
@@ -267,19 +267,19 @@ When log grows beyond 1000 entries:
 
 ### Memory
 
-- **Write buffering**: Minimal (direct to mmap)
+- **Write buffering**: Minimal (pwrite syscall)
 - **Read buffering**: 10MB batches
-- **Mmap overhead**: Per-file overhead (typically 10MB blocks)
+- **File overhead**: Pre-allocated 1GB files with 10MB blocks
 
 ### Disk I/O
 
 ```
 Write:
-  ├── Immediate: mmap write (memory-backed)
+  ├── Immediate: pwrite() to file
   └── Deferred: fsync every 100-200ms
 
 Read:
-  └── Direct from mmap (OS page cache)
+  └── pread() from file (OS page cache)
 ```
 
 ### Fsync Overhead
@@ -296,7 +296,7 @@ FsyncSchedule::NoFsync         → Never (fastest, no durability)
 
 ```
 1. Walrus creates 1GB pre-allocated files
-2. Files are mmapped for zero-copy I/O
+2. Files use FD backend (pread/pwrite)
 3. Files have 10MB blocks
 4. Blocks are allocated sequentially
 ```
