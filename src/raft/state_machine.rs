@@ -44,11 +44,14 @@ impl StateMachine {
             tracing::info!("Starting state machine recovery from Walrus...");
             let mut recovered = HashMap::new();
             let mut first_read = true;
+            let mut entry_count = 0;
 
+            // Replay all operations to rebuild state
             loop {
                 match wal.walrus.read_next(TOPIC_STATE_MACHINE, first_read) {
                     Ok(Some(entry)) => {
                         first_read = false;
+                        entry_count += 1;
                         // Zero-copy deserialize with rkyv
                         let archived = unsafe {
                             rkyv::archived_root::<StateMachineEntry>(&entry.data)
@@ -74,9 +77,18 @@ impl StateMachine {
                 }
             }
 
+            // Checkpoint after replaying all operations
+            // For KV state machine: the latest value for each key is what matters,
+            // but we've replayed all operations, so checkpoint everything
+            // TODO: Implement compaction - write current state as snapshot, checkpoint, then start fresh topic
+            if entry_count > 0 {
+                let _ = wal.walrus.read_next(TOPIC_STATE_MACHINE, true);
+                tracing::debug!("Checkpointed {} state_machine entries (TODO: implement compaction for space efficiency)", entry_count);
+            }
+
             if !recovered.is_empty() {
                 *self.data.write().unwrap() = recovered.clone();
-                tracing::info!("✓ Recovered {} state machine entries", recovered.len());
+                tracing::info!("✓ Recovered {} state machine entries from {} operations", recovered.len(), entry_count);
             } else {
                 tracing::info!("No state machine entries to recover");
             }
