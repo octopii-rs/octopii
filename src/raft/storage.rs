@@ -161,14 +161,13 @@ impl WalStorage {
     fn recover_hard_state(&self) -> crate::error::Result<HardState> {
         let walrus = &self.wal.walrus;
         let mut latest: Option<HardState> = None;
-        let mut first_read = true;
         let mut entry_count = 0;
 
-        // Read all entries with checkpoint=false to find the latest
+        // Read all entries WITH checkpointing (checkpoint=true advances cursor for next read)
+        // Since we only care about LATEST hard state, older entries are automatically reclaimed
         loop {
-            match walrus.read_next(TOPIC_HARD_STATE, first_read) {
+            match walrus.read_next(TOPIC_HARD_STATE, true) {
                 Ok(Some(entry)) => {
-                    first_read = false;
                     entry_count += 1;
                     // Zero-copy deserialize with rkyv
                     let archived = unsafe {
@@ -185,13 +184,8 @@ impl WalStorage {
             }
         }
 
-        // CRITICAL: Checkpoint to allow Walrus to reclaim space for old entries
-        // Since we only care about the LATEST hard state, all previous entries can be reclaimed
         if entry_count > 0 {
-            // One final read_next call with checkpoint=true to persist our read position
-            // This tells Walrus: "I've consumed everything, reclaim space before here"
-            let _ = walrus.read_next(TOPIC_HARD_STATE, true);
-            tracing::debug!("Checkpointed {} hard_state entries for space reclamation", entry_count);
+            tracing::debug!("Recovered hard_state from {} entries (older entries reclaimable)", entry_count);
         }
 
         Ok(latest.unwrap_or_default())
@@ -200,14 +194,12 @@ impl WalStorage {
     fn recover_conf_state(&self) -> crate::error::Result<ConfState> {
         let walrus = &self.wal.walrus;
         let mut latest: Option<ConfState> = None;
-        let mut first_read = true;
         let mut entry_count = 0;
 
-        // Read all entries to find the latest
+        // Read all entries WITH checkpointing
         loop {
-            match walrus.read_next(TOPIC_CONF_STATE, first_read) {
+            match walrus.read_next(TOPIC_CONF_STATE, true) {
                 Ok(Some(entry)) => {
-                    first_read = false;
                     entry_count += 1;
                     let archived = unsafe {
                         rkyv::archived_root::<ConfStateData>(&entry.data)
@@ -226,10 +218,8 @@ impl WalStorage {
             }
         }
 
-        // Checkpoint for space reclamation (only latest conf state matters)
         if entry_count > 0 {
-            let _ = walrus.read_next(TOPIC_CONF_STATE, true);
-            tracing::debug!("Checkpointed {} conf_state entries for space reclamation", entry_count);
+            tracing::debug!("Recovered conf_state from {} entries", entry_count);
         }
 
         Ok(latest.unwrap_or_default())
@@ -238,14 +228,12 @@ impl WalStorage {
     fn recover_snapshot(&self) -> crate::error::Result<Snapshot> {
         let walrus = &self.wal.walrus;
         let mut latest: Option<Snapshot> = None;
-        let mut first_read = true;
         let mut entry_count = 0;
 
-        // Read all entries to find the latest snapshot
+        // Read all entries WITH checkpointing
         loop {
-            match walrus.read_next(TOPIC_SNAPSHOT, first_read) {
+            match walrus.read_next(TOPIC_SNAPSHOT, true) {
                 Ok(Some(entry)) => {
-                    first_read = false;
                     entry_count += 1;
                     let archived = unsafe {
                         rkyv::archived_root::<SnapshotData>(&entry.data)
@@ -273,10 +261,8 @@ impl WalStorage {
             }
         }
 
-        // Checkpoint for space reclamation (only latest snapshot matters)
         if entry_count > 0 {
-            let _ = walrus.read_next(TOPIC_SNAPSHOT, true);
-            tracing::debug!("Checkpointed {} snapshot entries for space reclamation", entry_count);
+            tracing::debug!("Recovered snapshot from {} entries", entry_count);
         }
 
         Ok(latest.unwrap_or_default())
@@ -285,13 +271,11 @@ impl WalStorage {
     fn recover_log_entries(&self) -> crate::error::Result<Vec<Entry>> {
         let walrus = &self.wal.walrus;
         let mut entries = Vec::new();
-        let mut first_read = true;
 
-        // Read all log entries (we need ALL of them, not just latest)
+        // Read all log entries WITH checkpointing (we need ALL of them, not just latest)
         loop {
-            match walrus.read_next(TOPIC_LOG, first_read) {
+            match walrus.read_next(TOPIC_LOG, true) {
                 Ok(Some(entry_data)) => {
-                    first_read = false;
                     // Deserialize protobuf Entry (from raft-rs)
                     match protobuf::Message::parse_from_bytes(&entry_data.data) {
                         Ok(raft_entry) => {
@@ -308,12 +292,12 @@ impl WalStorage {
             }
         }
 
-        // Checkpoint after reading all entries
-        // NOTE: In the future, we should checkpoint based on snapshot index
-        // to allow reclaiming entries that have been compacted
+        // TODO: Implement snapshot-based compaction
+        // Currently we checkpoint all entries, but in the future we should:
+        // 1. Only checkpoint entries BEFORE the snapshot index
+        // 2. Keep entries AFTER snapshot for replay
         if !entries.is_empty() {
-            let _ = walrus.read_next(TOPIC_LOG, true);
-            tracing::debug!("Checkpointed {} log entries (TODO: implement smarter checkpointing based on snapshots)", entries.len());
+            tracing::debug!("Recovered {} log entries (TODO: snapshot-based compaction)", entries.len());
         }
 
         Ok(entries)
