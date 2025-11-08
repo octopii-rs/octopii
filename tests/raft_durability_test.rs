@@ -13,18 +13,23 @@ use bytes::Bytes;
 use raft::prelude::*;
 
 /// Helper to create a temporary WAL for testing
-async fn create_test_wal() -> (Arc<WriteAheadLog>, TempDir) {
+/// Returns (WAL, actual_path_used, temp_dir)
+async fn create_test_wal() -> (Arc<WriteAheadLog>, PathBuf, TempDir) {
     let temp_dir = TempDir::new().unwrap();
-    // Use thread ID to create unique key for parallel test execution
+    // Use thread ID + timestamp for unique key (thread IDs can be reused!)
     let thread_id = std::thread::current().id();
-    let unique_key = format!("test_wal_{:?}", thread_id);
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let unique_key = format!("test_wal_{:?}_{}", thread_id, timestamp);
     let wal_path = temp_dir.path().join(&unique_key);
     let wal = Arc::new(
-        WriteAheadLog::new(wal_path, 100, Duration::from_millis(100))
+        WriteAheadLog::new(wal_path.clone(), 100, Duration::from_millis(100))
             .await
             .unwrap(),
     );
-    (wal, temp_dir)
+    (wal, wal_path, temp_dir)
 }
 
 /// Helper to create a WAL at the same path (simulates restart)
@@ -43,9 +48,8 @@ fn cleanup_wal_files() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_hard_state_persistence_and_recovery() {
-    cleanup_wal_files();
-    let (wal, temp_dir) = create_test_wal().await;
-    let wal_path = temp_dir.path().join("test_wal");
+    // cleanup_wal_files removed - using unique keys per test instead
+    let (wal, wal_path, _temp_dir) = create_test_wal().await;
 
     // Create storage and set hard state
     {
@@ -81,9 +85,8 @@ async fn test_hard_state_persistence_and_recovery() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_hard_state_prevents_double_vote() {
-    cleanup_wal_files();
-    let (wal, temp_dir) = create_test_wal().await;
-    let wal_path = temp_dir.path().join("test_wal");
+    // cleanup_wal_files removed - using unique keys per test instead
+    let (wal, wal_path, _temp_dir) = create_test_wal().await;
 
     // Node votes for candidate 5 in term 3
     {
@@ -109,9 +112,8 @@ async fn test_hard_state_prevents_double_vote() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_conf_state_persistence_and_recovery() {
-    cleanup_wal_files();
-    let (wal, temp_dir) = create_test_wal().await;
-    let wal_path = temp_dir.path().join("test_wal");
+    // cleanup_wal_files removed - using unique keys per test instead
+    let (wal, wal_path, _temp_dir) = create_test_wal().await;
 
     // Create storage and set conf state
     {
@@ -145,9 +147,8 @@ async fn test_conf_state_persistence_and_recovery() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_snapshot_persistence_and_recovery() {
-    cleanup_wal_files();
-    let (wal, temp_dir) = create_test_wal().await;
-    let wal_path = temp_dir.path().join("test_wal");
+    // cleanup_wal_files removed - using unique keys per test instead
+    let (wal, wal_path, _temp_dir) = create_test_wal().await;
 
     // Create storage and apply snapshot
     {
@@ -187,9 +188,8 @@ async fn test_snapshot_persistence_and_recovery() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_state_machine_persistence_and_recovery() {
-    cleanup_wal_files();
-    let (wal, temp_dir) = create_test_wal().await;
-    let wal_path = temp_dir.path().join("test_wal");
+    // cleanup_wal_files removed - using unique keys per test instead
+    let (wal, wal_path, _temp_dir) = create_test_wal().await;
 
     // Create state machine and apply operations
     {
@@ -229,9 +229,8 @@ async fn test_state_machine_persistence_and_recovery() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_state_machine_delete_with_tombstone() {
-    cleanup_wal_files();
-    let (wal, temp_dir) = create_test_wal().await;
-    let wal_path = temp_dir.path().join("test_wal");
+    // cleanup_wal_files removed - using unique keys per test instead
+    let (wal, wal_path, _temp_dir) = create_test_wal().await;
 
     // Create state machine, SET then DELETE
     {
@@ -257,9 +256,8 @@ async fn test_state_machine_delete_with_tombstone() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_state_machine_overwrite_survives() {
-    cleanup_wal_files();
-    let (wal, temp_dir) = create_test_wal().await;
-    let wal_path = temp_dir.path().join("test_wal");
+    // cleanup_wal_files removed - using unique keys per test instead
+    let (wal, wal_path, _temp_dir) = create_test_wal().await;
 
     {
         let sm = StateMachine::with_wal(Arc::clone(&wal));
@@ -285,9 +283,8 @@ async fn test_state_machine_overwrite_survives() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_log_entries_persistence() {
-    cleanup_wal_files();
-    let (wal, temp_dir) = create_test_wal().await;
-    let wal_path = temp_dir.path().join("test_wal");
+    // cleanup_wal_files removed - using unique keys per test instead
+    let (wal, wal_path, _temp_dir) = create_test_wal().await;
 
     // Create some log entries
     let entries = vec![
@@ -343,9 +340,8 @@ async fn test_log_entries_persistence() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_multiple_hard_state_updates_latest_wins() {
-    cleanup_wal_files();
-    let (wal, temp_dir) = create_test_wal().await;
-    let wal_path = temp_dir.path().join("test_wal");
+    // cleanup_wal_files removed - using unique keys per test instead
+    let (wal, wal_path, _temp_dir) = create_test_wal().await;
 
     {
         let storage = WalStorage::new(Arc::clone(&wal));
@@ -374,7 +370,7 @@ async fn test_multiple_hard_state_updates_latest_wins() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_crash_recovery_full_scenario() {
-    cleanup_wal_files();
+    // cleanup_wal_files removed - using unique keys per test instead
     // This test simulates a full crash recovery scenario:
     // 1. Node starts, becomes leader
     // 2. Receives some entries
@@ -383,8 +379,7 @@ async fn test_crash_recovery_full_scenario() {
     // 5. CRASHES
     // 6. Restarts and verifies everything is recovered
 
-    let (wal, temp_dir) = create_test_wal().await;
-    let wal_path = temp_dir.path().join("test_wal");
+    let (wal, wal_path, _temp_dir) = create_test_wal().await;
 
     // === Phase 1: Normal operation ===
     {
@@ -468,9 +463,9 @@ async fn test_crash_recovery_full_scenario() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_empty_state_machine_no_crash() {
-    cleanup_wal_files();
+    // cleanup_wal_files removed - using unique keys per test instead
     // Verify that creating a state machine without prior data doesn't crash
-    let (wal, _temp_dir) = create_test_wal().await;
+    let (wal, _wal_path, _temp_dir) = create_test_wal().await;
 
     let sm = StateMachine::with_wal(wal);
 
@@ -481,8 +476,8 @@ async fn test_empty_state_machine_no_crash() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_no_prior_hard_state_defaults_to_zero() {
-    cleanup_wal_files();
-    let (wal, _temp_dir) = create_test_wal().await;
+    // cleanup_wal_files removed - using unique keys per test instead
+    let (wal, _wal_path, _temp_dir) = create_test_wal().await;
 
     let storage = WalStorage::new(wal);
 
