@@ -22,7 +22,7 @@ fn test_single_node_startup() {
     };
 
     // Create node OUTSIDE of async context to avoid nested runtime issue
-    let node = OctopiiNode::new(config).unwrap();
+    let node = OctopiiNode::new_blocking(config).unwrap();
     assert_eq!(node.id(), 1);
 
     rt.block_on(async {
@@ -58,7 +58,7 @@ fn test_node_state_machine_query() {
     };
 
     // Create node OUTSIDE of async context to avoid nested runtime issue
-    let node = OctopiiNode::new(config).unwrap();
+    let node = OctopiiNode::new_blocking(config).unwrap();
 
     rt.block_on(async {
         // Test state machine operations
@@ -112,8 +112,8 @@ fn test_multiple_nodes_communication() {
     };
 
     // Create nodes OUTSIDE of async context to avoid nested runtime issue
-    let node1 = OctopiiNode::new(config1).unwrap();
-    let node2 = OctopiiNode::new(config2).unwrap();
+    let node1 = OctopiiNode::new_blocking(config1).unwrap();
+    let node2 = OctopiiNode::new_blocking(config2).unwrap();
 
     rt.block_on(async {
         // Start both nodes
