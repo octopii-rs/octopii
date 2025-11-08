@@ -204,29 +204,36 @@ Result:    Error (all 1GB wasted)
 - No same-stream bidirectional RPC (request+response on one stream)
 - No protobuf/gRPC compatibility
 
-### 2. Partial Raft Integration
+### 2. Raft Integration - Production Ready Durability
 
-**Status**: Raft has durable storage and state machine, but missing cluster coordination features.
+**Status**: Raft has full durability, cluster coordination, and bounded data structures. Ready for single-leader scenarios.
 
 **What Works**:
 - ✓ Durable Raft state (HardState, ConfState, Snapshots, Log entries)
 - ✓ Durable state machine with write-ahead logging
-- ✓ Crash recovery from Walrus
+- ✓ Crash recovery with Walrus checkpointing for space reclamation
 - ✓ Prevents double-voting after crash
-- ✓ Full test coverage for durability
+- ✓ Full test coverage (12 durability tests, 2 cluster tests)
+- ✓ Bidirectional RPC message handling (request/response stepping)
+- ✓ Bounded data structures (prevents unbounded growth)
+  - Ring buffer for message tracking (1024 capacity)
+  - Proposal queue (10000 max)
+- ✓ Client proposal handling with oneshot notification
+- ✓ Automatic log replication via AppendEntries RPC
 
 **What's Missing**:
-- Leader election triggering
-- Peer discovery and cluster membership changes
-- Automatic log replication to followers
-- Client request handling integration
-- Production cluster orchestration
+- Automatic leader election (campaign() must be called manually)
+- Dynamic peer discovery (peers configured at startup)
+- Cluster membership changes (add/remove nodes)
+- Snapshot-based log compaction (TODO in code)
+- State machine compaction (TODO in code)
 
 **Impact**:
-- Storage layer is production-ready for durability
-- Not yet ready for distributed consensus deployment
-- Requires manual cluster coordination
-- Good foundation for full Raft implementation
+- Production-ready for single-leader durability scenarios
+- Great for write-ahead logging with Raft guarantees
+- Manual leader election via campaign() API
+- Static cluster membership (set at startup)
+- Good foundation for full dynamic Raft implementation
 
 ### 3. No Metrics/Observability
 
