@@ -759,12 +759,34 @@ impl OctopiiNode {
                                                                 match raft_clone.step(raft_msg).await {
                                                                     Ok(_) => {
                                                                         tracing::trace!("Raft message processed successfully");
-                                                                        // Do NOT call ready() and advance() here!
-                                                                        // That would consume entries without persisting them.
-                                                                        // Let the main ready handler do all processing.
+                                                                        // Send immediate ACK to unblock the RPC call
+                                                                        // The actual Raft response will be sent by the ready handler
+                                                                        let ack = RpcMessage::new_response(
+                                                                            req.id,
+                                                                            ResponsePayload::CustomResponse {
+                                                                                success: true,
+                                                                                data: bytes::Bytes::new(),
+                                                                            }
+                                                                        );
+                                                                        if let Ok(data) = crate::rpc::serialize(&ack) {
+                                                                            if let Err(e) = peer.send(data).await {
+                                                                                tracing::error!("Failed to send ACK: {}", e);
+                                                                            }
+                                                                        }
                                                                     }
                                                                     Err(e) => {
                                                                         tracing::error!("Failed to step Raft: {}", e);
+                                                                        // Send error response
+                                                                        let err_resp = RpcMessage::new_response(
+                                                                            req.id,
+                                                                            ResponsePayload::CustomResponse {
+                                                                                success: false,
+                                                                                data: bytes::Bytes::new(),
+                                                                            }
+                                                                        );
+                                                                        if let Ok(data) = crate::rpc::serialize(&err_resp) {
+                                                                            let _ = peer.send(data).await;
+                                                                        }
                                                                     }
                                                                 }
                                                             }
