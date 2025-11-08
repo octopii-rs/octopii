@@ -15,7 +15,10 @@ use raft::prelude::*;
 /// Helper to create a temporary WAL for testing
 async fn create_test_wal() -> (Arc<WriteAheadLog>, TempDir) {
     let temp_dir = TempDir::new().unwrap();
-    let wal_path = temp_dir.path().join("test_wal");
+    // Use thread ID to create unique key for parallel test execution
+    let thread_id = std::thread::current().id();
+    let unique_key = format!("test_wal_{:?}", thread_id);
+    let wal_path = temp_dir.path().join(&unique_key);
     let wal = Arc::new(
         WriteAheadLog::new(wal_path, 100, Duration::from_millis(100))
             .await
