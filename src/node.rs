@@ -967,28 +967,23 @@ impl OctopiiNode {
 
             let mut last_applied_index = None;
 
-            if let Some(hs) = ready.hs() {
-                tracing::debug!(
-                    "[Node {}] Persisting HardState: term={}, vote={}, commit={}",
-                    node_id,
-                    hs.term,
-                    hs.vote,
-                    hs.commit
-                );
-                raft.persist_hard_state(hs.clone()).await;
-            }
-
-            if !ready.entries().is_empty() {
-                tracing::info!(
-                    "[Node {}] Persisting {} new entries to storage",
-                    node_id,
-                    ready.entries().len()
-                );
-                raft.persist_entries(ready.entries()).await;
-            }
-
+            // CRITICAL: Send ready.messages() FIRST, before any persistence operations.
+            // These are immediate messages (votes, heartbeats, etc.) that must go out immediately.
+            // This is the TiKV/raft-rs pattern - see raft-rs/examples/five_mem_node/main.rs:264-267
             Self::send_raft_messages(ready.take_messages(), rpc, peer_addrs).await;
 
+            // Apply snapshot if present (must happen before persisting entries)
+            if !ready.snapshot().is_empty() {
+                tracing::info!(
+                    "[Node {}] Applying snapshot at index {}",
+                    node_id,
+                    ready.snapshot().get_metadata().index
+                );
+                // Snapshot handling would go here if we supported it
+            }
+
+            // Apply committed entries BEFORE persisting new entries
+            // This follows the raft-rs example pattern
             if let Some(idx) = Self::apply_committed_entries(
                 ready.take_committed_entries(),
                 raft,
@@ -1001,6 +996,31 @@ impl OctopiiNode {
                 last_applied_index = Some(idx);
             }
 
+            // Persist new entries to storage
+            if !ready.entries().is_empty() {
+                tracing::info!(
+                    "[Node {}] Persisting {} new entries to storage",
+                    node_id,
+                    ready.entries().len()
+                );
+                raft.persist_entries(ready.entries()).await;
+            }
+
+            // Persist HardState
+            if let Some(hs) = ready.hs() {
+                tracing::debug!(
+                    "[Node {}] Persisting HardState: term={}, vote={}, commit={}",
+                    node_id,
+                    hs.term,
+                    hs.vote,
+                    hs.commit
+                );
+                raft.persist_hard_state(hs.clone()).await;
+            }
+
+            // CRITICAL: Send persisted_messages() AFTER persistence completes.
+            // These messages (like MsgAppend with newly persisted entries) depend on persistence.
+            // This unblocks log replication - followers won't hear about new entries until these go out.
             Self::send_raft_messages(ready.take_persisted_messages(), rpc, peer_addrs).await;
 
             let mut light_rd = raft.advance(ready).await;
@@ -1011,6 +1031,10 @@ impl OctopiiNode {
                 light_rd.messages().len()
             );
 
+            // Send LightReady messages first (raft-rs pattern: line 341 before 343)
+            Self::send_raft_messages(light_rd.take_messages(), rpc, peer_addrs).await;
+
+            // Then apply LightReady committed entries
             if let Some(idx) = Self::apply_committed_entries(
                 light_rd.take_committed_entries(),
                 raft,
@@ -1022,8 +1046,6 @@ impl OctopiiNode {
             {
                 last_applied_index = Some(idx);
             }
-
-            Self::send_raft_messages(light_rd.take_messages(), rpc, peer_addrs).await;
 
             if let Some(last_applied_index) = last_applied_index {
                 if let Err(e) = state_machine.compact_state_machine() {

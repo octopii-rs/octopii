@@ -218,6 +218,14 @@ impl RaftNode {
             cc.node_id,
             conf_state.voters
         );
+
+        // CRITICAL: After applying ConfChange, explicitly broadcast to ensure newly added
+        // peers get initial replication, even if they're slow to start or haven't responded yet.
+        // This prevents Progress from getting stuck in paused state.
+        if node.raft.state == raft::StateRole::Leader {
+            node.raft.bcast_append();
+        }
+
         if node.has_ready() {
             self.ready_notify.notify_one();
         }
