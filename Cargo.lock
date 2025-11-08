@@ -806,6 +806,7 @@ dependencies = [
  "protobuf",
  "quinn",
  "raft",
+ "rand 0.8.5",
  "rcgen",
  "rkyv",
  "rustls",

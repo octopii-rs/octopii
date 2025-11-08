@@ -775,10 +775,14 @@ impl OctopiiNode {
 
         tracing::info!("Spawning Raft ticker (100ms interval) with automatic leader election");
 
+        // Randomize election timeout between 15-30 ticks (1.5-3 seconds)
+        // This prevents split votes when multiple nodes lose leader simultaneously
+        use rand::Rng;
+        let max_ticks_without_leader: u64 = rand::thread_rng().gen_range(15..=30);
+
         self.runtime.spawn(async move {
             let mut ticker = interval(Duration::from_millis(100));
             let mut ticks_without_leader = 0u64;
-            const MAX_TICKS_WITHOUT_LEADER: u64 = 20; // 2 seconds
 
             loop {
                 tokio::select! {
@@ -791,10 +795,10 @@ impl OctopiiNode {
                         raft.tick().await;
                         tracing::trace!("Raft ticked");
 
-                        // Automatic leader election
+                        // Automatic leader election with randomized timeout
                         if !raft.has_leader().await {
                             ticks_without_leader += 1;
-                            if ticks_without_leader >= MAX_TICKS_WITHOUT_LEADER {
+                            if ticks_without_leader >= max_ticks_without_leader {
                                 tracing::warn!(
                                     "No leader detected for {} ticks ({}ms), triggering election",
                                     ticks_without_leader,
