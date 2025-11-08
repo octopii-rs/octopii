@@ -124,6 +124,8 @@ pub struct OctopiiNode {
     msg_type_tracker: Arc<MessageTypeTracker>,
     /// Bounded queue for pending proposals (max 10000 in-flight proposals)
     proposal_queue: Arc<ProposalQueue>,
+    /// Pending ConfChange completions - notifies callers when membership changes commit
+    pending_conf_changes: Arc<RwLock<HashMap<u64, oneshot::Sender<raft::prelude::ConfState>>>>,
     /// Broadcast channel used to signal background tasks to shut down gracefully
     shutdown_tx: broadcast::Sender<()>,
     /// Flag ensuring shutdown is triggered at most once
@@ -213,6 +215,9 @@ impl OctopiiNode {
         // Create bounded proposal queue (10000 max in-flight proposals)
         let proposal_queue = Arc::new(ProposalQueue::new(10000));
 
+        // Create pending ConfChange tracker
+        let pending_conf_changes = Arc::new(RwLock::new(HashMap::new()));
+
         // Channel for signaling graceful shutdown to background tasks
         let (shutdown_tx, _) = broadcast::channel(16);
 
@@ -226,6 +231,7 @@ impl OctopiiNode {
             peer_addrs: Arc::new(RwLock::new(peer_addrs_map)),
             msg_type_tracker,
             proposal_queue,
+            pending_conf_changes,
             shutdown_tx,
             shutdown_triggered: AtomicBool::new(false),
         };
@@ -352,12 +358,18 @@ impl OctopiiNode {
     }
 
     /// Add a peer to the Raft cluster dynamically
-    /// This proposes a ConfChange that will be committed through Raft consensus
-    pub async fn add_peer(&self, peer_id: u64, addr: SocketAddr) -> Result<()> {
+    /// This proposes a ConfChange that will be committed through Raft consensus.
+    /// Blocks until the ConfChange is committed and applied, or times out after 10 seconds.
+    /// Returns the new ConfState after the change is applied.
+    pub async fn add_peer(&self, peer_id: u64, addr: SocketAddr) -> Result<raft::prelude::ConfState> {
         tracing::info!("Adding peer {} at {}", peer_id, addr);
 
         // Update peer address mapping immediately (optimistic)
         self.peer_addrs.write().await.insert(peer_id, addr);
+
+        // Create oneshot channel to wait for completion
+        let (tx, rx) = oneshot::channel();
+        self.pending_conf_changes.write().await.insert(peer_id, tx);
 
         // Propose ConfChange to Raft
         let mut cc = raft::prelude::ConfChange::default();
@@ -366,7 +378,26 @@ impl OctopiiNode {
 
         self.raft.propose_conf_change(vec![], cc).await?;
         tracing::info!("Proposed AddNode for peer {}", peer_id);
-        Ok(())
+
+        // Wait for ConfChange to commit (with 10 second timeout)
+        match timeout(Duration::from_secs(10), rx).await {
+            Ok(Ok(conf_state)) => {
+                tracing::info!("✓ AddNode completed for peer {}, voters: {:?}", peer_id, conf_state.voters);
+                Ok(conf_state)
+            }
+            Ok(Err(_)) => {
+                self.pending_conf_changes.write().await.remove(&peer_id);
+                Err(OctopiiError::Raft(raft::Error::ConfChangeError(
+                    "ConfChange notification channel closed".to_string()
+                )))
+            }
+            Err(_) => {
+                self.pending_conf_changes.write().await.remove(&peer_id);
+                Err(OctopiiError::Raft(raft::Error::ConfChangeError(
+                    format!("ConfChange timeout after 10s for peer {}", peer_id)
+                )))
+            }
+        }
     }
 
     /// Remove a peer from the Raft cluster dynamically
@@ -392,11 +423,17 @@ impl OctopiiNode {
     /// Add a peer as a learner (safe membership change)
     /// Learners receive log entries but don't vote, making it safe to add them
     /// without affecting quorum. Promote to voter once caught up.
-    pub async fn add_learner(&self, peer_id: u64, addr: SocketAddr) -> Result<()> {
+    /// Blocks until the ConfChange is committed and applied, or times out after 10 seconds.
+    /// Returns the new ConfState after the change is applied.
+    pub async fn add_learner(&self, peer_id: u64, addr: SocketAddr) -> Result<raft::prelude::ConfState> {
         tracing::info!("Adding peer {} at {} as LEARNER", peer_id, addr);
 
         // Update peer address mapping
         self.peer_addrs.write().await.insert(peer_id, addr);
+
+        // Create oneshot channel to wait for completion
+        let (tx, rx) = oneshot::channel();
+        self.pending_conf_changes.write().await.insert(peer_id, tx);
 
         // Propose ConfChange to add as learner
         let mut cc = raft::prelude::ConfChange::default();
@@ -405,12 +442,33 @@ impl OctopiiNode {
 
         self.raft.propose_conf_change(vec![], cc).await?;
         tracing::info!("Proposed AddLearnerNode for peer {}", peer_id);
-        Ok(())
+
+        // Wait for ConfChange to commit (with 10 second timeout)
+        match timeout(Duration::from_secs(10), rx).await {
+            Ok(Ok(conf_state)) => {
+                tracing::info!("✓ AddLearnerNode completed for peer {}, learners: {:?}", peer_id, conf_state.learners);
+                Ok(conf_state)
+            }
+            Ok(Err(_)) => {
+                self.pending_conf_changes.write().await.remove(&peer_id);
+                Err(OctopiiError::Raft(raft::Error::ConfChangeError(
+                    "ConfChange notification channel closed".to_string()
+                )))
+            }
+            Err(_) => {
+                self.pending_conf_changes.write().await.remove(&peer_id);
+                Err(OctopiiError::Raft(raft::Error::ConfChangeError(
+                    format!("ConfChange timeout after 10s for learner {}", peer_id)
+                )))
+            }
+        }
     }
 
     /// Promote a learner to voter
-    /// Should only be called after verifying the learner is caught up
-    pub async fn promote_learner(&self, peer_id: u64) -> Result<()> {
+    /// Should only be called after verifying the learner is caught up.
+    /// Blocks until the ConfChange is committed and applied, or times out after 10 seconds.
+    /// Returns the new ConfState after the change is applied.
+    pub async fn promote_learner(&self, peer_id: u64) -> Result<raft::prelude::ConfState> {
         tracing::info!("Promoting learner {} to voter", peer_id);
 
         // Check if learner is caught up first
@@ -420,6 +478,10 @@ impl OctopiiNode {
             ));
         }
 
+        // Create oneshot channel to wait for completion
+        let (tx, rx) = oneshot::channel();
+        self.pending_conf_changes.write().await.insert(peer_id, tx);
+
         // Propose ConfChange to promote learner to voter
         let mut cc = raft::prelude::ConfChange::default();
         cc.set_change_type(raft::prelude::ConfChangeType::AddNode);
@@ -427,7 +489,26 @@ impl OctopiiNode {
 
         self.raft.propose_conf_change(vec![], cc).await?;
         tracing::info!("Proposed promotion of learner {} to voter", peer_id);
-        Ok(())
+
+        // Wait for ConfChange to commit (with 10 second timeout)
+        match timeout(Duration::from_secs(10), rx).await {
+            Ok(Ok(conf_state)) => {
+                tracing::info!("✓ Promotion completed for peer {}, voters: {:?}", peer_id, conf_state.voters);
+                Ok(conf_state)
+            }
+            Ok(Err(_)) => {
+                self.pending_conf_changes.write().await.remove(&peer_id);
+                Err(OctopiiError::Raft(raft::Error::ConfChangeError(
+                    "ConfChange notification channel closed".to_string()
+                )))
+            }
+            Err(_) => {
+                self.pending_conf_changes.write().await.remove(&peer_id);
+                Err(OctopiiError::Raft(raft::Error::ConfChangeError(
+                    format!("ConfChange timeout after 10s for promoting learner {}", peer_id)
+                )))
+            }
+        }
     }
 
     /// Check if a learner is caught up with the leader
@@ -740,6 +821,7 @@ impl OctopiiNode {
         let rpc = Arc::clone(&self.rpc);
         let peer_addrs = Arc::clone(&self.peer_addrs);
         let proposal_queue = Arc::clone(&self.proposal_queue);
+        let pending_conf_changes = Arc::clone(&self.pending_conf_changes);
         let mut shutdown_rx = self.shutdown_tx.subscribe();
 
         tracing::info!("Spawning Raft ready handler");
@@ -861,15 +943,27 @@ impl OctopiiNode {
                                 entry.index, entry.term);
 
                             // Decode and apply ConfChange
-                            match protobuf::Message::parse_from_bytes(&entry.data) {
+                            let parse_result: protobuf::ProtobufResult<raft::prelude::ConfChange> =
+                                protobuf::Message::parse_from_bytes(&entry.data);
+                            match parse_result {
                                 Ok(cc) => {
+                                    let node_id = cc.node_id;
                                     match raft.apply_conf_change(&cc).await {
                                         Ok(conf_state) => {
                                             tracing::info!("✓ ConfChange applied: {:?} for node {}, voters: {:?}",
-                                                cc.get_change_type(), cc.node_id, conf_state.voters);
+                                                cc.get_change_type(), node_id, conf_state.voters);
+
+                                            // Notify any waiting caller
+                                            if let Some(tx) = pending_conf_changes.write().await.remove(&node_id) {
+                                                if tx.send(conf_state.clone()).is_err() {
+                                                    tracing::warn!("ConfChange waiter dropped for node {}", node_id);
+                                                }
+                                            }
                                         }
                                         Err(e) => {
                                             tracing::error!("Failed to apply ConfChange: {}", e);
+                                            // Remove pending waiter on error
+                                            pending_conf_changes.write().await.remove(&node_id);
                                         }
                                     }
                                 }

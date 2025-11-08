@@ -5,7 +5,6 @@ use common::TestCluster;
 use std::time::Duration;
 
 #[test]
-#[ignore = "add_peer hangs - requires proper cluster bootstrap with all initial voters"]
 fn test_automatic_election_after_leader_failure() {
     let test_runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(4)
@@ -34,24 +33,24 @@ fn test_automatic_election_after_leader_failure() {
         assert!(cluster.nodes[0].is_leader().await, "Node 1 should be leader");
         tracing::info!("✓ Node 1 is leader");
 
-        // Add nodes 2 and 3 as voters (they start as followers but not voters)
+        // Add nodes 2 and 3 as voters (now properly waits for completion!)
         tracing::info!("Adding node 2 as voter");
-        cluster.nodes[0]
+        let conf_state_2 = cluster.nodes[0]
             .get_node()
             .unwrap()
             .add_peer(2, cluster.nodes[1].addr)
             .await
             .expect("Failed to add node 2");
-        tokio::time::sleep(Duration::from_secs(1)).await;
+        tracing::info!("Node 2 added, voters: {:?}", conf_state_2.voters);
 
         tracing::info!("Adding node 3 as voter");
-        cluster.nodes[0]
+        let conf_state_3 = cluster.nodes[0]
             .get_node()
             .unwrap()
             .add_peer(3, cluster.nodes[2].addr)
             .await
             .expect("Failed to add node 3");
-        tokio::time::sleep(Duration::from_secs(1)).await;
+        tracing::info!("Node 3 added, voters: {:?}", conf_state_3.voters);
 
         tracing::info!("✓ All nodes added as voters");
 
@@ -164,7 +163,6 @@ fn test_no_election_with_healthy_leader() {
 }
 
 #[test]
-#[ignore = "add_peer hangs - requires proper cluster bootstrap with all initial voters"]
 fn test_rapid_leader_failures() {
     let test_runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(6)
@@ -190,17 +188,17 @@ fn test_rapid_leader_failures() {
         cluster.nodes[0].campaign().await.expect("Campaign failed");
         tokio::time::sleep(Duration::from_secs(2)).await;
 
-        // Add all other nodes as voters
+        // Add all other nodes as voters (now blocks until complete!)
         for node_id in 2..=5 {
             let idx = (node_id - 1) as usize;
             tracing::info!("Adding node {} as voter", node_id);
-            cluster.nodes[0]
+            let conf_state = cluster.nodes[0]
                 .get_node()
                 .unwrap()
                 .add_peer(node_id, cluster.nodes[idx].addr)
                 .await
                 .expect(&format!("Failed to add node {}", node_id));
-            tokio::time::sleep(Duration::from_millis(500)).await;
+            tracing::info!("Node {} added, voters: {:?}", node_id, conf_state.voters);
         }
 
         tracing::info!("✓ All nodes added as voters");
