@@ -252,20 +252,97 @@ pub async fn append(&self, data: Bytes) -> Result<u64> {
 
 ### 6. Raft Integration
 
-**Purpose**: State machine replication using raft-rs (currently stub).
+**Purpose**: Distributed consensus and state machine replication using raft-rs with full Walrus durability.
 
 ```
 ┌─────────┐     ┌─────────┐     ┌─────────┐
 │ Node 1  │────>│ Node 2  │<───>│ Node 3  │
 │(Leader) │     │(Follower)│    │(Follower)│
-└─────────┘     └─────────┘     └─────────┘
-     │               │               │
+└────┬────┘     └────┬────┘     └────┬────┘
      │               │               │
      ▼               ▼               ▼
-  [WAL]          [WAL]          [WAL]
+  [Walrus]       [Walrus]       [Walrus]
+  Topics:        Topics:        Topics:
+  - raft_log     - raft_log     - raft_log
+  - hard_state   - hard_state   - hard_state
+  - conf_state   - conf_state   - conf_state
+  - snapshot     - snapshot     - snapshot
+  - state_machine - state_machine - state_machine
 ```
 
-**Code location**: `src/raft/mod.rs` (minimal implementation)
+**Durability Architecture**:
+```
+┌────────────────────────────────────────────────────────┐
+│                   Raft Durability                      │
+│                                                        │
+│  All state persisted to Walrus via topic isolation:   │
+│                                                        │
+│  ┌──────────────────────────────────────────────┐    │
+│  │  Topic: raft_hard_state                      │    │
+│  │  - term, vote, commit (rkyv serialized)      │    │
+│  │  - Latest entry wins on recovery             │    │
+│  └──────────────────────────────────────────────┘    │
+│                                                        │
+│  ┌──────────────────────────────────────────────┐    │
+│  │  Topic: raft_conf_state                      │    │
+│  │  - voters, learners (rkyv serialized)        │    │
+│  │  - Latest entry wins on recovery             │    │
+│  └──────────────────────────────────────────────┘    │
+│                                                        │
+│  ┌──────────────────────────────────────────────┐    │
+│  │  Topic: raft_snapshot                        │    │
+│  │  - Complete state snapshots (rkyv)           │    │
+│  │  - Latest entry wins on recovery             │    │
+│  └──────────────────────────────────────────────┘    │
+│                                                        │
+│  ┌──────────────────────────────────────────────┐    │
+│  │  Topic: raft_log                             │    │
+│  │  - Log entries (protobuf from raft-rs)       │    │
+│  │  - Rebuild entire log on recovery            │    │
+│  └──────────────────────────────────────────────┘    │
+│                                                        │
+│  ┌──────────────────────────────────────────────┐    │
+│  │  Topic: state_machine                        │    │
+│  │  - Key-value operations (rkyv serialized)    │    │
+│  │  - Tombstones for deletes (empty value)      │    │
+│  │  - Replay all on recovery                    │    │
+│  └──────────────────────────────────────────────┘    │
+│                                                        │
+└────────────────────────────────────────────────────────┘
+```
+
+**Crash Recovery Flow**:
+```
+1. Node crashes/restarts
+2. WalStorage::new() called
+3. recover_from_walrus() executed:
+   a. Recover hard_state (prevents double-voting)
+   b. Recover conf_state (cluster membership)
+   c. Recover snapshot (latest state snapshot)
+   d. Recover log entries (rebuild log)
+4. StateMachine::with_wal() called
+5. recover_from_walrus() replays all operations
+6. Node ready with full state recovered
+```
+
+**Persistence Guarantees**:
+- **HardState**: Persisted BEFORE in-memory update (prevents split-brain)
+- **ConfState**: Persisted BEFORE in-memory update (cluster consistency)
+- **Snapshots**: Atomic persistence with metadata
+- **Log entries**: Durable append, recovery rebuilds entire log
+- **State machine**: Write-ahead logging (persist BEFORE apply)
+
+**Serialization Strategy**:
+- **Raft state**: rkyv (zero-copy, consistent with Walrus)
+- **Log entries**: protobuf (from raft-rs, required by library)
+- **State machine**: rkyv (custom operations)
+
+**Code locations**:
+- Raft core: `src/raft/mod.rs`
+- Durable storage: `src/raft/storage.rs`
+- Durable state machine: `src/raft/state_machine.rs`
+- RPC integration: `src/raft/rpc.rs`
+- Durability tests: `tests/raft_durability_test.rs`
 
 ## Data Flow Examples
 
