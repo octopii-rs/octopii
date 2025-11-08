@@ -53,11 +53,11 @@ Octopii is a minimal distributed file transfer and RPC system built on QUIC tran
 │  └────────────────────────────────────────────────┘    │
 │                                                          │
 │  ┌────────────────────────────────────────────────┐    │
-│  │ Tokio Blocking Thread Pool (max 512)           │    │
+│  │ Tokio Blocking Thread Pool                     │    │
 │  │                                                  │    │
-│  │  Spawned on-demand for spawn_blocking()        │    │
-│  │  - WAL operations (Walrus calls)                │    │
-│  │  - CPU-bound work                                │    │
+│  │  NOT USED - enforcing hard thread cap          │    │
+│  │  WAL uses block_in_place() instead             │    │
+│  │  (runs on worker threads, doesn't spawn)       │    │
 │  └────────────────────────────────────────────────┘    │
 │                                                          │
 │  ┌────────────────────────────────────────────────┐    │
@@ -228,11 +228,10 @@ Flow:
 pub async fn append(&self, data: Bytes) -> Result<u64> {
     let walrus = self.walrus.clone();
 
-    // Bridge to sync Walrus via blocking thread pool
-    tokio::task::spawn_blocking(move || {
+    // Use block_in_place for hard thread cap (Walrus ops are non-blocking)
+    tokio::task::block_in_place(|| {
         walrus.append_for_topic(&topic, &data)  // Pure sync
     })
-    .await??;
 }
 ```
 
