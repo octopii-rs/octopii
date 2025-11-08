@@ -41,6 +41,15 @@ pub enum RequestPayload {
         last_log_index: u64,
         last_log_term: u64,
     },
+    /// Raft Snapshot transfer
+    RaftSnapshot {
+        term: u64,
+        leader_id: u64,
+        snapshot_index: u64,
+        snapshot_term: u64,
+        snapshot_data: Bytes,
+        conf_state_data: Bytes,
+    },
     /// Custom application-level request
     Custom {
         operation: String,
@@ -67,6 +76,11 @@ pub enum ResponsePayload {
     RequestVoteResponse {
         term: u64,
         vote_granted: bool,
+    },
+    /// Snapshot response
+    SnapshotResponse {
+        term: u64,
+        success: bool,
     },
     /// Custom application response
     CustomResponse {

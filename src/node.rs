@@ -1,6 +1,6 @@
 use crate::chunk::{ChunkSource, TransferResult};
 use crate::config::Config;
-use crate::error::Result;
+use crate::error::{OctopiiError, Result};
 use crate::raft::{
     raft_message_to_rpc, raft_response_to_rpc, rpc_response_to_raft, rpc_to_raft_message, RaftNode,
     StateMachine, WalStorage,
@@ -384,6 +384,77 @@ impl OctopiiNode {
         Ok(())
     }
 
+    /// Add a peer as a learner (safe membership change)
+    /// Learners receive log entries but don't vote, making it safe to add them
+    /// without affecting quorum. Promote to voter once caught up.
+    pub async fn add_learner(&self, peer_id: u64, addr: SocketAddr) -> Result<()> {
+        tracing::info!("Adding peer {} at {} as LEARNER", peer_id, addr);
+
+        // Update peer address mapping
+        self.peer_addrs.write().await.insert(peer_id, addr);
+
+        // Propose ConfChange to add as learner
+        let mut cc = raft::prelude::ConfChange::default();
+        cc.set_change_type(raft::prelude::ConfChangeType::AddLearnerNode);
+        cc.node_id = peer_id;
+
+        self.raft.propose_conf_change(vec![], cc).await?;
+        tracing::info!("Proposed AddLearnerNode for peer {}", peer_id);
+        Ok(())
+    }
+
+    /// Promote a learner to voter
+    /// Should only be called after verifying the learner is caught up
+    pub async fn promote_learner(&self, peer_id: u64) -> Result<()> {
+        tracing::info!("Promoting learner {} to voter", peer_id);
+
+        // Check if learner is caught up first
+        if !self.is_learner_caught_up(peer_id).await? {
+            return Err(crate::error::OctopiiError::Raft(
+                raft::Error::ConfChangeError("Learner is not caught up yet, cannot promote".to_string())
+            ));
+        }
+
+        // Propose ConfChange to promote learner to voter
+        let mut cc = raft::prelude::ConfChange::default();
+        cc.set_change_type(raft::prelude::ConfChangeType::AddNode);
+        cc.node_id = peer_id;
+
+        self.raft.propose_conf_change(vec![], cc).await?;
+        tracing::info!("Proposed promotion of learner {} to voter", peer_id);
+        Ok(())
+    }
+
+    /// Check if a learner is caught up with the leader
+    /// A learner is considered caught up if it's within 100 entries of the leader
+    pub async fn is_learner_caught_up(&self, learner_id: u64) -> Result<bool> {
+        // Check if we're the leader
+        if !self.raft.is_leader().await {
+            return Err(crate::error::OctopiiError::Raft(
+                raft::Error::ConfChangeError("Only leader can check learner progress".to_string())
+            ));
+        }
+
+        // Get progress for this learner
+        if let Some((matched, leader_last_index)) = self.raft.peer_progress(learner_id).await {
+            let lag = leader_last_index.saturating_sub(matched);
+
+            tracing::debug!(
+                "Learner {} progress: matched={}, leader_last={}, lag={}",
+                learner_id,
+                matched,
+                leader_last_index,
+                lag
+            );
+
+            // Consider caught up if within 100 entries
+            Ok(lag < 100)
+        } else {
+            tracing::warn!("Learner {} not found in progress tracking", learner_id);
+            Ok(false)
+        }
+    }
+
     /// Get the node ID
     pub fn id(&self) -> u64 {
         self.config.node_id
@@ -486,7 +557,9 @@ impl OctopiiNode {
         self.rpc
             .set_request_handler(move |req: RpcRequest| {
                 match &req.payload {
-                    RequestPayload::AppendEntries { .. } | RequestPayload::RequestVote { .. } => {
+                    RequestPayload::AppendEntries { .. }
+                    | RequestPayload::RequestVote { .. }
+                    | RequestPayload::RaftSnapshot { .. } => {
                         // Raft messages are handled in network acceptor, this shouldn't be reached
                         tracing::warn!(
                             "Raft message reached RPC handler (should be handled in acceptor)"
@@ -614,10 +687,13 @@ impl OctopiiNode {
         let raft = Arc::clone(&self.raft);
         let mut shutdown_rx = self.shutdown_tx.subscribe();
 
-        tracing::info!("Spawning Raft ticker (100ms interval)");
+        tracing::info!("Spawning Raft ticker (100ms interval) with automatic leader election");
 
         self.runtime.spawn(async move {
             let mut ticker = interval(Duration::from_millis(100));
+            let mut ticks_without_leader = 0u64;
+            const MAX_TICKS_WITHOUT_LEADER: u64 = 20; // 2 seconds
+
             loop {
                 tokio::select! {
                     recv = shutdown_rx.recv() => {
@@ -628,6 +704,24 @@ impl OctopiiNode {
                     _ = ticker.tick() => {
                         raft.tick().await;
                         tracing::trace!("Raft ticked");
+
+                        // Automatic leader election
+                        if !raft.has_leader().await {
+                            ticks_without_leader += 1;
+                            if ticks_without_leader >= MAX_TICKS_WITHOUT_LEADER {
+                                tracing::warn!(
+                                    "No leader detected for {} ticks ({}ms), triggering election",
+                                    ticks_without_leader,
+                                    ticks_without_leader * 100
+                                );
+                                if let Err(e) = raft.campaign().await {
+                                    tracing::error!("Failed to start election campaign: {}", e);
+                                }
+                                ticks_without_leader = 0;
+                            }
+                        } else {
+                            ticks_without_leader = 0;
+                        }
                     }
                 }
             }

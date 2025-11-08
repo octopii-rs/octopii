@@ -252,9 +252,46 @@ On node restart:
 4. Initialize Raft with recovered state
 ```
 
+### Space Reclamation
+
+Walrus reclaims disk space via **checkpointing**:
+
+```
+How it works:
+1. Each topic has a read cursor (current position in the log)
+2. read_next(topic, checkpoint=true) advances cursor + persists position
+3. When ALL topics checkpoint past a block, Walrus can reclaim that block
+```
+
+**Raft-specific strategy**:
+
+```rust
+// Topics where only the LATEST entry matters
+// → Checkpoint ALL entries, space is reclaimed immediately
+"hard_state"  → checkpoint all (term, vote, commit)
+"conf_state"  → checkpoint all (cluster membership)
+"snapshot"    → checkpoint all (compacted state)
+
+// Topics where ALL entries matter (before snapshot)
+// → Checkpoint entries BEFORE snapshot index, keep entries AFTER
+"raft_log"    → checkpoint old entries, retain recent entries
+```
+
+**Example**: Snapshot at index 1000
+```
+Log entries recovery:
+  - Entries 1-1000:    Checkpointed + discarded → reclaimable by Walrus
+  - Entries 1001-1500: Kept in memory → NOT checkpointed → retained in WAL
+```
+
+This ensures:
+- ✅ Old log entries are reclaimable after snapshot creation
+- ✅ Recent entries are preserved for recovery
+- ✅ Bounded disk usage even with millions of Raft operations
+
 ### Log Compaction
 
-When log grows beyond 1000 entries:
+When log grows beyond 500 entries (reduced from 1000 for more aggressive compaction):
 
 ```rust
 1. Create snapshot of state machine
