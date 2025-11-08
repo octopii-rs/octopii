@@ -204,19 +204,29 @@ Result:    Error (all 1GB wasted)
 - No same-stream bidirectional RPC (request+response on one stream)
 - No protobuf/gRPC compatibility
 
-### 2. Minimal Raft Integration
+### 2. Partial Raft Integration
 
-**Limitation**: Raft integration is a stub, not functional.
+**Status**: Raft has durable storage and state machine, but missing cluster coordination features.
 
-```rust
-// src/raft/mod.rs - currently does nothing useful
-```
+**What Works**:
+- ✓ Durable Raft state (HardState, ConfState, Snapshots, Log entries)
+- ✓ Durable state machine with write-ahead logging
+- ✓ Crash recovery from Walrus
+- ✓ Prevents double-voting after crash
+- ✓ Full test coverage for durability
+
+**What's Missing**:
+- Leader election triggering
+- Peer discovery and cluster membership changes
+- Automatic log replication to followers
+- Client request handling integration
+- Production cluster orchestration
 
 **Impact**:
-- No state machine replication
-- No leader election
-- No distributed consensus
-- Not production-ready for distributed systems
+- Storage layer is production-ready for durability
+- Not yet ready for distributed consensus deployment
+- Requires manual cluster coordination
+- Good foundation for full Raft implementation
 
 ### 3. No Metrics/Observability
 
