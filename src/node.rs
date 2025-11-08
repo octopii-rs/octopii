@@ -341,6 +341,11 @@ impl OctopiiNode {
         self.raft.is_leader().await
     }
 
+    /// Check if the cluster has a leader
+    pub async fn has_leader(&self) -> bool {
+        self.raft.has_leader().await
+    }
+
     /// Trigger this node to campaign for leadership
     pub async fn campaign(&self) -> Result<()> {
         self.raft.campaign().await
