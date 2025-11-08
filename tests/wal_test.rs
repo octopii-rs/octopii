@@ -6,21 +6,26 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::time::Duration;
 
-// Helper to create a test WAL path
+// Helper to create a unique test WAL path
 fn test_wal_path(name: &str) -> PathBuf {
-    std::env::temp_dir().join(format!("test_wal_{}.log", name))
+    // Use unique timestamp to avoid conflicts between test runs
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    std::env::temp_dir().join(format!("test_wal_{}_{}.log", name, timestamp))
 }
 
-// Helper to clean up a WAL directory (Walrus stores in wal_files/)
+// Helper to clean up a WAL directory
+// With the new implementation, WAL creates parent_dir/key/ structure
 async fn cleanup_wal(path: &PathBuf) {
-    // Walrus creates wal_files/<name>/ directory
-    if let Some(file_name) = path.file_name() {
-        if let Some(name_str) = file_name.to_str() {
-            let wal_dir = PathBuf::from("wal_files").join(name_str);
+    // The WAL creates a directory at parent_dir/key_name/
+    if let Some(parent) = path.parent() {
+        if let Some(file_name) = path.file_name() {
+            let wal_dir = parent.join(file_name);
             let _ = tokio::fs::remove_dir_all(&wal_dir).await;
         }
     }
-    let _ = tokio::fs::remove_file(path).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
