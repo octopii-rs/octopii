@@ -1,7 +1,6 @@
 /// Common utilities for comprehensive Raft testing
 use octopii::{Config, OctopiiNode, OctopiiRuntime};
 use std::net::SocketAddr;
-use std::path::PathBuf;
 use std::time::Duration;
 use tempfile::TempDir;
 
@@ -240,7 +239,7 @@ impl TestCluster {
         let mut snapshots = Vec::new();
 
         for node in &self.nodes {
-            if let Some(n) = node.get_node() {
+            if let Some(_n) = node.get_node() {
                 // Use query to check a few known keys
                 // Since we can't get full snapshots easily, we'll just verify
                 // that queries work and return consistent results
@@ -257,6 +256,146 @@ impl TestCluster {
             snapshots.len()
         );
         Ok(())
+    }
+
+    /// Add a learner node to the cluster
+    pub async fn add_learner(&mut self, node_id: u64) -> Result<(), Box<dyn std::error::Error>> {
+        // Find the leader
+        let leader = self.nodes.iter().find(|n| {
+            if let Some(node) = n.get_node() {
+                tokio::task::block_in_place(|| {
+                    tokio::runtime::Handle::current().block_on(node.is_leader())
+                })
+            } else {
+                false
+            }
+        });
+
+        if let Some(leader_node) = leader {
+            let addr: SocketAddr = format!("127.0.0.1:{}", self.base_port + node_id as u16).parse()?;
+            if let Some(node) = leader_node.get_node() {
+                node.add_learner(node_id, addr).await.map_err(|e| e.to_string())?;
+
+                // Create the learner node and add to cluster
+                let all_addrs: Vec<SocketAddr> = self.nodes.iter().map(|n| n.addr).collect();
+                let learner = TestNode::new(node_id, addr, all_addrs, false).await;
+                self.nodes.push(learner);
+
+                Ok(())
+            } else {
+                Err("Leader node not running".into())
+            }
+        } else {
+            Err("No leader found".into())
+        }
+    }
+
+    /// Promote a learner to voter
+    pub async fn promote_learner(&mut self, node_id: u64) -> Result<(), Box<dyn std::error::Error>> {
+        let leader = self.nodes.iter().find(|n| {
+            if let Some(node) = n.get_node() {
+                tokio::task::block_in_place(|| {
+                    tokio::runtime::Handle::current().block_on(node.is_leader())
+                })
+            } else {
+                false
+            }
+        });
+
+        if let Some(leader_node) = leader {
+            if let Some(node) = leader_node.get_node() {
+                node.promote_learner(node_id).await.map_err(|e| e.to_string())?;
+                Ok(())
+            } else {
+                Err("Leader node not running".into())
+            }
+        } else {
+            Err("No leader found".into())
+        }
+    }
+
+    /// Check if a learner is caught up
+    pub async fn is_learner_caught_up(&self, node_id: u64) -> Result<bool, Box<dyn std::error::Error>> {
+        let leader = self.nodes.iter().find(|n| {
+            if let Some(node) = n.get_node() {
+                tokio::task::block_in_place(|| {
+                    tokio::runtime::Handle::current().block_on(node.is_leader())
+                })
+            } else {
+                false
+            }
+        });
+
+        if let Some(leader_node) = leader {
+            if let Some(node) = leader_node.get_node() {
+                Ok(node.is_learner_caught_up(node_id).await.map_err(|e| e.to_string())?)
+            } else {
+                Err("Leader node not running".into())
+            }
+        } else {
+            Err("No leader found".into())
+        }
+    }
+
+    /// Wait for automatic leader election within timeout
+    pub async fn wait_for_leader_election(&self, timeout: Duration) -> Result<u64, String> {
+        let start = std::time::Instant::now();
+
+        while start.elapsed() < timeout {
+            for node in &self.nodes {
+                if node.is_leader().await {
+                    return Ok(node.node_id);
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+
+        Err(format!("No leader elected within {:?}", timeout))
+    }
+
+    /// Check if cluster has a leader
+    pub async fn has_leader(&self) -> bool {
+        for node in &self.nodes {
+            if let Some(n) = node.get_node() {
+                if n.has_leader().await {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// Get WAL disk usage for a node
+    pub fn get_wal_disk_usage(&self, node_id: u64) -> Result<u64, Box<dyn std::error::Error>> {
+        let node = self.nodes.iter().find(|n| n.node_id == node_id)
+            .ok_or_else(|| format!("Node {} not found", node_id))?;
+
+        let wal_path = &node.config.wal_dir;
+        let mut total_size = 0u64;
+
+        if wal_path.exists() {
+            for entry in std::fs::read_dir(wal_path)? {
+                let entry = entry?;
+                if entry.file_type()?.is_file() {
+                    total_size += entry.metadata()?.len();
+                }
+            }
+        }
+
+        Ok(total_size)
+    }
+
+    /// Count total proposals across all nodes
+    pub async fn count_committed_entries(&self) -> usize {
+        // This is approximate - we'll use the leader's count
+        for node in &self.nodes {
+            if node.is_leader().await {
+                // For now, return a placeholder
+                // In a real impl, we'd query the actual commit index
+                return 0;
+            }
+        }
+        0
     }
 
     /// Drop all nodes (cleanup)
