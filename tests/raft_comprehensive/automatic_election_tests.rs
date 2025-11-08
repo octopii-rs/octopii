@@ -5,7 +5,6 @@ use common::TestCluster;
 use std::time::Duration;
 
 #[test]
-#[ignore = "Automatic elections not working - nodes don't generate RequestVote messages. Requires deeper raft-rs integration investigation."]
 fn test_automatic_election_after_leader_failure() {
     let test_runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(4)
@@ -22,37 +21,96 @@ fn test_automatic_election_after_leader_failure() {
 
         tracing::info!("=== Starting automatic election after leader failure test ===");
 
-        // Create 3-node cluster (all nodes start together to avoid empty log issues)
-        let mut cluster = TestCluster::new(vec![1, 2, 3], 8200).await;
+        // Create cluster with only leader initially (following TiKV pattern)
+        // Followers will be added as learners dynamically
+        let mut cluster = TestCluster::new(vec![1], 8200).await;
         cluster.start_all().await.expect("Failed to start cluster");
 
         tokio::time::sleep(Duration::from_millis(500)).await;
 
-        // Wait for automatic leader election (one of the nodes should become leader)
-        tracing::info!("Waiting for initial leader election...");
-        let leader_id = cluster.wait_for_leader_election(Duration::from_secs(5)).await
-            .expect("Initial leader election failed");
-        tracing::info!("✓ Node {} elected as leader (all 3 nodes are voters)", leader_id);
+        // Leader campaigns (node 1 is configured as initial leader)
+        cluster.nodes[0].campaign().await.expect("Campaign failed");
+        tokio::time::sleep(Duration::from_secs(2)).await;
 
-        // Make some proposals to ensure cluster is working
-        let leader_idx = cluster.nodes.iter().position(|n| {
-            tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current().block_on(n.is_leader())
-            })
-        }).expect("Leader should exist");
+        assert!(cluster.nodes[0].is_leader().await, "Node 1 should be leader");
+        tracing::info!("✓ Node 1 is leader");
 
+        // CRITICAL: Make proposals FIRST to advance the leader's log
+        // This ensures followers will receive a snapshot when added
+        tracing::info!("Making initial proposals to advance log...");
+        for i in 1..=20 {
+            let cmd = format!("SET bootstrap{} value{}", i, i);
+            cluster.nodes[0].propose(cmd.as_bytes().to_vec()).await
+                .expect("Failed to propose");
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        tracing::info!("✓ Leader log advanced");
+
+        // Now add peers as learners first (they can have empty logs)
+        // Then promote to voters once caught up
+        tracing::info!("Adding node 2 as learner");
+        cluster.add_learner(2).await.expect("Failed to add learner 2");
+        cluster.nodes[1].start().await.expect("Failed to start learner 2");
+        tokio::time::sleep(Duration::from_secs(3)).await; // Give more time for network setup
+
+        tracing::info!("Adding node 3 as learner");
+        cluster.add_learner(3).await.expect("Failed to add learner 3");
+        cluster.nodes[2].start().await.expect("Failed to start learner 3");
+        tokio::time::sleep(Duration::from_secs(3)).await; // Give more time for network setup
+
+        // Make more proposals for learners to catch up on
+        tracing::info!("Making proposals for learners to replicate...");
+        for i in 1..=10 {
+            let cmd = format!("SET learner_catchup{} value{}", i, i);
+            cluster.nodes[0].propose(cmd.as_bytes().to_vec()).await
+                .expect("Failed to propose");
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        tokio::time::sleep(Duration::from_secs(2)).await;
+
+        // Wait for learners to catch up
+        for node_id in 2..=3 {
+            let start = std::time::Instant::now();
+            loop {
+                if start.elapsed() > Duration::from_secs(15) {
+                    panic!("Learner {} did not catch up after 15s", node_id);
+                }
+                if cluster.is_learner_caught_up(node_id).await.unwrap_or(false) {
+                    tracing::info!("✓ Learner {} caught up", node_id);
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
+        }
+
+        // Extra stabilization time
+        tokio::time::sleep(Duration::from_secs(2)).await;
+
+        // Promote learners to voters (one at a time with enough time between)
+        tracing::info!("Promoting learner 2 to voter");
+        cluster.promote_learner(2).await.expect("Failed to promote learner 2");
+        tokio::time::sleep(Duration::from_secs(3)).await; // Give cluster time to stabilize
+
+        tracing::info!("Promoting learner 3 to voter");
+        cluster.promote_learner(3).await.expect("Failed to promote learner 3");
+        tokio::time::sleep(Duration::from_secs(3)).await; // Give cluster time to stabilize
+
+        tracing::info!("✓ All nodes added as voters: [1, 2, 3]");
+
+        // Make some more proposals to ensure cluster is working
         for i in 1..=10 {
             let cmd = format!("SET key{} value{}", i, i);
-            cluster.nodes[leader_idx].propose(cmd.as_bytes().to_vec()).await.ok();
+            cluster.nodes[0].propose(cmd.as_bytes().to_vec()).await.ok();
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
 
         tokio::time::sleep(Duration::from_secs(1)).await;
-        tracing::info!("✓ Made initial proposals");
+        tracing::info!("✓ Made additional proposals");
 
-        // Kill the leader
-        tracing::info!("Killing leader (node {})", leader_id);
-        cluster.crash_node(leader_id).expect("Failed to crash leader");
+        // Kill the leader (node 1)
+        tracing::info!("Killing leader (node 1)");
+        cluster.crash_node(1).expect("Failed to crash leader");
 
         // Wait for automatic election
         tracing::info!("Waiting for automatic leader election...");
@@ -83,7 +141,6 @@ fn test_automatic_election_after_leader_failure() {
 }
 
 #[test]
-#[ignore = "Automatic elections not working - related to test_automatic_election_after_leader_failure issue."]
 fn test_no_election_with_healthy_leader() {
     let test_runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(4)
@@ -147,7 +204,6 @@ fn test_no_election_with_healthy_leader() {
 }
 
 #[test]
-#[ignore = "Automatic elections not working - related to test_automatic_election_after_leader_failure issue."]
 fn test_rapid_leader_failures() {
     let test_runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(6)
@@ -172,6 +228,18 @@ fn test_rapid_leader_failures() {
 
         // Elect initial leader
         cluster.nodes[0].campaign().await.expect("Campaign failed");
+        tokio::time::sleep(Duration::from_secs(2)).await;
+
+        // Add peers via ConfChange (following TiKV pattern)
+        for peer_id in 2..=5 {
+            tracing::info!("Adding peer {} via ConfChange", peer_id);
+            let addr = format!("127.0.0.1:{}", 8220 + peer_id - 1).parse().unwrap();
+            cluster.nodes[0].get_node().unwrap()
+                .add_peer(peer_id, addr).await
+                .expect(&format!("Failed to add peer {}", peer_id));
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+        tracing::info!("✓ All nodes added as voters: [1, 2, 3, 4, 5]");
         tokio::time::sleep(Duration::from_secs(2)).await;
 
         // Make some initial proposals
