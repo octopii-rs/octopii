@@ -47,16 +47,14 @@ impl WriteAheadLog {
             FsyncSchedule::Milliseconds(flush_interval.as_millis() as u64)
         };
 
-        // Create Walrus instance in blocking context
-        let walrus = tokio::task::spawn_blocking(move || {
+        // Create Walrus instance using block_in_place (enforces hard thread cap)
+        let walrus = tokio::task::block_in_place(|| {
             wal::Walrus::with_consistency_and_schedule_for_key(
                 &key,
                 wal::ReadConsistency::StrictlyAtOnce,
                 schedule,
             )
         })
-        .await
-        .map_err(|e| OctopiiError::Wal(format!("Failed to spawn Walrus task: {}", e)))?
         .map_err(|e| OctopiiError::Wal(format!("Failed to create Walrus: {}", e)))?;
 
         Ok(Self {
@@ -74,11 +72,10 @@ impl WriteAheadLog {
         let topic = self.topic.clone();
         let data_vec = data.to_vec();
 
-        tokio::task::spawn_blocking(move || {
+        // Use block_in_place for hard thread cap (Walrus ops are non-blocking)
+        tokio::task::block_in_place(|| {
             walrus.append_for_topic(&topic, &data_vec)
         })
-        .await
-        .map_err(|e| OctopiiError::Wal(format!("Failed to spawn append task: {}", e)))?
         .map_err(|e| OctopiiError::Wal(format!("Failed to append: {}", e)))?;
 
         // Increment write counter for read_all tracking
@@ -104,7 +101,8 @@ impl WriteAheadLog {
         let walrus = self.walrus.clone();
         let topic = self.topic.clone();
 
-        tokio::task::spawn_blocking(move || {
+        // Use block_in_place for hard thread cap (Walrus ops are non-blocking)
+        tokio::task::block_in_place(move || {
             let mut all_entries = Vec::new();
 
             // Use batch_read to efficiently read all entries
@@ -130,8 +128,6 @@ impl WriteAheadLog {
 
             Ok(all_entries)
         })
-        .await
-        .map_err(|e| OctopiiError::Wal(format!("Failed to spawn read task: {}", e)))?
     }
 }
 
@@ -139,7 +135,7 @@ impl WriteAheadLog {
 mod tests {
     use super::*;
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_wal_write_and_read() {
         let temp_dir = std::env::temp_dir();
         let wal_path = temp_dir.join("test_walrus_basic.log");

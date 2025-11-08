@@ -16,7 +16,7 @@ async fn create_test_file(path: &std::path::Path, size_mb: usize) {
     tokio::fs::write(path, &data).await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_mixed_file_and_memory_transfers() {
     let addr1: SocketAddr = "127.0.0.1:0".parse().unwrap();
     let addr2: SocketAddr = "127.0.0.1:0".parse().unwrap();
@@ -107,7 +107,7 @@ async fn test_mixed_file_and_memory_transfers() {
     transport2.close();
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_varying_chunk_sizes_parallel() {
     let addr1: SocketAddr = "127.0.0.1:0".parse().unwrap();
     let addr2: SocketAddr = "127.0.0.1:0".parse().unwrap();
@@ -190,7 +190,7 @@ async fn test_varying_chunk_sizes_parallel() {
     transport2.close();
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_rapid_small_chunks() {
     let addr1: SocketAddr = "127.0.0.1:0".parse().unwrap();
     let addr2: SocketAddr = "127.0.0.1:0".parse().unwrap();
@@ -264,7 +264,7 @@ async fn test_rapid_small_chunks() {
     transport2.close();
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_interleaved_rpc_and_chunk_transfer() {
     let addr1: SocketAddr = "127.0.0.1:0".parse().unwrap();
     let addr2: SocketAddr = "127.0.0.1:0".parse().unwrap();
