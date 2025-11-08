@@ -48,10 +48,10 @@ fn test_three_node_cluster_basic() {
         is_initial_leader: false,
     };
 
-    // Create nodes
-    let node1 = OctopiiNode::new(config1).expect("Failed to create node1");
-    let node2 = OctopiiNode::new(config2).expect("Failed to create node2");
-    let node3 = OctopiiNode::new(config3).expect("Failed to create node3");
+    // Create nodes using blocking API (backward compatible)
+    let node1 = OctopiiNode::new_blocking(config1).expect("Failed to create node1");
+    let node2 = OctopiiNode::new_blocking(config2).expect("Failed to create node2");
+    let node3 = OctopiiNode::new_blocking(config3).expect("Failed to create node3");
 
     // Create test runtime separate from octopii runtime
     let test_runtime = tokio::runtime::Builder::new_multi_thread()
@@ -127,7 +127,7 @@ fn test_leader_election() {
         is_initial_leader: true,
     };
 
-    let node = OctopiiNode::new(config).expect("Failed to create node");
+    let node = OctopiiNode::new_blocking(config).expect("Failed to create node");
 
     // Create test runtime separate from octopii runtime
     let test_runtime = tokio::runtime::Builder::new_multi_thread()
