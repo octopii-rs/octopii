@@ -144,4 +144,37 @@ impl RaftNode {
         tracing::info!("Node {} starting election campaign", self.node_id);
         Ok(())
     }
+
+    /// Propose a configuration change (add/remove node)
+    pub async fn propose_conf_change(&self, context: Vec<u8>, cc: ConfChange) -> Result<()> {
+        let change_type = cc.get_change_type();
+        let node_id = cc.node_id;
+        let mut node = self.raw_node.write().await;
+        node.propose_conf_change(context, cc)?;
+        tracing::info!("Proposed ConfChange: {:?} for node {}",
+            change_type, node_id);
+        Ok(())
+    }
+
+    /// Apply a committed configuration change
+    pub async fn apply_conf_change(&self, cc: &ConfChange) -> Result<ConfState> {
+        let mut node = self.raw_node.write().await;
+        let conf_state = node.apply_conf_change(cc)?;
+        tracing::info!("Applied ConfChange: {:?} for node {}, new voters: {:?}",
+            cc.get_change_type(), cc.node_id, conf_state.voters);
+        Ok(conf_state)
+    }
+
+    /// Get current hard state
+    pub async fn hard_state(&self) -> HardState {
+        let node = self.raw_node.read().await;
+        node.raft.hard_state().clone()
+    }
+
+    /// Try to compact logs (threshold-based)
+    pub async fn try_compact_logs(&self, applied_index: u64, state_machine_data: Vec<u8>) -> Result<()> {
+        let node = self.raw_node.read().await;
+        node.store().compact_logs(applied_index, state_machine_data)?;
+        Ok(())
+    }
 }

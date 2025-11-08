@@ -11,6 +11,9 @@ const TOPIC_HARD_STATE: &str = "raft_hard_state";
 const TOPIC_CONF_STATE: &str = "raft_conf_state";
 const TOPIC_SNAPSHOT: &str = "raft_snapshot";
 
+// Log compaction threshold: create snapshot after this many entries
+const LOG_COMPACTION_THRESHOLD: u64 = 1000;
+
 // Serializable wrapper types for rkyv
 
 #[derive(Archive, Deserialize, Serialize, Debug, Clone)]
@@ -413,6 +416,57 @@ impl WalStorage {
         // Update in-memory cache
         let mut state = self.conf_state.write().unwrap();
         *state = cs;
+    }
+
+    /// Compact logs by creating a snapshot and trimming old entries
+    /// This prevents unbounded log growth and enables Walrus space reclamation
+    pub fn compact_logs(&self, applied_index: u64, state_machine_data: Vec<u8>) -> crate::error::Result<()> {
+        let entries = self.entries.read().unwrap();
+        let snapshot_metadata = self.snapshot.read().unwrap().get_metadata().clone();
+
+        // Check if we've accumulated enough entries since last snapshot
+        let entries_since_snapshot = applied_index.saturating_sub(snapshot_metadata.index);
+
+        if entries_since_snapshot < LOG_COMPACTION_THRESHOLD {
+            // Not enough entries accumulated, skip compaction
+            return Ok(());
+        }
+
+        drop(entries); // Release read lock before acquiring write locks
+
+        tracing::info!("Log compaction triggered: {} entries since last snapshot (threshold: {})",
+            entries_since_snapshot, LOG_COMPACTION_THRESHOLD);
+
+        // Create new snapshot at applied_index
+        let mut snapshot = Snapshot::default();
+        snapshot.data = Bytes::from(state_machine_data);
+
+        let metadata = snapshot.mut_metadata();
+        metadata.index = applied_index;
+
+        // Get current term from hard state
+        let hard_state = self.hard_state.read().unwrap();
+        metadata.term = hard_state.term;
+
+        // Get current conf state
+        let conf_state = self.conf_state.read().unwrap();
+        *metadata.mut_conf_state() = conf_state.clone();
+
+        // Persist snapshot to Walrus
+        self.apply_snapshot(snapshot.clone())?;
+
+        // Trim old entries from in-memory cache (keep entries after snapshot)
+        let mut entries_mut = self.entries.write().unwrap();
+        entries_mut.retain(|e| e.index > applied_index);
+
+        tracing::info!("✓ Log compaction complete: snapshot at index {}, {} entries retained",
+            applied_index, entries_mut.len());
+
+        // Note: Old log entries before snapshot are automatically reclaimable by Walrus
+        // because we use read_next(TOPIC_LOG, true) during recovery, which checkpoints
+        // the cursor. Next recovery will skip old entries, allowing Walrus to reclaim space.
+
+        Ok(())
     }
 }
 
