@@ -22,6 +22,7 @@ impl OctopiiRuntime {
     pub fn new(worker_threads: usize) -> Self {
         let runtime = Builder::new_multi_thread()
             .worker_threads(worker_threads)
+            .max_blocking_threads(worker_threads) // Limit blocking pool to match worker count
             .thread_name("octopii-worker")
             .enable_all()
             .build()
