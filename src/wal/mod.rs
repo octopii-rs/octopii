@@ -4,10 +4,15 @@ use crate::error::{OctopiiError, Result};
 use bytes::Bytes;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tokio::time::Duration;
 
 pub use wal::{FsyncSchedule, Walrus};
+
+// Global lock to serialize WAL creation when setting WALRUS_DATA_DIR
+// This prevents race conditions when multiple concurrent tests/nodes
+// try to create WALs with different data directories
+static WAL_CREATION_LOCK: Mutex<()> = Mutex::new(());
 
 /// Write-Ahead Log for durable storage
 ///
@@ -33,7 +38,10 @@ impl WriteAheadLog {
     /// `batch_size`: Not used in Walrus (Walrus manages batching internally)
     /// `flush_interval`: Converted to FsyncSchedule
     pub async fn new(path: PathBuf, _batch_size: usize, flush_interval: Duration) -> Result<Self> {
-        // Derive a key from the path
+        // Extract parent directory and filename from path
+        let parent_dir = path
+            .parent()
+            .ok_or_else(|| OctopiiError::Wal("Invalid WAL path: no parent directory".to_string()))?;
         let key = path
             .file_name()
             .and_then(|n| n.to_str())
@@ -47,13 +55,35 @@ impl WriteAheadLog {
             FsyncSchedule::Milliseconds(flush_interval.as_millis() as u64)
         };
 
+        // Set the WAL data directory for this instance
+        // We use a unique path that combines the parent directory and key
+        let full_wal_dir = parent_dir.join(&key);
+        std::fs::create_dir_all(&full_wal_dir)
+            .map_err(|e| OctopiiError::Wal(format!("Failed to create WAL directory: {}", e)))?;
+
+        let full_path_str = full_wal_dir.to_string_lossy().to_string();
+
         // Create Walrus instance using block_in_place (enforces hard thread cap)
-        let walrus = tokio::task::block_in_place(|| {
-            wal::Walrus::with_consistency_and_schedule_for_key(
-                &key,
+        // We use a global lock to prevent race conditions when setting WALRUS_DATA_DIR
+        let walrus = tokio::task::block_in_place(move || {
+            // Acquire lock to serialize WAL creation with env var setting
+            let _guard = WAL_CREATION_LOCK.lock().unwrap();
+
+            // Temporarily set WALRUS_DATA_DIR to point to our unique directory
+            std::env::set_var("WALRUS_DATA_DIR", &full_path_str);
+
+            // Create Walrus with a keyed instance for additional isolation
+            let result = wal::Walrus::with_consistency_and_schedule(
                 wal::ReadConsistency::StrictlyAtOnce,
                 schedule,
-            )
+            );
+
+            // Remove the environment variable after Walrus reads it
+            std::env::remove_var("WALRUS_DATA_DIR");
+
+            // Lock is automatically released when _guard is dropped
+
+            result
         })
         .map_err(|e| OctopiiError::Wal(format!("Failed to create Walrus: {}", e)))?;
 
