@@ -40,14 +40,12 @@ impl RaftNode {
             storage.apply_snapshot(snapshot)?;
 
             tracing::info!(
-                "Bootstrapped Raft LEADER node {} (will add {} peers via ConfChange)",
-                node_id,
-                _peers.len()
+                "Bootstrapped Raft LEADER node {} (will add peers via ConfChange)",
+                node_id
             );
         } else {
             // Followers start with minimal empty state
             // They will initialize when receiving first message from leader (lazy initialization)
-            // This is critical - followers should NOT have voters pre-configured!
             tracing::info!(
                 "Created Raft FOLLOWER node {} (will initialize from leader)",
                 node_id
