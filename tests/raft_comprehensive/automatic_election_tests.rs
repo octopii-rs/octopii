@@ -21,15 +21,13 @@ fn test_automatic_election_after_leader_failure() {
 
         tracing::info!("=== Starting automatic election after leader failure test ===");
 
-        // Create cluster with all 3 nodes, but only leader will start initially
-        // Followers will be added via ConfChange (matching TiKV pattern)
+        // Create cluster with all 3 nodes
+        // Following raft-rs five_mem_node pattern: start ALL nodes first,
+        // then add them to the Raft group via ConfChange
         let mut cluster = TestCluster::new(vec![1, 2, 3], 8200).await;
-        // Only start the leader (node 1)
-        cluster.nodes[0]
-            .start()
-            .await
-            .expect("Failed to start leader");
 
+        // Start ALL nodes (leader + followers)
+        cluster.start_all().await.expect("Failed to start cluster");
         tokio::time::sleep(Duration::from_millis(500)).await;
 
         // Leader campaigns (node 1 is configured as initial leader)
@@ -42,22 +40,8 @@ fn test_automatic_election_after_leader_failure() {
         );
         tracing::info!("✓ Node 1 is leader");
 
-        // CRITICAL: Make proposals FIRST to advance the leader's log
-        // This ensures followers will receive a snapshot when added
-        tracing::info!("Making initial proposals to advance log...");
-        for i in 1..=20 {
-            let cmd = format!("SET bootstrap{} value{}", i, i);
-            cluster.nodes[0]
-                .propose(cmd.as_bytes().to_vec())
-                .await
-                .expect("Failed to propose");
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
-        tokio::time::sleep(Duration::from_secs(2)).await;
-        tracing::info!("✓ Leader log advanced");
-
-        // Add peers as voters directly (matching TiKV five_mem_node pattern)
-        // This should trigger proper snapshot/entry replication from raft-rs
+        // Add peers as voters via ConfChange (nodes are already running)
+        // This matches raft-rs five_mem_node pattern
         tracing::info!("Adding node 2 as voter");
         let addr2 = format!("127.0.0.1:{}", 8200 + 1).parse().unwrap();
         cluster.nodes[0]
@@ -66,11 +50,7 @@ fn test_automatic_election_after_leader_failure() {
             .add_peer(2, addr2)
             .await
             .expect("Failed to add peer 2");
-        cluster.nodes[1]
-            .start()
-            .await
-            .expect("Failed to start node 2");
-        tokio::time::sleep(Duration::from_secs(2)).await;
+        tokio::time::sleep(Duration::from_secs(1)).await;
 
         tracing::info!("Adding node 3 as voter");
         let addr3 = format!("127.0.0.1:{}", 8200 + 2).parse().unwrap();
@@ -80,11 +60,7 @@ fn test_automatic_election_after_leader_failure() {
             .add_peer(3, addr3)
             .await
             .expect("Failed to add peer 3");
-        cluster.nodes[2]
-            .start()
-            .await
-            .expect("Failed to start node 3");
-        tokio::time::sleep(Duration::from_secs(2)).await;
+        tokio::time::sleep(Duration::from_secs(1)).await;
 
         tracing::info!("✓ All nodes added as voters: [1, 2, 3]");
 
