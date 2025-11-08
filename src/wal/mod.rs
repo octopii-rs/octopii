@@ -20,7 +20,7 @@ pub use wal::{FsyncSchedule, Walrus};
 /// - Zero-copy I/O via mmap
 /// - Crash recovery
 pub struct WriteAheadLog {
-    walrus: Arc<Walrus>,
+    pub walrus: Arc<Walrus>,
     topic: String,
     offset_counter: Arc<AtomicU64>,
     write_counter: Arc<AtomicU64>, // Track actual writes for read_all
