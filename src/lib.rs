@@ -20,10 +20,10 @@ pub use runtime::OctopiiRuntime;
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_runtime_creation() {
+    #[tokio::test]
+    async fn test_runtime_creation() {
         let runtime = OctopiiRuntime::new(2);
-        let result = runtime.block_on(async { 42 });
+        let result = runtime.spawn(async { 42 }).await.unwrap();
         assert_eq!(result, 42);
     }
 }
