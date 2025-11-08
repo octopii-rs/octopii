@@ -21,16 +21,20 @@ fn test_automatic_election_after_leader_failure() {
 
         tracing::info!("=== Starting automatic election after leader failure test ===");
 
-        // Create cluster with all 3 nodes
-        // Following raft-rs five_mem_node pattern: start ALL nodes first,
-        // then add them to the Raft group via ConfChange
+        // NOTE: Unlike TiKV which can create stores without Raft groups,
+        // our architecture creates full RawNode instances immediately.
+        // So we CANNOT use the run_conf_change() pattern (1 peer → add others).
+        // Instead, we follow TiKV's run() pattern: bootstrap ALL nodes as peers from start.
+        // This is like TiKV's test_flashback and other multi-node tests.
+
+        // Create cluster with all 3 nodes as initial peers (like TiKV bootstrap_region)
         let mut cluster = TestCluster::new(vec![1, 2, 3], 8200).await;
 
-        // Start ALL nodes (leader + followers)
+        // Start all nodes - they're all part of the Raft group from the beginning
         cluster.start_all().await.expect("Failed to start cluster");
         tokio::time::sleep(Duration::from_millis(500)).await;
 
-        // Leader campaigns (node 1 is configured as initial leader)
+        // One node campaigns to become leader
         cluster.nodes[0].campaign().await.expect("Campaign failed");
         tokio::time::sleep(Duration::from_secs(2)).await;
 
@@ -38,31 +42,7 @@ fn test_automatic_election_after_leader_failure() {
             cluster.nodes[0].is_leader().await,
             "Node 1 should be leader"
         );
-        tracing::info!("✓ Node 1 is leader");
-
-        // Add peers as voters via ConfChange (nodes are already running)
-        // This matches raft-rs five_mem_node pattern
-        tracing::info!("Adding node 2 as voter");
-        let addr2 = format!("127.0.0.1:{}", 8200 + 1).parse().unwrap();
-        cluster.nodes[0]
-            .get_node()
-            .unwrap()
-            .add_peer(2, addr2)
-            .await
-            .expect("Failed to add peer 2");
-        tokio::time::sleep(Duration::from_secs(1)).await;
-
-        tracing::info!("Adding node 3 as voter");
-        let addr3 = format!("127.0.0.1:{}", 8200 + 2).parse().unwrap();
-        cluster.nodes[0]
-            .get_node()
-            .unwrap()
-            .add_peer(3, addr3)
-            .await
-            .expect("Failed to add peer 3");
-        tokio::time::sleep(Duration::from_secs(1)).await;
-
-        tracing::info!("✓ All nodes added as voters: [1, 2, 3]");
+        tracing::info!("✓ Node 1 is leader (3-node cluster ready)");
 
         // Make some more proposals to ensure cluster is working
         for i in 1..=10 {
