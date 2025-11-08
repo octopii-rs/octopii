@@ -53,6 +53,7 @@ impl RaftNode {
             id: node_id,
             election_tick: 10,
             heartbeat_tick: 3,
+            pre_vote: true,  // Enable pre-vote to prevent election storms
             ..Default::default()
         };
 
@@ -137,6 +138,12 @@ impl RaftNode {
         node.raft.state == raft::StateRole::Leader
     }
 
+    /// Check if the cluster has a leader
+    pub async fn has_leader(&self) -> bool {
+        let node = self.raw_node.read().await;
+        node.raft.leader_id != raft::INVALID_ID
+    }
+
     /// Campaign to become leader (triggers election)
     pub async fn campaign(&self) -> Result<()> {
         let mut node = self.raw_node.write().await;
@@ -176,5 +183,21 @@ impl RaftNode {
         let node = self.raw_node.read().await;
         node.store().compact_logs(applied_index, state_machine_data)?;
         Ok(())
+    }
+
+    /// Get progress information for a peer (used for learner promotion)
+    pub async fn peer_progress(&self, peer_id: u64) -> Option<(u64, u64)> {
+        let node = self.raw_node.read().await;
+        if let Some(progress) = node.raft.prs().get(peer_id) {
+            let leader_last_index = node.raft.raft_log.last_index();
+            Some((progress.matched, leader_last_index))
+        } else {
+            None
+        }
+    }
+
+    /// Expose raw_node for advanced operations
+    pub fn raw_node(&self) -> &Arc<RwLock<RawNode<WalStorage>>> {
+        &self.raw_node
     }
 }

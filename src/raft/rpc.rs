@@ -62,6 +62,37 @@ pub fn raft_message_to_rpc(msg: &Message) -> Option<RequestPayload> {
                 leader_commit: msg.commit,
             })
         }
+        MessageType::MsgSnapshot => {
+            // Access snapshot via SingularPtrField
+            if let Some(snapshot) = msg.snapshot.as_ref() {
+                tracing::info!(
+                    "Converting MsgSnapshot: from={}, to={}, term={}, snapshot_index={}, snapshot_term={}",
+                    msg.from,
+                    msg.to,
+                    msg.term,
+                    snapshot.get_metadata().index,
+                    snapshot.get_metadata().term
+                );
+
+                let metadata = snapshot.get_metadata();
+
+                // Serialize ConfState for transfer
+                let conf_state_bytes = protobuf::Message::write_to_bytes(metadata.get_conf_state())
+                    .unwrap_or_default();
+
+                Some(RequestPayload::RaftSnapshot {
+                    term: msg.term,
+                    leader_id: msg.from,
+                    snapshot_index: metadata.index,
+                    snapshot_term: metadata.term,
+                    snapshot_data: Bytes::copy_from_slice(&snapshot.data),
+                    conf_state_data: Bytes::from(conf_state_bytes),
+                })
+            } else {
+                tracing::warn!("MsgSnapshot has no snapshot data");
+                None
+            }
+        }
         _ => {
             tracing::warn!(
                 "Unsupported Raft message type for RPC: {:?}",
@@ -144,6 +175,50 @@ pub fn rpc_to_raft_message(_from: u64, to: u64, payload: &RequestPayload) -> Opt
 
             Some(msg)
         }
+        RequestPayload::RaftSnapshot {
+            term,
+            leader_id,
+            snapshot_index,
+            snapshot_term,
+            snapshot_data,
+            conf_state_data,
+        } => {
+            tracing::info!(
+                "Converting RPC RaftSnapshot to Raft: from={}, to={}, term={}, snapshot_index={}, size={}",
+                leader_id,
+                to,
+                term,
+                snapshot_index,
+                snapshot_data.len()
+            );
+
+            // Deserialize ConfState
+            let conf_state = match protobuf::Message::parse_from_bytes(conf_state_data) {
+                Ok(cs) => cs,
+                Err(e) => {
+                    tracing::error!("Failed to deserialize ConfState: {}", e);
+                    return None;
+                }
+            };
+
+            // Build snapshot
+            let mut snapshot = Snapshot::default();
+            snapshot.data = Bytes::copy_from_slice(snapshot_data);
+            let metadata = snapshot.mut_metadata();
+            metadata.index = *snapshot_index;
+            metadata.term = *snapshot_term;
+            *metadata.mut_conf_state() = conf_state;
+
+            // Build message
+            let mut msg = Message::default();
+            msg.set_msg_type(MessageType::MsgSnapshot);
+            msg.from = *leader_id;
+            msg.to = to;
+            msg.term = *term;
+            msg.snapshot = protobuf::SingularPtrField::some(snapshot);
+
+            Some(msg)
+        }
         _ => None,
     }
 }
@@ -177,6 +252,20 @@ pub fn raft_response_to_rpc(msg: &Message) -> Option<ResponsePayload> {
             Some(ResponsePayload::RequestVoteResponse {
                 term: msg.term,
                 vote_granted: !msg.reject,
+            })
+        }
+        MessageType::MsgSnapStatus => {
+            tracing::debug!(
+                "Converting MsgSnapStatus: from={}, to={}, term={}, reject={}",
+                msg.from,
+                msg.to,
+                msg.term,
+                msg.reject
+            );
+
+            Some(ResponsePayload::SnapshotResponse {
+                term: msg.term,
+                success: !msg.reject,
             })
         }
         _ => None,
@@ -224,6 +313,24 @@ pub fn rpc_response_to_raft(from: u64, to: u64, request_type: MessageType, paylo
             msg.to = to;
             msg.term = *term;
             msg.reject = !vote_granted;
+
+            Some(msg)
+        }
+        ResponsePayload::SnapshotResponse { term, success } => {
+            tracing::debug!(
+                "Converting RPC SnapshotResponse to Raft: from={}, to={}, term={}, success={}",
+                from,
+                to,
+                term,
+                success
+            );
+
+            let mut msg = Message::default();
+            msg.set_msg_type(MessageType::MsgSnapStatus);
+            msg.from = from;
+            msg.to = to;
+            msg.term = *term;
+            msg.reject = !success;
 
             Some(msg)
         }
