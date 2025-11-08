@@ -47,7 +47,10 @@ fn test_snapshot_creation_and_compaction() {
         tracing::info!("✓ Snapshot creation completed");
 
         // Verify cluster still operational
-        cluster.nodes[0].propose(b"SET final test".to_vec()).await.ok();
+        cluster.nodes[0]
+            .propose(b"SET final test".to_vec())
+            .await
+            .ok();
         tokio::time::sleep(Duration::from_secs(1)).await;
 
         cluster.shutdown_all();
@@ -95,7 +98,10 @@ fn test_new_node_catches_up_from_snapshot() {
         tracing::info!("Adding node 4 as learner (far behind)");
         cluster.add_learner(4).await.expect("Failed to add learner");
         let learner_idx = cluster.nodes.len() - 1;
-        cluster.nodes[learner_idx].start().await.expect("Failed to start learner");
+        cluster.nodes[learner_idx]
+            .start()
+            .await
+            .expect("Failed to start learner");
 
         // Wait for learner to catch up via snapshot
         tokio::time::sleep(Duration::from_secs(10)).await;

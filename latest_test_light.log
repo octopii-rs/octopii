@@ -1,0 +1,625 @@
+
+running 1 test
+[2m2025-11-08T21:54:08.992776Z[0m [32m INFO[0m [2mraft_comprehensive_test::automatic_election_tests[0m[2m:[0m === Starting automatic election after leader failure test ===
+[2m2025-11-08T21:54:08.999372Z[0m [32m INFO[0m [2moctopii::transport[0m[2m:[0m QUIC transport listening on 127.0.0.1:8200
+[walrus] new
+[alloc] init: created file=/var/folders/4p/xjzmpjd16bn9b6rhqw2kwwp80000gn/T/.tmpS1u0LX/raft_test_1_ThreadId(2)_1762638848994276000/node_1.wal/1762638849000, max_file_size=1048576000B, block_size=10485760B
+[recovery] scanning files: 1
+[recovery] file /var/folders/4p/xjzmpjd16bn9b6rhqw2kwwp80000gn/T/.tmpS1u0LX/raft_test_1_ThreadId(2)_1762638848994276000/node_1.wal/1762638849000
+[2m2025-11-08T21:54:09.023479Z[0m [32m INFO[0m [2moctopii::raft::storage[0m[2m:[0m Starting Raft state recovery from Walrus...
+[reader] read_next start: col=raft_hard_state, chain_len=0, idx=0, offset=0
+[reader] read_next start: col=raft_conf_state, chain_len=0, idx=0, offset=0
+[reader] read_next start: col=raft_snapshot, chain_len=0, idx=0, offset=0
+[2m2025-11-08T21:54:09.023785Z[0m [32m INFO[0m [2moctopii::raft::storage[0m[2m:[0m Recovering log entries (snapshot at index 0) using batch reads
+[2m2025-11-08T21:54:09.023859Z[0m [32m INFO[0m [2moctopii::raft::storage[0m[2m:[0m Raft state recovery complete
+[2m2025-11-08T21:54:09.023900Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Mapped peer 2 -> 127.0.0.1:8201
+[2m2025-11-08T21:54:09.023913Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Mapped peer 3 -> 127.0.0.1:8202
+[alloc] handout: block_id=1, file=/var/folders/4p/xjzmpjd16bn9b6rhqw2kwwp80000gn/T/.tmpS1u0LX/raft_test_1_ThreadId(2)_1762638848994276000/node_1.wal/1762638849000, offset=0, limit=10485760
+[writer] wrote: col=raft_snapshot, block_id=1, offset_before=0, bytes=136, offset_after=136
+[2m2025-11-08T21:54:09.024626Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Bootstrapped Raft LEADER node 1 (will add peers via ConfChange)
+[2m2025-11-08T21:54:09.025182Z[0m [32m INFO[0m [2moctopii::raft::state_machine[0m[2m:[0m Starting state machine recovery from Walrus...
+[reader] read_next start: col=state_machine_snapshot, chain_len=0, idx=0, offset=0
+[reader] read_next start: col=state_machine, chain_len=0, idx=0, offset=0
+[2m2025-11-08T21:54:09.025217Z[0m [32m INFO[0m [2moctopii::raft::state_machine[0m[2m:[0m No state machine entries to recover
+[2m2025-11-08T21:54:09.025303Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Octopii node 1 created: bind_addr=127.0.0.1:8200, peers=[127.0.0.1:8201, 127.0.0.1:8202]
+[2m2025-11-08T21:54:09.026329Z[0m [32m INFO[0m [2moctopii::transport[0m[2m:[0m QUIC transport listening on 127.0.0.1:8201
+[walrus] new
+[alloc] init: created file=/var/folders/4p/xjzmpjd16bn9b6rhqw2kwwp80000gn/T/.tmpparU2W/raft_test_2_ThreadId(2)_1762638849025615000/node_2.wal/1762638849026, max_file_size=1048576000B, block_size=10485760B
+[recovery] scanning files: 1
+[recovery] file /var/folders/4p/xjzmpjd16bn9b6rhqw2kwwp80000gn/T/.tmpparU2W/raft_test_2_ThreadId(2)_1762638849025615000/node_2.wal/1762638849026
+[2m2025-11-08T21:54:09.030897Z[0m [32m INFO[0m [2moctopii::raft::storage[0m[2m:[0m Starting Raft state recovery from Walrus...
+[reader] read_next start: col=raft_hard_state, chain_len=0, idx=0, offset=0
+[reader] read_next start: col=raft_conf_state, chain_len=0, idx=0, offset=0
+[reader] read_next start: col=raft_snapshot, chain_len=0, idx=0, offset=0
+[2m2025-11-08T21:54:09.030952Z[0m [32m INFO[0m [2moctopii::raft::storage[0m[2m:[0m Recovering log entries (snapshot at index 0) using batch reads
+[2m2025-11-08T21:54:09.030979Z[0m [32m INFO[0m [2moctopii::raft::storage[0m[2m:[0m Raft state recovery complete
+[2m2025-11-08T21:54:09.030995Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Mapped peer 1 -> 127.0.0.1:8200
+[2m2025-11-08T21:54:09.031007Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Mapped peer 3 -> 127.0.0.1:8202
+[2m2025-11-08T21:54:09.031025Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Created Raft FOLLOWER node 2 (will initialize from leader)
+[2m2025-11-08T21:54:09.031075Z[0m [32m INFO[0m [2moctopii::raft::state_machine[0m[2m:[0m Starting state machine recovery from Walrus...
+[reader] read_next start: col=state_machine_snapshot, chain_len=0, idx=0, offset=0
+[reader] read_next start: col=state_machine, chain_len=0, idx=0, offset=0
+[2m2025-11-08T21:54:09.031100Z[0m [32m INFO[0m [2moctopii::raft::state_machine[0m[2m:[0m No state machine entries to recover
+[2m2025-11-08T21:54:09.031121Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Octopii node 2 created: bind_addr=127.0.0.1:8201, peers=[127.0.0.1:8200, 127.0.0.1:8202]
+[2m2025-11-08T21:54:09.032176Z[0m [32m INFO[0m [2moctopii::transport[0m[2m:[0m QUIC transport listening on 127.0.0.1:8202
+[walrus] new
+[alloc] init: created file=/var/folders/4p/xjzmpjd16bn9b6rhqw2kwwp80000gn/T/.tmpT3re5r/raft_test_3_ThreadId(2)_1762638849031708000/node_3.wal/1762638849032, max_file_size=1048576000B, block_size=10485760B
+[recovery] scanning files: 1
+[recovery] file /var/folders/4p/xjzmpjd16bn9b6rhqw2kwwp80000gn/T/.tmpT3re5r/raft_test_3_ThreadId(2)_1762638849031708000/node_3.wal/1762638849032
+[2m2025-11-08T21:54:09.037082Z[0m [32m INFO[0m [2moctopii::raft::storage[0m[2m:[0m Starting Raft state recovery from Walrus...
+[reader] read_next start: col=raft_hard_state, chain_len=0, idx=0, offset=0
+[reader] read_next start: col=raft_conf_state, chain_len=0, idx=0, offset=0
+[reader] read_next start: col=raft_snapshot, chain_len=0, idx=0, offset=0
+[2m2025-11-08T21:54:09.037117Z[0m [32m INFO[0m [2moctopii::raft::storage[0m[2m:[0m Recovering log entries (snapshot at index 0) using batch reads
+[2m2025-11-08T21:54:09.037137Z[0m [32m INFO[0m [2moctopii::raft::storage[0m[2m:[0m Raft state recovery complete
+[2m2025-11-08T21:54:09.037150Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Mapped peer 1 -> 127.0.0.1:8200
+[2m2025-11-08T21:54:09.037160Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Mapped peer 2 -> 127.0.0.1:8201
+[2m2025-11-08T21:54:09.037170Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Created Raft FOLLOWER node 3 (will initialize from leader)
+[2m2025-11-08T21:54:09.037205Z[0m [32m INFO[0m [2moctopii::raft::state_machine[0m[2m:[0m Starting state machine recovery from Walrus...
+[reader] read_next start: col=state_machine_snapshot, chain_len=0, idx=0, offset=0
+[reader] read_next start: col=state_machine, chain_len=0, idx=0, offset=0
+[2m2025-11-08T21:54:09.037226Z[0m [32m INFO[0m [2moctopii::raft::state_machine[0m[2m:[0m No state machine entries to recover
+[2m2025-11-08T21:54:09.037245Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Octopii node 3 created: bind_addr=127.0.0.1:8202, peers=[127.0.0.1:8200, 127.0.0.1:8201]
+[2m2025-11-08T21:54:09.037322Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Starting Octopii node 1
+[2m2025-11-08T21:54:09.037353Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Setting up application RPC handler
+[2m2025-11-08T21:54:09.037395Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Spawning network acceptor for node 1
+[2m2025-11-08T21:54:09.037502Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Spawning Raft ticker (100ms interval) with automatic leader election
+[2m2025-11-08T21:54:09.037526Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Spawning Raft ready handler
+[flush] scheduling 1 paths
+[2m2025-11-08T21:54:09.539739Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 1 starting election campaign
+[2m2025-11-08T21:54:09.539885Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 1 ready() available
+[2m2025-11-08T21:54:09.540041Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m [Node 1] Raft ready: has 0 messages, 0 committed entries, 1 new entries, snapshot: false
+[alloc] handout: block_id=2, file=/var/folders/4p/xjzmpjd16bn9b6rhqw2kwwp80000gn/T/.tmpS1u0LX/raft_test_1_ThreadId(2)_1762638848994276000/node_1.wal/1762638849000, offset=10485760, limit=10485760
+[writer] wrote: col=raft_hard_state, block_id=2, offset_before=0, bytes=88, offset_after=88
+[2m2025-11-08T21:54:09.540635Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m [Node 1] Persisting 1 new entries to storage
+[2m2025-11-08T21:54:09.540725Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m LightReady: 1 committed entries, 0 messages
+[flush] scheduling 1 paths
+[2m2025-11-08T21:54:11.541520Z[0m [32m INFO[0m [2mraft_comprehensive_test::automatic_election_tests[0m[2m:[0m ✓ Node 1 is leader
+[2m2025-11-08T21:54:11.541584Z[0m [32m INFO[0m [2mraft_comprehensive_test::automatic_election_tests[0m[2m:[0m Making initial proposals to advance log...
+[2m2025-11-08T21:54:11.541707Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Proposing command to Raft: 21 bytes
+[2m2025-11-08T21:54:11.550506Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 1 ready() available
+[2m2025-11-08T21:54:11.550580Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m [Node 1] Raft ready: has 0 messages, 0 committed entries, 1 new entries, snapshot: false
+[2m2025-11-08T21:54:11.550621Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m [Node 1] Persisting 1 new entries to storage
+[2m2025-11-08T21:54:11.550747Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m LightReady: 1 committed entries, 0 messages
+[2m2025-11-08T21:54:11.550781Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Applying committed entry: index=3, term=2, 21 bytes
+[alloc] handout: block_id=3, file=/var/folders/4p/xjzmpjd16bn9b6rhqw2kwwp80000gn/T/.tmpS1u0LX/raft_test_1_ThreadId(2)_1762638848994276000/node_1.wal/1762638849000, offset=20971520, limit=10485760
+[writer] wrote: col=state_machine, block_id=3, offset_before=0, bytes=96, offset_after=96
+[2m2025-11-08T21:54:11.551203Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Entry applied successfully: b"OK"
+[2m2025-11-08T21:54:11.602126Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Proposing command to Raft: 21 bytes
+[2m2025-11-08T21:54:11.609991Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 1 ready() available
+[2m2025-11-08T21:54:11.610042Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m [Node 1] Raft ready: has 0 messages, 0 committed entries, 1 new entries, snapshot: false
+[2m2025-11-08T21:54:11.610074Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m [Node 1] Persisting 1 new entries to storage
+[2m2025-11-08T21:54:11.610137Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m LightReady: 1 committed entries, 0 messages
+[2m2025-11-08T21:54:11.610161Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Applying committed entry: index=4, term=2, 21 bytes
+[writer] wrote: col=state_machine, block_id=3, offset_before=96, bytes=96, offset_after=192
+[2m2025-11-08T21:54:11.610321Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Entry applied successfully: b"OK"
+[flush] scheduling 1 paths
+[2m2025-11-08T21:54:11.660988Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Proposing command to Raft: 21 bytes
+[2m2025-11-08T21:54:11.669214Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 1 ready() available
+[2m2025-11-08T21:54:11.669284Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m [Node 1] Raft ready: has 0 messages, 0 committed entries, 1 new entries, snapshot: false
+[2m2025-11-08T21:54:11.669447Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m [Node 1] Persisting 1 new entries to storage
+[2m2025-11-08T21:54:11.669537Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m LightReady: 1 committed entries, 0 messages
+[2m2025-11-08T21:54:11.669565Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Applying committed entry: index=5, term=2, 21 bytes
+[writer] wrote: col=state_machine, block_id=3, offset_before=192, bytes=96, offset_after=288
+[2m2025-11-08T21:54:11.669867Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Entry applied successfully: b"OK"
+[2m2025-11-08T21:54:11.721015Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Proposing command to Raft: 21 bytes
+[2m2025-11-08T21:54:11.730048Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 1 ready() available
+[2m2025-11-08T21:54:11.730112Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m [Node 1] Raft ready: has 0 messages, 0 committed entries, 1 new entries, snapshot: false
+[2m2025-11-08T21:54:11.730126Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m [Node 1] Persisting 1 new entries to storage
+[2m2025-11-08T21:54:11.730184Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m LightReady: 1 committed entries, 0 messages
+[2m2025-11-08T21:54:11.730209Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Applying committed entry: index=6, term=2, 21 bytes
+[writer] wrote: col=state_machine, block_id=3, offset_before=288, bytes=96, offset_after=384
+[2m2025-11-08T21:54:11.730459Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Entry applied successfully: b"OK"
+[flush] scheduling 1 paths
+[2m2025-11-08T21:54:11.780767Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Proposing command to Raft: 21 bytes
+[2m2025-11-08T21:54:11.789841Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 1 ready() available
+[2m2025-11-08T21:54:11.789937Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m [Node 1] Raft ready: has 0 messages, 0 committed entries, 1 new entries, snapshot: false
+[2m2025-11-08T21:54:11.789962Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m [Node 1] Persisting 1 new entries to storage
+[2m2025-11-08T21:54:11.790060Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m LightReady: 1 committed entries, 0 messages
+[2m2025-11-08T21:54:11.790085Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Applying committed entry: index=7, term=2, 21 bytes
+[writer] wrote: col=state_machine, block_id=3, offset_before=384, bytes=96, offset_after=480
+[2m2025-11-08T21:54:11.790330Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Entry applied successfully: b"OK"
+[flush] scheduling 1 paths
+[2m2025-11-08T21:54:11.841831Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Proposing command to Raft: 21 bytes
+[2m2025-11-08T21:54:11.849831Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 1 ready() available
+[2m2025-11-08T21:54:11.849911Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m [Node 1] Raft ready: has 0 messages, 0 committed entries, 1 new entries, snapshot: false
+[2m2025-11-08T21:54:11.849986Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m [Node 1] Persisting 1 new entries to storage
+[2m2025-11-08T21:54:11.850076Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m LightReady: 1 committed entries, 0 messages
+[2m2025-11-08T21:54:11.850088Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Applying committed entry: index=8, term=2, 21 bytes
+[writer] wrote: col=state_machine, block_id=3, offset_before=480, bytes=96, offset_after=576
+[2m2025-11-08T21:54:11.850385Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Entry applied successfully: b"OK"
+[2m2025-11-08T21:54:11.901353Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Proposing command to Raft: 21 bytes
+[2m2025-11-08T21:54:11.910401Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 1 ready() available
+[2m2025-11-08T21:54:11.910482Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m [Node 1] Raft ready: has 0 messages, 0 committed entries, 1 new entries, snapshot: false
+[2m2025-11-08T21:54:11.910499Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m [Node 1] Persisting 1 new entries to storage
+[2m2025-11-08T21:54:11.910557Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m LightReady: 1 committed entries, 0 messages
+[2m2025-11-08T21:54:11.910570Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Applying committed entry: index=9, term=2, 21 bytes
+[writer] wrote: col=state_machine, block_id=3, offset_before=576, bytes=96, offset_after=672
+[2m2025-11-08T21:54:11.910767Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Entry applied successfully: b"OK"
+[flush] scheduling 1 paths
+[2m2025-11-08T21:54:11.962329Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Proposing command to Raft: 21 bytes
+[2m2025-11-08T21:54:11.970049Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 1 ready() available
+[2m2025-11-08T21:54:11.970130Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m [Node 1] Raft ready: has 0 messages, 0 committed entries, 1 new entries, snapshot: false
+[2m2025-11-08T21:54:11.970146Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m [Node 1] Persisting 1 new entries to storage
+[2m2025-11-08T21:54:11.970207Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m LightReady: 1 committed entries, 0 messages
+[2m2025-11-08T21:54:11.970218Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Applying committed entry: index=10, term=2, 21 bytes
+[writer] wrote: col=state_machine, block_id=3, offset_before=672, bytes=96, offset_after=768
+[2m2025-11-08T21:54:11.970416Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Entry applied successfully: b"OK"
+[2m2025-11-08T21:54:12.021824Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Proposing command to Raft: 21 bytes
+[2m2025-11-08T21:54:12.029270Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 1 ready() available
+[2m2025-11-08T21:54:12.029360Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m [Node 1] Raft ready: has 0 messages, 0 committed entries, 1 new entries, snapshot: false
+[2m2025-11-08T21:54:12.029393Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m [Node 1] Persisting 1 new entries to storage
+[2m2025-11-08T21:54:12.029482Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m LightReady: 1 committed entries, 0 messages
+[2m2025-11-08T21:54:12.029512Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Applying committed entry: index=11, term=2, 21 bytes
+[writer] wrote: col=state_machine, block_id=3, offset_before=768, bytes=96, offset_after=864
+[2m2025-11-08T21:54:12.029787Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Entry applied successfully: b"OK"
+[flush] scheduling 1 paths
+[2m2025-11-08T21:54:12.080934Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Proposing command to Raft: 23 bytes
+[2m2025-11-08T21:54:12.089978Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 1 ready() available
+[2m2025-11-08T21:54:12.090048Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m [Node 1] Raft ready: has 0 messages, 0 committed entries, 1 new entries, snapshot: false
+[2m2025-11-08T21:54:12.090078Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m [Node 1] Persisting 1 new entries to storage
+[2m2025-11-08T21:54:12.090138Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m LightReady: 1 committed entries, 0 messages
+[2m2025-11-08T21:54:12.090163Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Applying committed entry: index=12, term=2, 23 bytes
+[writer] wrote: col=state_machine, block_id=3, offset_before=864, bytes=100, offset_after=964
+[2m2025-11-08T21:54:12.090352Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Entry applied successfully: b"OK"
+[2m2025-11-08T21:54:12.141025Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Proposing command to Raft: 23 bytes
+[2m2025-11-08T21:54:12.150129Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 1 ready() available
+[2m2025-11-08T21:54:12.150195Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m [Node 1] Raft ready: has 0 messages, 0 committed entries, 1 new entries, snapshot: false
+[2m2025-11-08T21:54:12.150228Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m [Node 1] Persisting 1 new entries to storage
+[2m2025-11-08T21:54:12.150305Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m LightReady: 1 committed entries, 0 messages
+[2m2025-11-08T21:54:12.150333Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Applying committed entry: index=13, term=2, 23 bytes
+[writer] wrote: col=state_machine, block_id=3, offset_before=964, bytes=100, offset_after=1064
+[2m2025-11-08T21:54:12.150542Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Entry applied successfully: b"OK"
+[flush] scheduling 1 paths
+[2m2025-11-08T21:54:12.202308Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Proposing command to Raft: 23 bytes
+[2m2025-11-08T21:54:12.210193Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 1 ready() available
+[2m2025-11-08T21:54:12.210276Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m [Node 1] Raft ready: has 0 messages, 0 committed entries, 1 new entries, snapshot: false
+[2m2025-11-08T21:54:12.210306Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m [Node 1] Persisting 1 new entries to storage
+[2m2025-11-08T21:54:12.210401Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m LightReady: 1 committed entries, 0 messages
+[2m2025-11-08T21:54:12.210429Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Applying committed entry: index=14, term=2, 23 bytes
+[writer] wrote: col=state_machine, block_id=3, offset_before=1064, bytes=100, offset_after=1164
+[2m2025-11-08T21:54:12.210614Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Entry applied successfully: b"OK"
+[2m2025-11-08T21:54:12.262941Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Proposing command to Raft: 23 bytes
+[2m2025-11-08T21:54:12.269737Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 1 ready() available
+[2m2025-11-08T21:54:12.269818Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m [Node 1] Raft ready: has 0 messages, 0 committed entries, 1 new entries, snapshot: false
+[2m2025-11-08T21:54:12.269905Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m [Node 1] Persisting 1 new entries to storage
+[2m2025-11-08T21:54:12.270019Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m LightReady: 1 committed entries, 0 messages
+[2m2025-11-08T21:54:12.270052Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Applying committed entry: index=15, term=2, 23 bytes
+[writer] wrote: col=state_machine, block_id=3, offset_before=1164, bytes=100, offset_after=1264
+[2m2025-11-08T21:54:12.270315Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Entry applied successfully: b"OK"
+[flush] scheduling 1 paths
+[2m2025-11-08T21:54:12.321742Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Proposing command to Raft: 23 bytes
+[2m2025-11-08T21:54:12.329638Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 1 ready() available
+[2m2025-11-08T21:54:12.329722Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m [Node 1] Raft ready: has 0 messages, 0 committed entries, 1 new entries, snapshot: false
+[2m2025-11-08T21:54:12.329759Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m [Node 1] Persisting 1 new entries to storage
+[2m2025-11-08T21:54:12.329853Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m LightReady: 1 committed entries, 0 messages
+[2m2025-11-08T21:54:12.329882Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Applying committed entry: index=16, term=2, 23 bytes
+[writer] wrote: col=state_machine, block_id=3, offset_before=1264, bytes=100, offset_after=1364
+[2m2025-11-08T21:54:12.330223Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Entry applied successfully: b"OK"
+[flush] scheduling 1 paths
+[2m2025-11-08T21:54:12.381319Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Proposing command to Raft: 23 bytes
+[2m2025-11-08T21:54:12.389329Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 1 ready() available
+[2m2025-11-08T21:54:12.389415Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m [Node 1] Raft ready: has 0 messages, 0 committed entries, 1 new entries, snapshot: false
+[2m2025-11-08T21:54:12.389446Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m [Node 1] Persisting 1 new entries to storage
+[2m2025-11-08T21:54:12.389537Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m LightReady: 1 committed entries, 0 messages
+[2m2025-11-08T21:54:12.389563Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Applying committed entry: index=17, term=2, 23 bytes
+[writer] wrote: col=state_machine, block_id=3, offset_before=1364, bytes=100, offset_after=1464
+[2m2025-11-08T21:54:12.389828Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Entry applied successfully: b"OK"
+[2m2025-11-08T21:54:12.441166Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Proposing command to Raft: 23 bytes
+[2m2025-11-08T21:54:12.449060Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 1 ready() available
+[2m2025-11-08T21:54:12.449128Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m [Node 1] Raft ready: has 0 messages, 0 committed entries, 1 new entries, snapshot: false
+[2m2025-11-08T21:54:12.449164Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m [Node 1] Persisting 1 new entries to storage
+[2m2025-11-08T21:54:12.449250Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m LightReady: 1 committed entries, 0 messages
+[2m2025-11-08T21:54:12.449277Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Applying committed entry: index=18, term=2, 23 bytes
+[writer] wrote: col=state_machine, block_id=3, offset_before=1464, bytes=100, offset_after=1564
+[2m2025-11-08T21:54:12.449501Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Entry applied successfully: b"OK"
+[flush] scheduling 1 paths
+[2m2025-11-08T21:54:12.500091Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Proposing command to Raft: 23 bytes
+[2m2025-11-08T21:54:12.509847Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 1 ready() available
+[2m2025-11-08T21:54:12.509907Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m [Node 1] Raft ready: has 0 messages, 0 committed entries, 1 new entries, snapshot: false
+[2m2025-11-08T21:54:12.509942Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m [Node 1] Persisting 1 new entries to storage
+[2m2025-11-08T21:54:12.510023Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m LightReady: 1 committed entries, 0 messages
+[2m2025-11-08T21:54:12.510052Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Applying committed entry: index=19, term=2, 23 bytes
+[writer] wrote: col=state_machine, block_id=3, offset_before=1564, bytes=100, offset_after=1664
+[2m2025-11-08T21:54:12.510278Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Entry applied successfully: b"OK"
+[2m2025-11-08T21:54:12.561529Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Proposing command to Raft: 23 bytes
+[2m2025-11-08T21:54:12.570540Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 1 ready() available
+[2m2025-11-08T21:54:12.570583Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m [Node 1] Raft ready: has 0 messages, 0 committed entries, 1 new entries, snapshot: false
+[2m2025-11-08T21:54:12.570601Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m [Node 1] Persisting 1 new entries to storage
+[2m2025-11-08T21:54:12.570649Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m LightReady: 1 committed entries, 0 messages
+[2m2025-11-08T21:54:12.570665Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Applying committed entry: index=20, term=2, 23 bytes
+[writer] wrote: col=state_machine, block_id=3, offset_before=1664, bytes=100, offset_after=1764
+[2m2025-11-08T21:54:12.570810Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Entry applied successfully: b"OK"
+[flush] scheduling 1 paths
+[2m2025-11-08T21:54:12.622845Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Proposing command to Raft: 23 bytes
+[2m2025-11-08T21:54:12.629583Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 1 ready() available
+[2m2025-11-08T21:54:12.629642Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m [Node 1] Raft ready: has 0 messages, 0 committed entries, 1 new entries, snapshot: false
+[2m2025-11-08T21:54:12.629676Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m [Node 1] Persisting 1 new entries to storage
+[2m2025-11-08T21:54:12.629750Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m LightReady: 1 committed entries, 0 messages
+[2m2025-11-08T21:54:12.629775Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Applying committed entry: index=21, term=2, 23 bytes
+[writer] wrote: col=state_machine, block_id=3, offset_before=1764, bytes=100, offset_after=1864
+[2m2025-11-08T21:54:12.629996Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Entry applied successfully: b"OK"
+[2m2025-11-08T21:54:12.681499Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Proposing command to Raft: 23 bytes
+[2m2025-11-08T21:54:12.690509Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 1 ready() available
+[2m2025-11-08T21:54:12.690550Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m [Node 1] Raft ready: has 0 messages, 0 committed entries, 1 new entries, snapshot: false
+[2m2025-11-08T21:54:12.690603Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m [Node 1] Persisting 1 new entries to storage
+[2m2025-11-08T21:54:12.690647Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m LightReady: 1 committed entries, 0 messages
+[2m2025-11-08T21:54:12.690662Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Applying committed entry: index=22, term=2, 23 bytes
+[writer] wrote: col=state_machine, block_id=3, offset_before=1864, bytes=100, offset_after=1964
+[2m2025-11-08T21:54:12.690777Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Entry applied successfully: b"OK"
+[flush] scheduling 1 paths
+[2m2025-11-08T21:54:14.744956Z[0m [32m INFO[0m [2mraft_comprehensive_test::automatic_election_tests[0m[2m:[0m ✓ Leader log advanced
+[2m2025-11-08T21:54:14.745074Z[0m [32m INFO[0m [2mraft_comprehensive_test::automatic_election_tests[0m[2m:[0m Adding node 2 as voter
+[2m2025-11-08T21:54:14.745106Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Adding peer 2 at 127.0.0.1:8201
+[2m2025-11-08T21:54:14.745324Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Proposed ConfChange: AddNode for node 2
+[2m2025-11-08T21:54:14.745349Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Proposed AddNode for peer 2
+[2m2025-11-08T21:54:14.749462Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 1 ready() available
+[2m2025-11-08T21:54:14.749504Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m [Node 1] Raft ready: has 0 messages, 0 committed entries, 1 new entries, snapshot: false
+[2m2025-11-08T21:54:14.749516Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m [Node 1] Persisting 1 new entries to storage
+[2m2025-11-08T21:54:14.749560Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m LightReady: 1 committed entries, 0 messages
+[2m2025-11-08T21:54:14.749575Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Applying ConfChange entry: index=23, term=2
+[2m2025-11-08T21:54:14.749631Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Applied ConfChange: AddNode for node 2, new voters: [1, 2]
+[2m2025-11-08T21:54:14.749647Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m ✓ ConfChange applied: AddNode for node 2, voters: [1, 2]
+[2m2025-11-08T21:54:14.749712Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m ✓ AddNode completed for peer 2, voters: [1, 2]
+[2m2025-11-08T21:54:14.749735Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Starting Octopii node 2
+[2m2025-11-08T21:54:14.749744Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Setting up application RPC handler
+[2m2025-11-08T21:54:14.749766Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Spawning network acceptor for node 2
+[2m2025-11-08T21:54:14.749806Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Spawning Raft ticker (100ms interval) with automatic leader election
+[2m2025-11-08T21:54:14.749831Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Spawning Raft ready handler
+[2m2025-11-08T21:54:14.849666Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 1 ready() available
+[2m2025-11-08T21:54:14.849754Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m [Node 1] Raft ready: has 1 messages, 0 committed entries, 0 new entries, snapshot: false
+[2m2025-11-08T21:54:14.849814Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Sending Raft message to peer 2: MsgHeartbeat -> 127.0.0.1:8201
+[2m2025-11-08T21:54:14.849882Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m LightReady: 0 committed entries, 0 messages
+[2m2025-11-08T21:54:14.864227Z[0m [32m INFO[0m [2moctopii::transport[0m[2m:[0m Connected to peer 127.0.0.1:8201
+[2m2025-11-08T21:54:14.865225Z[0m [32m INFO[0m [2moctopii::transport[0m[2m:[0m Accepted connection from 127.0.0.1:8200
+[2m2025-11-08T21:54:14.865413Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Received Raft message from 127.0.0.1:8200: MsgHeartbeat
+[2m2025-11-08T21:54:14.865539Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 2 stepped MsgHeartbeat, has_ready=true
+[2m2025-11-08T21:54:14.871427Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 2 ready() available
+[2m2025-11-08T21:54:14.871476Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m [Node 2] Raft ready: has 0 messages, 0 committed entries, 0 new entries, snapshot: false
+[alloc] handout: block_id=1, file=/var/folders/4p/xjzmpjd16bn9b6rhqw2kwwp80000gn/T/.tmpparU2W/raft_test_2_ThreadId(2)_1762638849025615000/node_2.wal/1762638849026, offset=0, limit=10485760
+[writer] wrote: col=raft_hard_state, block_id=1, offset_before=0, bytes=88, offset_after=88
+[2m2025-11-08T21:54:14.871753Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m LightReady: 0 committed entries, 0 messages
+[flush] scheduling 1 paths
+[2m2025-11-08T21:54:15.150122Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 1 ready() available
+[2m2025-11-08T21:54:15.150207Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m [Node 1] Raft ready: has 1 messages, 0 committed entries, 0 new entries, snapshot: false
+[2m2025-11-08T21:54:15.150282Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Sending Raft message to peer 2: MsgHeartbeat -> 127.0.0.1:8201
+[2m2025-11-08T21:54:15.150367Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m LightReady: 0 committed entries, 0 messages
+[2m2025-11-08T21:54:15.449854Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 1 ready() available
+[2m2025-11-08T21:54:15.449944Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m [Node 1] Raft ready: has 1 messages, 0 committed entries, 0 new entries, snapshot: false
+[2m2025-11-08T21:54:15.450017Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Sending Raft message to peer 2: MsgHeartbeat -> 127.0.0.1:8201
+[2m2025-11-08T21:54:15.450089Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m LightReady: 0 committed entries, 0 messages
+[2m2025-11-08T21:54:15.749813Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 1 ready() available
+[2m2025-11-08T21:54:15.749892Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m [Node 1] Raft ready: has 1 messages, 0 committed entries, 0 new entries, snapshot: false
+[2m2025-11-08T21:54:15.749962Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Sending Raft message to peer 2: MsgHeartbeat -> 127.0.0.1:8201
+[2m2025-11-08T21:54:15.750032Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m LightReady: 0 committed entries, 0 messages
+[2m2025-11-08T21:54:16.050555Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 1 ready() available
+[2m2025-11-08T21:54:16.050638Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m [Node 1] Raft ready: has 1 messages, 0 committed entries, 0 new entries, snapshot: false
+[2m2025-11-08T21:54:16.050714Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Sending Raft message to peer 2: MsgHeartbeat -> 127.0.0.1:8201
+[2m2025-11-08T21:54:16.050795Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m LightReady: 0 committed entries, 0 messages
+[2m2025-11-08T21:54:16.350150Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 1 ready() available
+[2m2025-11-08T21:54:16.350233Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m [Node 1] Raft ready: has 1 messages, 0 committed entries, 0 new entries, snapshot: false
+[2m2025-11-08T21:54:16.350304Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Sending Raft message to peer 2: MsgHeartbeat -> 127.0.0.1:8201
+[2m2025-11-08T21:54:16.350376Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m LightReady: 0 committed entries, 0 messages
+[2m2025-11-08T21:54:16.649723Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 1 ready() available
+[2m2025-11-08T21:54:16.649813Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m [Node 1] Raft ready: has 1 messages, 0 committed entries, 0 new entries, snapshot: false
+[2m2025-11-08T21:54:16.649892Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Sending Raft message to peer 2: MsgHeartbeat -> 127.0.0.1:8201
+[2m2025-11-08T21:54:16.649987Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m LightReady: 0 committed entries, 0 messages
+[2m2025-11-08T21:54:16.751320Z[0m [32m INFO[0m [2mraft_comprehensive_test::automatic_election_tests[0m[2m:[0m Adding node 3 as voter
+[2m2025-11-08T21:54:16.751385Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Adding peer 3 at 127.0.0.1:8202
+[2m2025-11-08T21:54:16.751529Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Proposed ConfChange: AddNode for node 3
+[2m2025-11-08T21:54:16.751564Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Proposed AddNode for peer 3
+[2m2025-11-08T21:54:16.760475Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 1 ready() available
+[2m2025-11-08T21:54:16.760537Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m [Node 1] Raft ready: has 1 messages, 0 committed entries, 1 new entries, snapshot: false
+[2m2025-11-08T21:54:16.760570Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m [Node 1] Persisting 1 new entries to storage
+[2m2025-11-08T21:54:16.760627Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Sending Raft message to peer 2: MsgAppend -> 127.0.0.1:8201
+[2m2025-11-08T21:54:16.760714Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m LightReady: 0 committed entries, 0 messages
+[2m2025-11-08T21:54:16.949822Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 1 ready() available
+[2m2025-11-08T21:54:16.949891Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m [Node 1] Raft ready: has 1 messages, 0 committed entries, 0 new entries, snapshot: false
+[2m2025-11-08T21:54:16.949938Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Sending Raft message to peer 2: MsgHeartbeat -> 127.0.0.1:8201
+[2m2025-11-08T21:54:16.949986Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m LightReady: 0 committed entries, 0 messages
+[2m2025-11-08T21:54:17.248959Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 1 ready() available
+[2m2025-11-08T21:54:17.249037Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m [Node 1] Raft ready: has 1 messages, 0 committed entries, 0 new entries, snapshot: false
+[2m2025-11-08T21:54:17.249107Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Sending Raft message to peer 2: MsgHeartbeat -> 127.0.0.1:8201
+[2m2025-11-08T21:54:17.249178Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m LightReady: 0 committed entries, 0 messages
+[2m2025-11-08T21:54:17.550294Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 1 ready() available
+[2m2025-11-08T21:54:17.550383Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m [Node 1] Raft ready: has 1 messages, 0 committed entries, 0 new entries, snapshot: false
+[2m2025-11-08T21:54:17.550461Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Sending Raft message to peer 2: MsgHeartbeat -> 127.0.0.1:8201
+[2m2025-11-08T21:54:17.550576Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m LightReady: 0 committed entries, 0 messages
+[2m2025-11-08T21:54:17.850215Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 1 ready() available
+[2m2025-11-08T21:54:17.850301Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m [Node 1] Raft ready: has 1 messages, 0 committed entries, 0 new entries, snapshot: false
+[2m2025-11-08T21:54:17.850376Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Sending Raft message to peer 2: MsgHeartbeat -> 127.0.0.1:8201
+[2m2025-11-08T21:54:17.850451Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m LightReady: 0 committed entries, 0 messages
+[2m2025-11-08T21:54:18.150409Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 1 ready() available
+[2m2025-11-08T21:54:18.150491Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m [Node 1] Raft ready: has 1 messages, 0 committed entries, 0 new entries, snapshot: false
+[2m2025-11-08T21:54:18.150563Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Sending Raft message to peer 2: MsgHeartbeat -> 127.0.0.1:8201
+[2m2025-11-08T21:54:18.150697Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m LightReady: 0 committed entries, 0 messages
+[2m2025-11-08T21:54:18.450168Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 1 ready() available
+[2m2025-11-08T21:54:18.450220Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m [Node 1] Raft ready: has 1 messages, 0 committed entries, 0 new entries, snapshot: false
+[2m2025-11-08T21:54:18.450254Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Sending Raft message to peer 2: MsgHeartbeat -> 127.0.0.1:8201
+[2m2025-11-08T21:54:18.450285Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m LightReady: 0 committed entries, 0 messages
+[2m2025-11-08T21:54:18.750144Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 1 ready() available
+[2m2025-11-08T21:54:18.750189Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m [Node 1] Raft ready: has 1 messages, 0 committed entries, 0 new entries, snapshot: false
+[2m2025-11-08T21:54:18.750235Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Sending Raft message to peer 2: MsgHeartbeat -> 127.0.0.1:8201
+[2m2025-11-08T21:54:18.750282Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m LightReady: 0 committed entries, 0 messages
+[2m2025-11-08T21:54:19.050269Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 1 ready() available
+[2m2025-11-08T21:54:19.050379Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m [Node 1] Raft ready: has 1 messages, 0 committed entries, 0 new entries, snapshot: false
+[2m2025-11-08T21:54:19.050492Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Sending Raft message to peer 2: MsgHeartbeat -> 127.0.0.1:8201
+[2m2025-11-08T21:54:19.050584Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m LightReady: 0 committed entries, 0 messages
+[2m2025-11-08T21:54:19.349993Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 1 ready() available
+[2m2025-11-08T21:54:19.350102Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m [Node 1] Raft ready: has 1 messages, 0 committed entries, 0 new entries, snapshot: false
+[2m2025-11-08T21:54:19.350170Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Sending Raft message to peer 2: MsgHeartbeat -> 127.0.0.1:8201
+[2m2025-11-08T21:54:19.350266Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m LightReady: 0 committed entries, 0 messages
+[2m2025-11-08T21:54:19.649756Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 1 ready() available
+[2m2025-11-08T21:54:19.649859Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m [Node 1] Raft ready: has 1 messages, 0 committed entries, 0 new entries, snapshot: false
+[2m2025-11-08T21:54:19.649925Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Sending Raft message to peer 2: MsgHeartbeat -> 127.0.0.1:8201
+[2m2025-11-08T21:54:19.650004Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m LightReady: 0 committed entries, 0 messages
+[2m2025-11-08T21:54:19.867458Z[0m [33m WARN[0m [2moctopii::node[0m[2m:[0m Failed to send Raft message to 127.0.0.1:8201: RPC error: Request timeout
+[2m2025-11-08T21:54:19.950419Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 1 ready() available
+[2m2025-11-08T21:54:19.950502Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m [Node 1] Raft ready: has 1 messages, 0 committed entries, 0 new entries, snapshot: false
+[2m2025-11-08T21:54:19.950578Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Sending Raft message to peer 2: MsgHeartbeat -> 127.0.0.1:8201
+[2m2025-11-08T21:54:19.950658Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m LightReady: 0 committed entries, 0 messages
+[2m2025-11-08T21:54:20.249889Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 1 ready() available
+[2m2025-11-08T21:54:20.249975Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m [Node 1] Raft ready: has 1 messages, 0 committed entries, 0 new entries, snapshot: false
+[2m2025-11-08T21:54:20.250053Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Sending Raft message to peer 2: MsgHeartbeat -> 127.0.0.1:8201
+[2m2025-11-08T21:54:20.250135Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m LightReady: 0 committed entries, 0 messages
+[2m2025-11-08T21:54:20.549781Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 1 ready() available
+[2m2025-11-08T21:54:20.549870Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m [Node 1] Raft ready: has 1 messages, 0 committed entries, 0 new entries, snapshot: false
+[2m2025-11-08T21:54:20.549943Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Sending Raft message to peer 2: MsgHeartbeat -> 127.0.0.1:8201
+[2m2025-11-08T21:54:20.550018Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m LightReady: 0 committed entries, 0 messages
+[2m2025-11-08T21:54:20.850674Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 1 ready() available
+[2m2025-11-08T21:54:20.850746Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m [Node 1] Raft ready: has 1 messages, 0 committed entries, 0 new entries, snapshot: false
+[2m2025-11-08T21:54:20.850809Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Sending Raft message to peer 2: MsgHeartbeat -> 127.0.0.1:8201
+[2m2025-11-08T21:54:20.850875Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m LightReady: 0 committed entries, 0 messages
+[2m2025-11-08T21:54:21.149968Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 1 ready() available
+[2m2025-11-08T21:54:21.150083Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m [Node 1] Raft ready: has 1 messages, 0 committed entries, 0 new entries, snapshot: false
+[2m2025-11-08T21:54:21.150172Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Sending Raft message to peer 2: MsgHeartbeat -> 127.0.0.1:8201
+[2m2025-11-08T21:54:21.150265Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m LightReady: 0 committed entries, 0 messages
+[2m2025-11-08T21:54:21.450089Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 1 ready() available
+[2m2025-11-08T21:54:21.450197Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m [Node 1] Raft ready: has 1 messages, 0 committed entries, 0 new entries, snapshot: false
+[2m2025-11-08T21:54:21.450282Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Sending Raft message to peer 2: MsgHeartbeat -> 127.0.0.1:8201
+[2m2025-11-08T21:54:21.450368Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m LightReady: 0 committed entries, 0 messages
+[2m2025-11-08T21:54:21.750027Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 1 ready() available
+[2m2025-11-08T21:54:21.750092Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m [Node 1] Raft ready: has 1 messages, 0 committed entries, 0 new entries, snapshot: false
+[2m2025-11-08T21:54:21.750142Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Sending Raft message to peer 2: MsgHeartbeat -> 127.0.0.1:8201
+[2m2025-11-08T21:54:21.750188Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m LightReady: 0 committed entries, 0 messages
+[2m2025-11-08T21:54:22.049043Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 1 ready() available
+[2m2025-11-08T21:54:22.049121Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m [Node 1] Raft ready: has 1 messages, 0 committed entries, 0 new entries, snapshot: false
+[2m2025-11-08T21:54:22.049176Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Sending Raft message to peer 2: MsgHeartbeat -> 127.0.0.1:8201
+[2m2025-11-08T21:54:22.049226Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m LightReady: 0 committed entries, 0 messages
+[2m2025-11-08T21:54:22.349244Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 1 ready() available
+[2m2025-11-08T21:54:22.349301Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m [Node 1] Raft ready: has 1 messages, 0 committed entries, 0 new entries, snapshot: false
+[2m2025-11-08T21:54:22.349347Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Sending Raft message to peer 2: MsgHeartbeat -> 127.0.0.1:8201
+[2m2025-11-08T21:54:22.349399Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m LightReady: 0 committed entries, 0 messages
+[2m2025-11-08T21:54:22.649855Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 1 ready() available
+[2m2025-11-08T21:54:22.649939Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m [Node 1] Raft ready: has 1 messages, 0 committed entries, 0 new entries, snapshot: false
+[2m2025-11-08T21:54:22.650019Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Sending Raft message to peer 2: MsgHeartbeat -> 127.0.0.1:8201
+[2m2025-11-08T21:54:22.650101Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m LightReady: 0 committed entries, 0 messages
+[2m2025-11-08T21:54:22.949907Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 1 ready() available
+[2m2025-11-08T21:54:22.950194Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m [Node 1] Raft ready: has 1 messages, 0 committed entries, 0 new entries, snapshot: false
+[2m2025-11-08T21:54:22.950277Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Sending Raft message to peer 2: MsgHeartbeat -> 127.0.0.1:8201
+[2m2025-11-08T21:54:22.950361Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m LightReady: 0 committed entries, 0 messages
+[2m2025-11-08T21:54:23.249835Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 1 ready() available
+[2m2025-11-08T21:54:23.249941Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m [Node 1] Raft ready: has 1 messages, 0 committed entries, 0 new entries, snapshot: false
+[2m2025-11-08T21:54:23.250066Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Sending Raft message to peer 2: MsgHeartbeat -> 127.0.0.1:8201
+[2m2025-11-08T21:54:23.250140Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m LightReady: 0 committed entries, 0 messages
+[2m2025-11-08T21:54:23.549983Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 1 ready() available
+[2m2025-11-08T21:54:23.550057Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m [Node 1] Raft ready: has 1 messages, 0 committed entries, 0 new entries, snapshot: false
+[2m2025-11-08T21:54:23.550138Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Sending Raft message to peer 2: MsgHeartbeat -> 127.0.0.1:8201
+[2m2025-11-08T21:54:23.550223Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m LightReady: 0 committed entries, 0 messages
+[2m2025-11-08T21:54:23.849719Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 1 ready() available
+[2m2025-11-08T21:54:23.849791Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m [Node 1] Raft ready: has 1 messages, 0 committed entries, 0 new entries, snapshot: false
+[2m2025-11-08T21:54:23.849854Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Sending Raft message to peer 2: MsgHeartbeat -> 127.0.0.1:8201
+[2m2025-11-08T21:54:23.849922Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m LightReady: 0 committed entries, 0 messages
+[2m2025-11-08T21:54:24.150409Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 1 ready() available
+[2m2025-11-08T21:54:24.150450Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m [Node 1] Raft ready: has 1 messages, 0 committed entries, 0 new entries, snapshot: false
+[2m2025-11-08T21:54:24.150480Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Sending Raft message to peer 2: MsgHeartbeat -> 127.0.0.1:8201
+[2m2025-11-08T21:54:24.150509Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m LightReady: 0 committed entries, 0 messages
+[2m2025-11-08T21:54:24.450374Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 1 ready() available
+[2m2025-11-08T21:54:24.450415Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m [Node 1] Raft ready: has 1 messages, 0 committed entries, 0 new entries, snapshot: false
+[2m2025-11-08T21:54:24.450445Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Sending Raft message to peer 2: MsgHeartbeat -> 127.0.0.1:8201
+[2m2025-11-08T21:54:24.450474Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m LightReady: 0 committed entries, 0 messages
+[2m2025-11-08T21:54:24.750267Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 1 ready() available
+[2m2025-11-08T21:54:24.750322Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m [Node 1] Raft ready: has 1 messages, 0 committed entries, 0 new entries, snapshot: false
+[2m2025-11-08T21:54:24.750377Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Sending Raft message to peer 2: MsgHeartbeat -> 127.0.0.1:8201
+[2m2025-11-08T21:54:24.750437Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m LightReady: 0 committed entries, 0 messages
+[2m2025-11-08T21:54:25.050255Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 1 ready() available
+[2m2025-11-08T21:54:25.050338Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m [Node 1] Raft ready: has 1 messages, 0 committed entries, 0 new entries, snapshot: false
+[2m2025-11-08T21:54:25.050410Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Sending Raft message to peer 2: MsgHeartbeat -> 127.0.0.1:8201
+[2m2025-11-08T21:54:25.050501Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m LightReady: 0 committed entries, 0 messages
+[2m2025-11-08T21:54:25.350711Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 1 ready() available
+[2m2025-11-08T21:54:25.350795Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m [Node 1] Raft ready: has 1 messages, 0 committed entries, 0 new entries, snapshot: false
+[2m2025-11-08T21:54:25.350870Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Sending Raft message to peer 2: MsgHeartbeat -> 127.0.0.1:8201
+[2m2025-11-08T21:54:25.350944Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m LightReady: 0 committed entries, 0 messages
+[2m2025-11-08T21:54:25.649717Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 1 ready() available
+[2m2025-11-08T21:54:25.649797Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m [Node 1] Raft ready: has 1 messages, 0 committed entries, 0 new entries, snapshot: false
+[2m2025-11-08T21:54:25.649854Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Sending Raft message to peer 2: MsgHeartbeat -> 127.0.0.1:8201
+[2m2025-11-08T21:54:25.649908Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m LightReady: 0 committed entries, 0 messages
+[2m2025-11-08T21:54:25.949711Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 1 ready() available
+[2m2025-11-08T21:54:25.949796Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m [Node 1] Raft ready: has 1 messages, 0 committed entries, 0 new entries, snapshot: false
+[2m2025-11-08T21:54:25.949869Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Sending Raft message to peer 2: MsgHeartbeat -> 127.0.0.1:8201
+[2m2025-11-08T21:54:25.949942Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m LightReady: 0 committed entries, 0 messages
+[2m2025-11-08T21:54:26.250303Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 1 ready() available
+[2m2025-11-08T21:54:26.250422Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m [Node 1] Raft ready: has 1 messages, 0 committed entries, 0 new entries, snapshot: false
+[2m2025-11-08T21:54:26.250508Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Sending Raft message to peer 2: MsgHeartbeat -> 127.0.0.1:8201
+[2m2025-11-08T21:54:26.250594Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m LightReady: 0 committed entries, 0 messages
+[2m2025-11-08T21:54:26.550319Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 1 ready() available
+[2m2025-11-08T21:54:26.550410Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m [Node 1] Raft ready: has 1 messages, 0 committed entries, 0 new entries, snapshot: false
+[2m2025-11-08T21:54:26.550494Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Sending Raft message to peer 2: MsgHeartbeat -> 127.0.0.1:8201
+[2m2025-11-08T21:54:26.550583Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m LightReady: 0 committed entries, 0 messages
+[2m2025-11-08T21:54:26.753803Z[0m [31mERROR[0m [2moctopii::node[0m[2m:[0m Failed to accept connection: Transport error: Endpoint closed
+[2m2025-11-08T21:54:26.753842Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Raft ticker shutting down
+[2m2025-11-08T21:54:26.753874Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Network acceptor shutting down
+[2m2025-11-08T21:54:26.753904Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Raft ready handler shutting down
+[2m2025-11-08T21:54:26.754531Z[0m [33m WARN[0m [2moctopii::node[0m[2m:[0m Failed to send Raft message to 127.0.0.1:8201: Transport error: Read error: read error: connection lost
+[2m2025-11-08T21:54:26.754553Z[0m [33m WARN[0m [2moctopii::node[0m[2m:[0m Failed to send Raft message to 127.0.0.1:8201: Transport error: Read error: read error: connection lost
+[2m2025-11-08T21:54:26.754584Z[0m [33m WARN[0m [2moctopii::node[0m[2m:[0m Failed to send Raft message to 127.0.0.1:8201: Transport error: Read error: read error: connection lost
+[2m2025-11-08T21:54:26.754629Z[0m [33m WARN[0m [2moctopii::node[0m[2m:[0m Failed to send Raft message to 127.0.0.1:8201: Transport error: Read error: read error: connection lost
+[2m2025-11-08T21:54:26.754651Z[0m [33m WARN[0m [2moctopii::node[0m[2m:[0m Failed to send Raft message to 127.0.0.1:8201: Transport error: Read error: read error: connection lost
+[2m2025-11-08T21:54:26.754685Z[0m [33m WARN[0m [2moctopii::node[0m[2m:[0m Failed to send Raft message to 127.0.0.1:8201: Transport error: Read error: read error: connection lost
+[2m2025-11-08T21:54:26.754719Z[0m [33m WARN[0m [2moctopii::node[0m[2m:[0m Failed to send Raft message to 127.0.0.1:8201: Transport error: Read error: read error: connection lost
+[2m2025-11-08T21:54:26.754739Z[0m [33m WARN[0m [2moctopii::node[0m[2m:[0m Failed to send Raft message to 127.0.0.1:8201: Transport error: Read error: read error: connection lost
+[2m2025-11-08T21:54:26.754770Z[0m [33m WARN[0m [2moctopii::node[0m[2m:[0m Failed to send Raft message to 127.0.0.1:8201: Transport error: Read error: read error: connection lost
+[2m2025-11-08T21:54:26.754786Z[0m [33m WARN[0m [2moctopii::node[0m[2m:[0m Failed to send Raft message to 127.0.0.1:8201: Transport error: Read error: read error: connection lost
+[2m2025-11-08T21:54:26.754531Z[0m [33m WARN[0m [2moctopii::node[0m[2m:[0m Failed to send Raft message to 127.0.0.1:8201: Transport error: Read error: read error: connection lost
+[2m2025-11-08T21:54:26.754822Z[0m [33m WARN[0m [2moctopii::node[0m[2m:[0m Failed to send Raft message to 127.0.0.1:8201: Transport error: Read error: read error: connection lost
+[2m2025-11-08T21:54:26.754836Z[0m [33m WARN[0m [2moctopii::node[0m[2m:[0m Failed to send Raft message to 127.0.0.1:8201: Transport error: Read error: read error: connection lost
+[2m2025-11-08T21:54:26.754850Z[0m [33m WARN[0m [2moctopii::node[0m[2m:[0m Failed to send Raft message to 127.0.0.1:8201: Transport error: Read error: read error: connection lost
+[2m2025-11-08T21:54:26.754871Z[0m [33m WARN[0m [2moctopii::node[0m[2m:[0m Failed to send Raft message to 127.0.0.1:8201: Transport error: Read error: read error: connection lost
+[2m2025-11-08T21:54:26.754882Z[0m [33m WARN[0m [2moctopii::node[0m[2m:[0m Failed to send Raft message to 127.0.0.1:8201: Transport error: Read error: read error: connection lost
+[2m2025-11-08T21:54:26.754904Z[0m [33m WARN[0m [2moctopii::node[0m[2m:[0m Failed to send Raft message to 127.0.0.1:8201: Transport error: Read error: read error: connection lost
+[2m2025-11-08T21:54:26.754941Z[0m [33m WARN[0m [2moctopii::node[0m[2m:[0m Failed to send Raft message to 127.0.0.1:8201: Transport error: Read error: read error: connection lost
+[2m2025-11-08T21:54:26.754957Z[0m [33m WARN[0m [2moctopii::node[0m[2m:[0m Failed to send Raft message to 127.0.0.1:8201: Transport error: Read error: read error: connection lost
+[2m2025-11-08T21:54:26.754991Z[0m [33m WARN[0m [2moctopii::node[0m[2m:[0m Failed to send Raft message to 127.0.0.1:8201: Transport error: Read error: read error: connection lost
+[2m2025-11-08T21:54:26.755005Z[0m [33m WARN[0m [2moctopii::node[0m[2m:[0m Failed to send Raft message to 127.0.0.1:8201: Transport error: Read error: read error: connection lost
+[2m2025-11-08T21:54:26.755025Z[0m [33m WARN[0m [2moctopii::node[0m[2m:[0m Failed to send Raft message to 127.0.0.1:8201: Transport error: Read error: read error: connection lost
+[2m2025-11-08T21:54:26.755061Z[0m [33m WARN[0m [2moctopii::node[0m[2m:[0m Failed to send Raft message to 127.0.0.1:8201: Transport error: Read error: read error: connection lost
+[2m2025-11-08T21:54:26.755080Z[0m [33m WARN[0m [2moctopii::node[0m[2m:[0m Failed to send Raft message to 127.0.0.1:8201: Transport error: Read error: read error: connection lost
+[2m2025-11-08T21:54:26.755096Z[0m [33m WARN[0m [2moctopii::node[0m[2m:[0m Failed to send Raft message to 127.0.0.1:8201: Transport error: Read error: read error: connection lost
+[2m2025-11-08T21:54:26.755113Z[0m [33m WARN[0m [2moctopii::node[0m[2m:[0m Failed to send Raft message to 127.0.0.1:8201: Transport error: Read error: read error: connection lost
+[2m2025-11-08T21:54:26.755128Z[0m [33m WARN[0m [2moctopii::node[0m[2m:[0m Failed to send Raft message to 127.0.0.1:8201: Transport error: Read error: read error: connection lost
+[2m2025-11-08T21:54:26.755144Z[0m [33m WARN[0m [2moctopii::node[0m[2m:[0m Failed to send Raft message to 127.0.0.1:8201: Transport error: Read error: read error: connection lost
+[2m2025-11-08T21:54:26.755160Z[0m [33m WARN[0m [2moctopii::node[0m[2m:[0m Failed to send Raft message to 127.0.0.1:8201: Transport error: Read error: read error: connection lost
+[2m2025-11-08T21:54:26.755175Z[0m [33m WARN[0m [2moctopii::node[0m[2m:[0m Failed to send Raft message to 127.0.0.1:8201: Transport error: Read error: read error: connection lost
+[2m2025-11-08T21:54:26.755188Z[0m [33m WARN[0m [2moctopii::node[0m[2m:[0m Failed to send Raft message to 127.0.0.1:8201: Transport error: Read error: read error: connection lost
+[2m2025-11-08T21:54:26.755207Z[0m [33m WARN[0m [2moctopii::node[0m[2m:[0m Failed to send Raft message to 127.0.0.1:8201: Transport error: Read error: read error: connection lost
+[2m2025-11-08T21:54:26.755222Z[0m [33m WARN[0m [2moctopii::node[0m[2m:[0m Failed to send Raft message to 127.0.0.1:8201: Transport error: Read error: read error: connection lost
+[2m2025-11-08T21:54:26.755238Z[0m [33m WARN[0m [2moctopii::node[0m[2m:[0m Failed to send Raft message to 127.0.0.1:8201: Transport error: Read error: read error: connection lost
+[2m2025-11-08T21:54:26.755256Z[0m [33m WARN[0m [2moctopii::node[0m[2m:[0m Failed to send Raft message to 127.0.0.1:8201: Transport error: Read error: read error: connection lost
+[2m2025-11-08T21:54:26.755273Z[0m [33m WARN[0m [2moctopii::node[0m[2m:[0m Failed to send Raft message to 127.0.0.1:8201: Transport error: Read error: read error: connection lost
+[2m2025-11-08T21:54:26.755285Z[0m [33m WARN[0m [2moctopii::node[0m[2m:[0m Failed to send Raft message to 127.0.0.1:8201: Transport error: Read error: read error: connection lost
+[2m2025-11-08T21:54:26.755303Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Network acceptor shutting down
+[2m2025-11-08T21:54:26.755316Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Raft ticker shutting down
+[2m2025-11-08T21:54:26.755331Z[0m [33m WARN[0m [2moctopii::node[0m[2m:[0m Failed to send Raft message to 127.0.0.1:8201: Transport error: Read error: read error: connection lost
+[2m2025-11-08T21:54:26.755356Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Raft ready handler shutting down
+[2m2025-11-08T21:54:26.755377Z[0m [33m WARN[0m [2moctopii::node[0m[2m:[0m Failed to send Raft message to 127.0.0.1:8201: Transport error: Read error: read error: connection lost
+[2m2025-11-08T21:54:26.755502Z[0m [31mERROR[0m [2moctopii::node[0m[2m:[0m Failed to send ACK: Transport error: Read error: read error: connection lost
+[2m2025-11-08T21:54:26.755552Z[0m [33m WARN[0m [2moctopii::node[0m[2m:[0m Failed to send Raft message to 127.0.0.1:8201: Transport error: Read error: read error: connection lost
+[2m2025-11-08T21:54:26.755732Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Received Raft message from 127.0.0.1:8200: MsgHeartbeat
+[2m2025-11-08T21:54:26.755801Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 2 stepped MsgHeartbeat, has_ready=true
+[2m2025-11-08T21:54:26.755847Z[0m [31mERROR[0m [2moctopii::node[0m[2m:[0m Failed to send ACK: QUIC connection error: closed
+[2m2025-11-08T21:54:26.755934Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Received Raft message from 127.0.0.1:8200: MsgHeartbeat
+[2m2025-11-08T21:54:26.755967Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 2 stepped MsgHeartbeat, has_ready=true
+[2m2025-11-08T21:54:26.755997Z[0m [31mERROR[0m [2moctopii::node[0m[2m:[0m Failed to send ACK: QUIC connection error: closed
+[2m2025-11-08T21:54:26.756066Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Received Raft message from 127.0.0.1:8200: MsgHeartbeat
+[2m2025-11-08T21:54:26.756098Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 2 stepped MsgHeartbeat, has_ready=true
+[2m2025-11-08T21:54:26.756126Z[0m [31mERROR[0m [2moctopii::node[0m[2m:[0m Failed to send ACK: QUIC connection error: closed
+[2m2025-11-08T21:54:26.756187Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Received Raft message from 127.0.0.1:8200: MsgHeartbeat
+[2m2025-11-08T21:54:26.756218Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 2 stepped MsgHeartbeat, has_ready=true
+[2m2025-11-08T21:54:26.756247Z[0m [31mERROR[0m [2moctopii::node[0m[2m:[0m Failed to send ACK: QUIC connection error: closed
+[2m2025-11-08T21:54:26.756306Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Received Raft message from 127.0.0.1:8200: MsgHeartbeat
+[2m2025-11-08T21:54:26.756338Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 2 stepped MsgHeartbeat, has_ready=true
+[2m2025-11-08T21:54:26.756364Z[0m [31mERROR[0m [2moctopii::node[0m[2m:[0m Failed to send ACK: QUIC connection error: closed
+[2m2025-11-08T21:54:26.756420Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Received Raft message from 127.0.0.1:8200: MsgHeartbeat
+[2m2025-11-08T21:54:26.756449Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 2 stepped MsgHeartbeat, has_ready=true
+[2m2025-11-08T21:54:26.756478Z[0m [31mERROR[0m [2moctopii::node[0m[2m:[0m Failed to send ACK: QUIC connection error: closed
+[2m2025-11-08T21:54:26.756539Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Received Raft message from 127.0.0.1:8200: MsgAppend
+[2m2025-11-08T21:54:26.756581Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 2 stepped MsgAppend, has_ready=true
+[2m2025-11-08T21:54:26.756610Z[0m [31mERROR[0m [2moctopii::node[0m[2m:[0m Failed to send ACK: QUIC connection error: closed
+[2m2025-11-08T21:54:26.756667Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Received Raft message from 127.0.0.1:8200: MsgHeartbeat
+[2m2025-11-08T21:54:26.756697Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 2 stepped MsgHeartbeat, has_ready=true
+[2m2025-11-08T21:54:26.756723Z[0m [31mERROR[0m [2moctopii::node[0m[2m:[0m Failed to send ACK: QUIC connection error: closed
+[2m2025-11-08T21:54:26.756778Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Received Raft message from 127.0.0.1:8200: MsgHeartbeat
+[2m2025-11-08T21:54:26.756809Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 2 stepped MsgHeartbeat, has_ready=true
+[2m2025-11-08T21:54:26.756836Z[0m [31mERROR[0m [2moctopii::node[0m[2m:[0m Failed to send ACK: QUIC connection error: closed
+[2m2025-11-08T21:54:26.756890Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Received Raft message from 127.0.0.1:8200: MsgHeartbeat
+[2m2025-11-08T21:54:26.756919Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 2 stepped MsgHeartbeat, has_ready=true
+[2m2025-11-08T21:54:26.756945Z[0m [31mERROR[0m [2moctopii::node[0m[2m:[0m Failed to send ACK: QUIC connection error: closed
+[2m2025-11-08T21:54:26.756999Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Received Raft message from 127.0.0.1:8200: MsgHeartbeat
+[2m2025-11-08T21:54:26.757027Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 2 stepped MsgHeartbeat, has_ready=true
+[2m2025-11-08T21:54:26.757052Z[0m [31mERROR[0m [2moctopii::node[0m[2m:[0m Failed to send ACK: QUIC connection error: closed
+[2m2025-11-08T21:54:26.757104Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Received Raft message from 127.0.0.1:8200: MsgHeartbeat
+[2m2025-11-08T21:54:26.757132Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 2 stepped MsgHeartbeat, has_ready=true
+[2m2025-11-08T21:54:26.757157Z[0m [31mERROR[0m [2moctopii::node[0m[2m:[0m Failed to send ACK: QUIC connection error: closed
+[2m2025-11-08T21:54:26.757209Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Received Raft message from 127.0.0.1:8200: MsgHeartbeat
+[2m2025-11-08T21:54:26.757238Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 2 stepped MsgHeartbeat, has_ready=true
+[2m2025-11-08T21:54:26.757266Z[0m [31mERROR[0m [2moctopii::node[0m[2m:[0m Failed to send ACK: QUIC connection error: closed
+[2m2025-11-08T21:54:26.757317Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Received Raft message from 127.0.0.1:8200: MsgHeartbeat
+[2m2025-11-08T21:54:26.757344Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 2 stepped MsgHeartbeat, has_ready=true
+[2m2025-11-08T21:54:26.757368Z[0m [31mERROR[0m [2moctopii::node[0m[2m:[0m Failed to send ACK: QUIC connection error: closed
+[2m2025-11-08T21:54:26.757426Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Received Raft message from 127.0.0.1:8200: MsgHeartbeat
+[2m2025-11-08T21:54:26.757454Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 2 stepped MsgHeartbeat, has_ready=true
+[2m2025-11-08T21:54:26.757479Z[0m [31mERROR[0m [2moctopii::node[0m[2m:[0m Failed to send ACK: QUIC connection error: closed
+[2m2025-11-08T21:54:26.757532Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Received Raft message from 127.0.0.1:8200: MsgHeartbeat
+[2m2025-11-08T21:54:26.757560Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 2 stepped MsgHeartbeat, has_ready=true
+[2m2025-11-08T21:54:26.757585Z[0m [31mERROR[0m [2moctopii::node[0m[2m:[0m Failed to send ACK: QUIC connection error: closed
+[2m2025-11-08T21:54:26.757641Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Received Raft message from 127.0.0.1:8200: MsgHeartbeat
+[2m2025-11-08T21:54:26.757674Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 2 stepped MsgHeartbeat, has_ready=true
+[2m2025-11-08T21:54:26.757702Z[0m [31mERROR[0m [2moctopii::node[0m[2m:[0m Failed to send ACK: QUIC connection error: closed
+[2m2025-11-08T21:54:26.757752Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Received Raft message from 127.0.0.1:8200: MsgHeartbeat
+[2m2025-11-08T21:54:26.757782Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 2 stepped MsgHeartbeat, has_ready=true
+[2m2025-11-08T21:54:26.757809Z[0m [31mERROR[0m [2moctopii::node[0m[2m:[0m Failed to send ACK: QUIC connection error: closed
+[2m2025-11-08T21:54:26.757929Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Received Raft message from 127.0.0.1:8200: MsgHeartbeat
+[2m2025-11-08T21:54:26.757959Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 2 stepped MsgHeartbeat, has_ready=true
+[2m2025-11-08T21:54:26.757986Z[0m [31mERROR[0m [2moctopii::node[0m[2m:[0m Failed to send ACK: QUIC connection error: closed
+[2m2025-11-08T21:54:26.758040Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Received Raft message from 127.0.0.1:8200: MsgHeartbeat
+[2m2025-11-08T21:54:26.758066Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 2 stepped MsgHeartbeat, has_ready=true
+[2m2025-11-08T21:54:26.758091Z[0m [31mERROR[0m [2moctopii::node[0m[2m:[0m Failed to send ACK: QUIC connection error: closed
+[2m2025-11-08T21:54:26.758208Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Received Raft message from 127.0.0.1:8200: MsgHeartbeat
+[2m2025-11-08T21:54:26.758244Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 2 stepped MsgHeartbeat, has_ready=true
+[2m2025-11-08T21:54:26.758275Z[0m [31mERROR[0m [2moctopii::node[0m[2m:[0m Failed to send ACK: QUIC connection error: closed
+[2m2025-11-08T21:54:26.758332Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Received Raft message from 127.0.0.1:8200: MsgHeartbeat
+[2m2025-11-08T21:54:26.758360Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 2 stepped MsgHeartbeat, has_ready=true
+[2m2025-11-08T21:54:26.758385Z[0m [31mERROR[0m [2moctopii::node[0m[2m:[0m Failed to send ACK: QUIC connection error: closed
+[2m2025-11-08T21:54:26.758435Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Received Raft message from 127.0.0.1:8200: MsgHeartbeat
+[2m2025-11-08T21:54:26.758462Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 2 stepped MsgHeartbeat, has_ready=true
+[2m2025-11-08T21:54:26.758487Z[0m [31mERROR[0m [2moctopii::node[0m[2m:[0m Failed to send ACK: QUIC connection error: closed
+[2m2025-11-08T21:54:26.758545Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Received Raft message from 127.0.0.1:8200: MsgHeartbeat
+[2m2025-11-08T21:54:26.758574Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 2 stepped MsgHeartbeat, has_ready=true
+[2m2025-11-08T21:54:26.758599Z[0m [31mERROR[0m [2moctopii::node[0m[2m:[0m Failed to send ACK: QUIC connection error: closed
+[2m2025-11-08T21:54:26.758652Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Received Raft message from 127.0.0.1:8200: MsgHeartbeat
+[2m2025-11-08T21:54:26.758680Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 2 stepped MsgHeartbeat, has_ready=true
+[2m2025-11-08T21:54:26.758706Z[0m [31mERROR[0m [2moctopii::node[0m[2m:[0m Failed to send ACK: QUIC connection error: closed
+[2m2025-11-08T21:54:26.758757Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Received Raft message from 127.0.0.1:8200: MsgHeartbeat
+[2m2025-11-08T21:54:26.758785Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 2 stepped MsgHeartbeat, has_ready=true
+[2m2025-11-08T21:54:26.758812Z[0m [31mERROR[0m [2moctopii::node[0m[2m:[0m Failed to send ACK: QUIC connection error: closed
+[2m2025-11-08T21:54:26.758861Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Received Raft message from 127.0.0.1:8200: MsgHeartbeat
+[2m2025-11-08T21:54:26.758889Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 2 stepped MsgHeartbeat, has_ready=true
+[2m2025-11-08T21:54:26.758914Z[0m [31mERROR[0m [2moctopii::node[0m[2m:[0m Failed to send ACK: QUIC connection error: closed
+[2m2025-11-08T21:54:26.758964Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Received Raft message from 127.0.0.1:8200: MsgHeartbeat
+[2m2025-11-08T21:54:26.758991Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 2 stepped MsgHeartbeat, has_ready=true
+[2m2025-11-08T21:54:26.759016Z[0m [31mERROR[0m [2moctopii::node[0m[2m:[0m Failed to send ACK: QUIC connection error: closed
+[2m2025-11-08T21:54:26.759068Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Received Raft message from 127.0.0.1:8200: MsgHeartbeat
+[2m2025-11-08T21:54:26.759096Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 2 stepped MsgHeartbeat, has_ready=true
+[2m2025-11-08T21:54:26.759122Z[0m [31mERROR[0m [2moctopii::node[0m[2m:[0m Failed to send ACK: QUIC connection error: closed
+[2m2025-11-08T21:54:26.759172Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Received Raft message from 127.0.0.1:8200: MsgHeartbeat
+[2m2025-11-08T21:54:26.759201Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 2 stepped MsgHeartbeat, has_ready=true
+[2m2025-11-08T21:54:26.759226Z[0m [31mERROR[0m [2moctopii::node[0m[2m:[0m Failed to send ACK: QUIC connection error: closed
+[2m2025-11-08T21:54:26.759352Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Received Raft message from 127.0.0.1:8200: MsgHeartbeat
+[2m2025-11-08T21:54:26.759390Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 2 stepped MsgHeartbeat, has_ready=true
+[2m2025-11-08T21:54:26.759421Z[0m [31mERROR[0m [2moctopii::node[0m[2m:[0m Failed to send ACK: QUIC connection error: closed
+[2m2025-11-08T21:54:26.759479Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Received Raft message from 127.0.0.1:8200: MsgHeartbeat
+[2m2025-11-08T21:54:26.759507Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 2 stepped MsgHeartbeat, has_ready=true
+[2m2025-11-08T21:54:26.759535Z[0m [31mERROR[0m [2moctopii::node[0m[2m:[0m Failed to send ACK: QUIC connection error: closed
+[2m2025-11-08T21:54:26.759589Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Received Raft message from 127.0.0.1:8200: MsgHeartbeat
+[2m2025-11-08T21:54:26.759680Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 2 stepped MsgHeartbeat, has_ready=true
+[2m2025-11-08T21:54:26.759716Z[0m [31mERROR[0m [2moctopii::node[0m[2m:[0m Failed to send ACK: QUIC connection error: closed
+[2m2025-11-08T21:54:26.759911Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Received Raft message from 127.0.0.1:8200: MsgHeartbeat
+[2m2025-11-08T21:54:26.759947Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 2 stepped MsgHeartbeat, has_ready=true
+[2m2025-11-08T21:54:26.759975Z[0m [31mERROR[0m [2moctopii::node[0m[2m:[0m Failed to send ACK: QUIC connection error: closed
+[2m2025-11-08T21:54:26.760027Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Received Raft message from 127.0.0.1:8200: MsgHeartbeat
+[2m2025-11-08T21:54:26.760058Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 2 stepped MsgHeartbeat, has_ready=true
+[2m2025-11-08T21:54:26.760085Z[0m [31mERROR[0m [2moctopii::node[0m[2m:[0m Failed to send ACK: QUIC connection error: closed
+[2m2025-11-08T21:54:26.760139Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Received Raft message from 127.0.0.1:8200: MsgHeartbeat
+[2m2025-11-08T21:54:26.760169Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 2 stepped MsgHeartbeat, has_ready=true
+[2m2025-11-08T21:54:26.760201Z[0m [31mERROR[0m [2moctopii::node[0m[2m:[0m Failed to send ACK: QUIC connection error: closed
+[2m2025-11-08T21:54:26.760291Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Received Raft message from 127.0.0.1:8200: MsgHeartbeat
+[2m2025-11-08T21:54:26.760326Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 2 stepped MsgHeartbeat, has_ready=true
+[2m2025-11-08T21:54:26.760355Z[0m [31mERROR[0m [2moctopii::node[0m[2m:[0m Failed to send ACK: QUIC connection error: closed
+[2m2025-11-08T21:54:26.760412Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Received Raft message from 127.0.0.1:8200: MsgHeartbeat
+[2m2025-11-08T21:54:26.760443Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 2 stepped MsgHeartbeat, has_ready=true
+[2m2025-11-08T21:54:26.760471Z[0m [31mERROR[0m [2moctopii::node[0m[2m:[0m Failed to send ACK: QUIC connection error: closed
+[2m2025-11-08T21:54:26.760524Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Received Raft message from 127.0.0.1:8200: MsgHeartbeat
+[2m2025-11-08T21:54:26.760555Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 2 stepped MsgHeartbeat, has_ready=true
+[2m2025-11-08T21:54:26.760582Z[0m [31mERROR[0m [2moctopii::node[0m[2m:[0m Failed to send ACK: QUIC connection error: closed
+[2m2025-11-08T21:54:26.760636Z[0m [32m INFO[0m [2moctopii::node[0m[2m:[0m Received Raft message from 127.0.0.1:8200: MsgHeartbeat
+[2m2025-11-08T21:54:26.760666Z[0m [32m INFO[0m [2moctopii::raft[0m[2m:[0m Node 2 stepped MsgHeartbeat, has_ready=true
+[2m2025-11-08T21:54:26.760693Z[0m [31mERROR[0m [2moctopii::node[0m[2m:[0m Failed to send ACK: QUIC connection error: closed
+test automatic_election_tests::test_automatic_election_after_leader_failure ... FAILED
+
+failures:
+
+failures:
+    automatic_election_tests::test_automatic_election_after_leader_failure
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 32 filtered out; finished in 17.77s
+

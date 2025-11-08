@@ -23,10 +23,7 @@ async fn test_nonexistent_file() {
     // The key is it doesn't panic and handles the error gracefully
     if let Ok(peer) = peer_result {
         let result = peer.send_chunk_verified(&chunk).await;
-        assert!(
-            result.is_err(),
-            "Should fail when file doesn't exist"
-        );
+        assert!(result.is_err(), "Should fail when file doesn't exist");
     }
 
     transport1.close();
@@ -78,11 +75,7 @@ async fn test_connection_timeout() {
     // Try to connect to a non-existent peer with short timeout
     let fake_peer: SocketAddr = "192.0.2.1:9999".parse().unwrap(); // TEST-NET-1, should be unreachable
 
-    let result = tokio::time::timeout(
-        Duration::from_secs(2),
-        transport1.connect(fake_peer)
-    )
-    .await;
+    let result = tokio::time::timeout(Duration::from_secs(2), transport1.connect(fake_peer)).await;
 
     // Should timeout or fail to connect
     assert!(

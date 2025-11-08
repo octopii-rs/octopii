@@ -44,7 +44,10 @@ async fn test_transport_send_receive() {
 
     // Send from transport1 to transport2
     let message = Bytes::from("hello from transport1");
-    transport1.send(actual_addr2, message.clone()).await.unwrap();
+    transport1
+        .send(actual_addr2, message.clone())
+        .await
+        .unwrap();
 
     // Wait for receiver
     let received = receiver_handle.await.unwrap();
@@ -69,9 +72,7 @@ async fn test_transport_multiple_connections() {
     tokio::spawn(async move {
         for _ in 0..3 {
             let (_, peer) = t2_clone.accept().await.unwrap();
-            tokio::spawn(async move {
-                while let Ok(Some(_)) = peer.recv().await {}
-            });
+            tokio::spawn(async move { while let Ok(Some(_)) = peer.recv().await {} });
         }
     });
 

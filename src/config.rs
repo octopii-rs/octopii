@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
 use std::net::SocketAddr;
+use std::path::PathBuf;
 
 /// Configuration for an Octopii node
 #[derive(Debug, Clone, Serialize, Deserialize)]

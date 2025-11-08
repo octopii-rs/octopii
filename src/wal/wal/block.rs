@@ -1,4 +1,4 @@
-use crate::wal::wal::config::{PREFIX_META_SIZE, checksum64, debug_print};
+use crate::wal::wal::config::{checksum64, debug_print, PREFIX_META_SIZE};
 use crate::wal::wal::storage::SharedMmap;
 use rkyv::{Archive, Deserialize, Serialize};
 use std::sync::Arc;

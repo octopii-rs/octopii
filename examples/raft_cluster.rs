@@ -23,10 +23,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config1 = Config {
         node_id: 1,
         bind_addr: "127.0.0.1:5001".parse()?,
-        peers: vec![
-            "127.0.0.1:5002".parse()?,
-            "127.0.0.1:5003".parse()?,
-        ],
+        peers: vec!["127.0.0.1:5002".parse()?, "127.0.0.1:5003".parse()?],
         wal_dir: PathBuf::from("/tmp/octopii_node1"),
         worker_threads: 2,
         wal_batch_size: 100,
@@ -38,10 +35,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config2 = Config {
         node_id: 2,
         bind_addr: "127.0.0.1:5002".parse()?,
-        peers: vec![
-            "127.0.0.1:5001".parse()?,
-            "127.0.0.1:5003".parse()?,
-        ],
+        peers: vec!["127.0.0.1:5001".parse()?, "127.0.0.1:5003".parse()?],
         wal_dir: PathBuf::from("/tmp/octopii_node2"),
         worker_threads: 2,
         wal_batch_size: 100,
@@ -53,10 +47,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config3 = Config {
         node_id: 3,
         bind_addr: "127.0.0.1:5003".parse()?,
-        peers: vec![
-            "127.0.0.1:5001".parse()?,
-            "127.0.0.1:5002".parse()?,
-        ],
+        peers: vec!["127.0.0.1:5001".parse()?, "127.0.0.1:5002".parse()?],
         wal_dir: PathBuf::from("/tmp/octopii_node3"),
         worker_threads: 2,
         wal_batch_size: 100,
@@ -72,13 +63,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create a tokio runtime for async operations
     let rt = tokio::runtime::Runtime::new()?;
-    rt.block_on(async move {
-        run_cluster(node1, node2, node3).await
-    })
+    rt.block_on(async move { run_cluster(node1, node2, node3).await })
 }
 
-async fn run_cluster(node1: OctopiiNode, node2: OctopiiNode, node3: OctopiiNode) -> Result<(), Box<dyn std::error::Error>> {
-
+async fn run_cluster(
+    node1: OctopiiNode,
+    node2: OctopiiNode,
+    node3: OctopiiNode,
+) -> Result<(), Box<dyn std::error::Error>> {
     // Start nodes
     println!("Starting nodes...");
     node1.start().await?;

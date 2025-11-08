@@ -43,13 +43,19 @@ fn test_add_learner_to_cluster() {
 
         // Start the learner node
         let learner_idx = cluster.nodes.len() - 1;
-        cluster.nodes[learner_idx].start().await.expect("Failed to start learner");
+        cluster.nodes[learner_idx]
+            .start()
+            .await
+            .expect("Failed to start learner");
 
         tokio::time::sleep(Duration::from_secs(3)).await;
 
         // Verify learner received entries (by checking it's alive and connected)
         // Learner should not be able to vote yet
-        assert!(!cluster.nodes[learner_idx].is_leader().await, "Learner should not be leader");
+        assert!(
+            !cluster.nodes[learner_idx].is_leader().await,
+            "Learner should not be leader"
+        );
 
         cluster.shutdown_all();
         tracing::info!("✓ Test passed: Add learner to cluster");
@@ -86,7 +92,10 @@ fn test_promote_learner_when_caught_up() {
         tracing::info!("Adding node 4 as learner");
         cluster.add_learner(4).await.expect("Failed to add learner");
         let learner_idx = cluster.nodes.len() - 1;
-        cluster.nodes[learner_idx].start().await.expect("Failed to start learner");
+        cluster.nodes[learner_idx]
+            .start()
+            .await
+            .expect("Failed to start learner");
 
         // Make some proposals so learner has something to catch up on
         for i in 1..=20 {
@@ -104,7 +113,10 @@ fn test_promote_learner_when_caught_up() {
         // Promote learner to voter
         if is_caught_up {
             tracing::info!("Promoting learner 4 to voter");
-            cluster.promote_learner(4).await.expect("Failed to promote learner");
+            cluster
+                .promote_learner(4)
+                .await
+                .expect("Failed to promote learner");
             tokio::time::sleep(Duration::from_secs(2)).await;
             tracing::info!("✓ Successfully promoted learner to voter");
         } else {
@@ -162,7 +174,9 @@ fn test_learner_promotion_fails_when_not_caught_up() {
         if result.is_err() {
             tracing::info!("✓ Correctly rejected promotion of lagging learner");
         } else {
-            tracing::warn!("Promotion succeeded unexpectedly (learner might have caught up very fast)");
+            tracing::warn!(
+                "Promotion succeeded unexpectedly (learner might have caught up very fast)"
+            );
         }
 
         cluster.shutdown_all();
@@ -205,14 +219,26 @@ fn test_multiple_learners_simultaneously() {
 
         // Add TWO learners simultaneously
         tracing::info!("Adding nodes 4 and 5 as learners");
-        cluster.add_learner(4).await.expect("Failed to add learner 4");
-        cluster.add_learner(5).await.expect("Failed to add learner 5");
+        cluster
+            .add_learner(4)
+            .await
+            .expect("Failed to add learner 4");
+        cluster
+            .add_learner(5)
+            .await
+            .expect("Failed to add learner 5");
 
         // Start both learners
         let learner1_idx = cluster.nodes.len() - 2;
         let learner2_idx = cluster.nodes.len() - 1;
-        cluster.nodes[learner1_idx].start().await.expect("Failed to start learner 4");
-        cluster.nodes[learner2_idx].start().await.expect("Failed to start learner 5");
+        cluster.nodes[learner1_idx]
+            .start()
+            .await
+            .expect("Failed to start learner 4");
+        cluster.nodes[learner2_idx]
+            .start()
+            .await
+            .expect("Failed to start learner 5");
 
         // Make more proposals
         for i in 11..=30 {
@@ -228,7 +254,11 @@ fn test_multiple_learners_simultaneously() {
         let caught_up_4 = cluster.is_learner_caught_up(4).await.unwrap_or(false);
         let caught_up_5 = cluster.is_learner_caught_up(5).await.unwrap_or(false);
 
-        tracing::info!("Learner 4 caught up: {}, Learner 5 caught up: {}", caught_up_4, caught_up_5);
+        tracing::info!(
+            "Learner 4 caught up: {}, Learner 5 caught up: {}",
+            caught_up_4,
+            caught_up_5
+        );
 
         if caught_up_4 {
             cluster.promote_learner(4).await.ok();

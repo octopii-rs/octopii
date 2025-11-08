@@ -32,7 +32,10 @@ fn test_three_node_cluster_leader_election() {
         tokio::time::sleep(Duration::from_secs(2)).await;
 
         // Verify leader elected
-        assert!(cluster.nodes[0].is_leader().await, "Node 1 should be leader");
+        assert!(
+            cluster.nodes[0].is_leader().await,
+            "Node 1 should be leader"
+        );
 
         cluster.shutdown_all();
         tracing::info!("✓ Test passed: 3-node leader election");
@@ -74,7 +77,10 @@ fn test_three_node_cluster_with_proposals() {
         tokio::time::sleep(Duration::from_secs(3)).await;
 
         // Verify convergence (has leader)
-        cluster.verify_convergence(Duration::from_secs(5)).await.expect("Convergence failed");
+        cluster
+            .verify_convergence(Duration::from_secs(5))
+            .await
+            .expect("Convergence failed");
 
         cluster.shutdown_all();
         tracing::info!("✓ Test passed: 3-node proposals");
@@ -108,7 +114,10 @@ fn test_five_node_cluster_leader_election() {
         tokio::time::sleep(Duration::from_secs(2)).await;
 
         // Verify leader elected
-        cluster.verify_convergence(Duration::from_secs(5)).await.expect("Leader election failed");
+        cluster
+            .verify_convergence(Duration::from_secs(5))
+            .await
+            .expect("Leader election failed");
 
         cluster.shutdown_all();
         tracing::info!("✓ Test passed: 5-node leader election");
@@ -161,11 +170,17 @@ fn test_follower_crash_and_recovery() {
 
         // Restart node 3
         tracing::info!("Restarting node 3...");
-        cluster.restart_node(3).await.expect("Failed to restart node");
+        cluster
+            .restart_node(3)
+            .await
+            .expect("Failed to restart node");
         tokio::time::sleep(Duration::from_secs(3)).await;
 
         // Verify convergence (node 3 should catch up)
-        cluster.verify_convergence(Duration::from_secs(10)).await.expect("Convergence failed");
+        cluster
+            .verify_convergence(Duration::from_secs(10))
+            .await
+            .expect("Convergence failed");
 
         cluster.shutdown_all();
         tracing::info!("✓ Test passed: Follower crash and recovery");
@@ -208,7 +223,10 @@ fn test_concurrent_proposals_from_leader() {
         tokio::time::sleep(Duration::from_secs(5)).await;
 
         // Verify convergence
-        cluster.verify_convergence(Duration::from_secs(10)).await.expect("Convergence failed");
+        cluster
+            .verify_convergence(Duration::from_secs(10))
+            .await
+            .expect("Convergence failed");
 
         // Verify a few keys made it through
         let result = cluster.nodes[0].query(b"GET concurrent1").await;

@@ -1,72 +1,24 @@
 use crate::chunk::{ChunkSource, TransferResult};
 use crate::config::Config;
 use crate::error::{OctopiiError, Result};
-use crate::raft::{
-    raft_message_to_rpc, raft_response_to_rpc, rpc_response_to_raft, rpc_to_raft_message, RaftNode,
-    StateMachine, WalStorage,
-};
+use crate::raft::{raft_message_to_rpc, rpc_to_raft_message, RaftNode, StateMachine, WalStorage};
 use crate::rpc::{
-    deserialize, MessageId, RequestPayload, ResponsePayload, RpcHandler, RpcMessage, RpcRequest,
+    deserialize, RequestPayload, ResponsePayload, RpcHandler, RpcMessage, RpcRequest,
 };
 use crate::runtime::OctopiiRuntime;
-use crate::transport::QuicTransport;
+use crate::transport::{PeerConnection, QuicTransport};
 use crate::wal::WriteAheadLog;
 use bytes::Bytes;
 use futures::future::join_all;
-use raft::prelude::MessageType;
-use raft::Storage;
+use raft::prelude::{Entry, Message};
 use std::collections::{HashMap, VecDeque};
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Instant;
-use tokio::sync::{broadcast, oneshot, RwLock};
+use tokio::sync::{broadcast, mpsc, oneshot, RwLock};
+use tokio::task::yield_now;
 use tokio::time::{interval, timeout, Duration};
-
-/// Bounded tracker for Raft message types to correlate requests with responses
-/// Uses a simple ring buffer to prevent unbounded growth
-struct MessageTypeTracker {
-    buffer: Mutex<Vec<Option<(MessageId, MessageType)>>>,
-    next_slot: Mutex<usize>,
-    capacity: usize,
-}
-
-impl MessageTypeTracker {
-    fn new(capacity: usize) -> Self {
-        Self {
-            buffer: Mutex::new(vec![None; capacity]),
-            next_slot: Mutex::new(0),
-            capacity,
-        }
-    }
-
-    /// Track a message ID and its type (overwrites oldest if full)
-    fn track(&self, msg_id: MessageId, msg_type: MessageType) {
-        let mut slot = self.next_slot.lock().unwrap();
-        let mut buffer = self.buffer.lock().unwrap();
-
-        buffer[*slot] = Some((msg_id, msg_type));
-        *slot = (*slot + 1) % self.capacity;
-    }
-
-    /// Get the message type for a given ID, removing it from tracker
-    fn take(&self, msg_id: MessageId) -> Option<MessageType> {
-        let mut buffer = self.buffer.lock().unwrap();
-
-        // Linear search - acceptable for small buffers (1024 entries)
-        for entry in buffer.iter_mut() {
-            if let Some((id, msg_type)) = entry {
-                if *id == msg_id {
-                    let result = *msg_type;
-                    *entry = None;
-                    return Some(result);
-                }
-            }
-        }
-        None
-    }
-}
 
 /// Metadata for a pending proposal (bounded queue to prevent unbounded growth)
 struct ProposalMetadata {
@@ -75,14 +27,14 @@ struct ProposalMetadata {
 
 /// Bounded proposal queue using VecDeque with max capacity
 struct ProposalQueue {
-    queue: Mutex<VecDeque<ProposalMetadata>>,
+    queue: StdMutex<VecDeque<ProposalMetadata>>,
     max_size: usize,
 }
 
 impl ProposalQueue {
     fn new(max_size: usize) -> Self {
         Self {
-            queue: Mutex::new(VecDeque::with_capacity(max_size)),
+            queue: StdMutex::new(VecDeque::with_capacity(max_size)),
             max_size,
         }
     }
@@ -118,10 +70,10 @@ pub struct OctopiiNode {
     rpc: Arc<RpcHandler>,
     raft: Arc<RaftNode>,
     state_machine: Arc<StateMachine>,
+    raft_msg_tx: mpsc::UnboundedSender<Message>,
+    raft_msg_rx: StdMutex<Option<mpsc::UnboundedReceiver<Message>>>,
     /// Map peer ID to socket address
     peer_addrs: Arc<RwLock<HashMap<u64, SocketAddr>>>,
-    /// Bounded tracker for correlating Raft message requests with responses
-    msg_type_tracker: Arc<MessageTypeTracker>,
     /// Bounded queue for pending proposals (max 10000 in-flight proposals)
     proposal_queue: Arc<ProposalQueue>,
     /// Pending ConfChange completions - notifies callers when membership changes commit
@@ -202,13 +154,15 @@ impl OctopiiNode {
         let state_machine = Arc::new(StateMachine::with_wal(Arc::clone(&wal)));
 
         // Create bounded message type tracker (1024 in-flight messages max)
-        let msg_type_tracker = Arc::new(MessageTypeTracker::new(1024));
 
         // Create bounded proposal queue (10000 max in-flight proposals)
         let proposal_queue = Arc::new(ProposalQueue::new(10000));
 
         // Create pending ConfChange tracker
         let pending_conf_changes = Arc::new(RwLock::new(HashMap::new()));
+
+        // Channel for inbound Raft messages (delivered to the event loop)
+        let (raft_msg_tx, raft_msg_rx) = mpsc::unbounded_channel();
 
         // Channel for signaling graceful shutdown to background tasks
         let (shutdown_tx, _) = broadcast::channel(16);
@@ -220,8 +174,9 @@ impl OctopiiNode {
             rpc,
             raft,
             state_machine,
+            raft_msg_tx,
+            raft_msg_rx: StdMutex::new(Some(raft_msg_rx)),
             peer_addrs: Arc::new(RwLock::new(peer_addrs_map)),
-            msg_type_tracker,
             proposal_queue,
             pending_conf_changes,
             shutdown_tx,
@@ -284,14 +239,19 @@ impl OctopiiNode {
         // Set up RPC request handler
         self.setup_rpc_handler().await;
 
+        // Start the consolidated Raft event loop
+        let raft_msg_rx = self
+            .raft_msg_rx
+            .lock()
+            .expect("Raft inbox mutex poisoned")
+            .take()
+            .ok_or_else(|| {
+                OctopiiError::Rpc("Raft event loop already running for this node".to_string())
+            })?;
+        self.spawn_raft_event_loop(raft_msg_rx);
+
         // Spawn network acceptor task
         self.spawn_network_acceptor();
-
-        // Spawn Raft tick task
-        self.spawn_raft_ticker();
-
-        // Spawn Raft ready handler
-        self.spawn_raft_ready_handler();
 
         Ok(())
     }
@@ -353,7 +313,11 @@ impl OctopiiNode {
     /// This proposes a ConfChange that will be committed through Raft consensus.
     /// Blocks until the ConfChange is committed and applied, or times out after 10 seconds.
     /// Returns the new ConfState after the change is applied.
-    pub async fn add_peer(&self, peer_id: u64, addr: SocketAddr) -> Result<raft::prelude::ConfState> {
+    pub async fn add_peer(
+        &self,
+        peer_id: u64,
+        addr: SocketAddr,
+    ) -> Result<raft::prelude::ConfState> {
         tracing::info!("Adding peer {} at {}", peer_id, addr);
 
         // Update peer address mapping immediately (optimistic)
@@ -374,20 +338,25 @@ impl OctopiiNode {
         // Wait for ConfChange to commit (with 10 second timeout)
         match timeout(Duration::from_secs(10), rx).await {
             Ok(Ok(conf_state)) => {
-                tracing::info!("✓ AddNode completed for peer {}, voters: {:?}", peer_id, conf_state.voters);
+                tracing::info!(
+                    "✓ AddNode completed for peer {}, voters: {:?}",
+                    peer_id,
+                    conf_state.voters
+                );
                 Ok(conf_state)
             }
             Ok(Err(_)) => {
                 self.pending_conf_changes.write().await.remove(&peer_id);
                 Err(OctopiiError::Raft(raft::Error::ConfChangeError(
-                    "ConfChange notification channel closed".to_string()
+                    "ConfChange notification channel closed".to_string(),
                 )))
             }
             Err(_) => {
                 self.pending_conf_changes.write().await.remove(&peer_id);
-                Err(OctopiiError::Raft(raft::Error::ConfChangeError(
-                    format!("ConfChange timeout after 10s for peer {}", peer_id)
-                )))
+                Err(OctopiiError::Raft(raft::Error::ConfChangeError(format!(
+                    "ConfChange timeout after 10s for peer {}",
+                    peer_id
+                ))))
             }
         }
     }
@@ -417,7 +386,11 @@ impl OctopiiNode {
     /// without affecting quorum. Promote to voter once caught up.
     /// Blocks until the ConfChange is committed and applied, or times out after 10 seconds.
     /// Returns the new ConfState after the change is applied.
-    pub async fn add_learner(&self, peer_id: u64, addr: SocketAddr) -> Result<raft::prelude::ConfState> {
+    pub async fn add_learner(
+        &self,
+        peer_id: u64,
+        addr: SocketAddr,
+    ) -> Result<raft::prelude::ConfState> {
         tracing::info!("Adding peer {} at {} as LEARNER", peer_id, addr);
 
         // Update peer address mapping
@@ -438,20 +411,25 @@ impl OctopiiNode {
         // Wait for ConfChange to commit (with 10 second timeout)
         match timeout(Duration::from_secs(10), rx).await {
             Ok(Ok(conf_state)) => {
-                tracing::info!("✓ AddLearnerNode completed for peer {}, learners: {:?}", peer_id, conf_state.learners);
+                tracing::info!(
+                    "✓ AddLearnerNode completed for peer {}, learners: {:?}",
+                    peer_id,
+                    conf_state.learners
+                );
                 Ok(conf_state)
             }
             Ok(Err(_)) => {
                 self.pending_conf_changes.write().await.remove(&peer_id);
                 Err(OctopiiError::Raft(raft::Error::ConfChangeError(
-                    "ConfChange notification channel closed".to_string()
+                    "ConfChange notification channel closed".to_string(),
                 )))
             }
             Err(_) => {
                 self.pending_conf_changes.write().await.remove(&peer_id);
-                Err(OctopiiError::Raft(raft::Error::ConfChangeError(
-                    format!("ConfChange timeout after 10s for learner {}", peer_id)
-                )))
+                Err(OctopiiError::Raft(raft::Error::ConfChangeError(format!(
+                    "ConfChange timeout after 10s for learner {}",
+                    peer_id
+                ))))
             }
         }
     }
@@ -466,7 +444,9 @@ impl OctopiiNode {
         // Check if learner is caught up first
         if !self.is_learner_caught_up(peer_id).await? {
             return Err(crate::error::OctopiiError::Raft(
-                raft::Error::ConfChangeError("Learner is not caught up yet, cannot promote".to_string())
+                raft::Error::ConfChangeError(
+                    "Learner is not caught up yet, cannot promote".to_string(),
+                ),
             ));
         }
 
@@ -485,20 +465,25 @@ impl OctopiiNode {
         // Wait for ConfChange to commit (with 10 second timeout)
         let conf_state = match timeout(Duration::from_secs(10), rx).await {
             Ok(Ok(conf_state)) => {
-                tracing::info!("✓ Promotion completed for peer {}, voters: {:?}", peer_id, conf_state.voters);
+                tracing::info!(
+                    "✓ Promotion completed for peer {}, voters: {:?}",
+                    peer_id,
+                    conf_state.voters
+                );
                 conf_state
             }
             Ok(Err(_)) => {
                 self.pending_conf_changes.write().await.remove(&peer_id);
                 return Err(OctopiiError::Raft(raft::Error::ConfChangeError(
-                    "ConfChange notification channel closed".to_string()
+                    "ConfChange notification channel closed".to_string(),
                 )));
             }
             Err(_) => {
                 self.pending_conf_changes.write().await.remove(&peer_id);
-                return Err(OctopiiError::Raft(raft::Error::ConfChangeError(
-                    format!("ConfChange timeout after 10s for promoting learner {}", peer_id)
-                )));
+                return Err(OctopiiError::Raft(raft::Error::ConfChangeError(format!(
+                    "ConfChange timeout after 10s for promoting learner {}",
+                    peer_id
+                ))));
             }
         };
 
@@ -527,7 +512,7 @@ impl OctopiiNode {
                 tokio::time::sleep(Duration::from_millis(500)).await;
 
                 // Check if we've exited joint consensus by getting current raft status
-                let raft_read = self.raft.raw_node().read().await;
+                let raft_read = self.raft.raw_node().lock().await;
                 let status = raft_read.status();
 
                 // Check if voters_outgoing is empty (exited joint consensus)
@@ -544,11 +529,19 @@ impl OctopiiNode {
                 drop(raft_read); // Release lock before continuing
 
                 if !still_in_joint {
-                    tracing::info!("✓ Exited joint consensus for peer {} after {:?}", peer_id, start.elapsed());
+                    tracing::info!(
+                        "✓ Exited joint consensus for peer {} after {:?}",
+                        peer_id,
+                        start.elapsed()
+                    );
                     break;
                 }
 
-                tracing::trace!("Still in joint consensus for peer {}, waiting... (elapsed: {:?})", peer_id, start.elapsed());
+                tracing::trace!(
+                    "Still in joint consensus for peer {}, waiting... (elapsed: {:?})",
+                    peer_id,
+                    start.elapsed()
+                );
             }
         }
 
@@ -561,7 +554,7 @@ impl OctopiiNode {
         // Check if we're the leader
         if !self.raft.is_leader().await {
             return Err(crate::error::OctopiiError::Raft(
-                raft::Error::ConfChangeError("Only leader can check learner progress".to_string())
+                raft::Error::ConfChangeError("Only leader can check learner progress".to_string()),
             ));
         }
 
@@ -594,11 +587,14 @@ impl OctopiiNode {
 
         // Get state machine snapshot data
         let snapshot = self.state_machine.snapshot();
-        let snapshot_data = bincode::serialize(&snapshot)
-            .map_err(|e| crate::error::OctopiiError::Wal(format!("Failed to serialize snapshot: {}", e)))?;
+        let snapshot_data = bincode::serialize(&snapshot).map_err(|e| {
+            crate::error::OctopiiError::Wal(format!("Failed to serialize snapshot: {}", e))
+        })?;
 
         // Compact the Raft log
-        self.raft.try_compact_logs(commit_index, snapshot_data).await?;
+        self.raft
+            .try_compact_logs(commit_index, snapshot_data)
+            .await?;
 
         tracing::info!("Log compacted at commit_index={}", commit_index);
         Ok(())
@@ -703,30 +699,43 @@ impl OctopiiNode {
     async fn setup_rpc_handler(&self) {
         tracing::info!("Setting up application RPC handler");
 
+        let raft_sender = self.raft_msg_tx.clone();
+        let node_id = self.config.node_id;
+
         self.rpc
-            .set_request_handler(move |req: RpcRequest| {
-                match &req.payload {
-                    RequestPayload::AppendEntries { .. }
-                    | RequestPayload::RequestVote { .. }
-                    | RequestPayload::RaftSnapshot { .. } => {
-                        // Raft messages are handled in network acceptor, this shouldn't be reached
-                        tracing::warn!(
-                            "Raft message reached RPC handler (should be handled in acceptor)"
-                        );
-                        ResponsePayload::Error {
-                            message: "Raft messages handled separately".to_string(),
+            .set_request_handler(move |req: RpcRequest| match &req.payload {
+                RequestPayload::RaftMessage { .. } => {
+                    if let Some(raft_msg) = rpc_to_raft_message(0, node_id, &req.payload) {
+                        match raft_sender.send(raft_msg) {
+                            Ok(_) => ResponsePayload::CustomResponse {
+                                success: true,
+                                data: Bytes::new(),
+                            },
+                            Err(e) => {
+                                tracing::error!("Failed to enqueue Raft message: {}", e);
+                                ResponsePayload::CustomResponse {
+                                    success: false,
+                                    data: Bytes::new(),
+                                }
+                            }
+                        }
+                    } else {
+                        tracing::error!("Failed to decode Raft message in RPC handler");
+                        ResponsePayload::CustomResponse {
+                            success: false,
+                            data: Bytes::new(),
                         }
                     }
-                    RequestPayload::Custom { operation, data } => {
-                        tracing::debug!(
-                            "Handling custom RPC: operation={}, data={} bytes",
-                            operation,
-                            data.len()
-                        );
-                        ResponsePayload::CustomResponse {
-                            success: true,
-                            data: Bytes::from("OK"),
-                        }
+                }
+                RequestPayload::Custom { operation, data } => {
+                    tracing::debug!(
+                        "Handling custom RPC: operation={}, data={} bytes",
+                        operation,
+                        data.len()
+                    );
+                    ResponsePayload::CustomResponse {
+                        success: true,
+                        data: Bytes::from("OK"),
                     }
                 }
             })
@@ -737,7 +746,7 @@ impl OctopiiNode {
     fn spawn_network_acceptor(&self) {
         let transport = Arc::clone(&self.transport);
         let rpc = Arc::clone(&self.rpc);
-        let raft = Arc::clone(&self.raft);
+        let raft_msg_tx = self.raft_msg_tx.clone();
         let node_id = self.config.node_id;
         let mut shutdown_rx = self.shutdown_tx.subscribe();
 
@@ -757,7 +766,7 @@ impl OctopiiNode {
                                 tracing::debug!("Accepted connection from {}", addr);
 
                                 let rpc_clone = Arc::clone(&rpc);
-                                let raft_clone = Arc::clone(&raft);
+                                let raft_sender = raft_msg_tx.clone();
                                 let peer = Arc::new(peer);
 
                                 tokio::spawn(async move {
@@ -766,61 +775,55 @@ impl OctopiiNode {
                                             // Handle Raft messages directly for async processing
                                             match &msg {
                                                 RpcMessage::Request(req) => {
-                                                    match &req.payload {
-                                                        RequestPayload::AppendEntries { .. } | RequestPayload::RequestVote { .. } => {
-                                                            tracing::info!("Received Raft request from {}: {:?}", addr, req.payload);
+                                                match &req.payload {
+                                                    RequestPayload::RaftMessage { .. } => {
+                                                        if let Some(raft_msg) = rpc_to_raft_message(0, node_id, &req.payload) {
+                                                            tracing::info!(
+                                                                "Received Raft message from {}: {:?}",
+                                                                addr,
+                                                                raft_msg.get_msg_type()
+                                                            );
 
-                                                            // Convert RPC to Raft message
-                                                            if let Some(raft_msg) = rpc_to_raft_message(0, node_id, &req.payload) {
-                                                                // Step the Raft state machine
-                                                                // The main ready handler will process the resulting ready state,
-                                                                // persist entries, and send response messages
-                                                                match raft_clone.step(raft_msg).await {
-                                                                    Ok(_) => {
-                                                                        tracing::trace!("Raft message processed successfully");
-                                                                        // Send immediate ACK to unblock the RPC call
-                                                                        // The actual Raft response will be sent by the ready handler
-                                                                        let ack = RpcMessage::new_response(
-                                                                            req.id,
-                                                                            ResponsePayload::CustomResponse {
-                                                                                success: true,
-                                                                                data: bytes::Bytes::new(),
-                                                                            }
-                                                                        );
-                                                                        if let Ok(data) = crate::rpc::serialize(&ack) {
-                                                                            if let Err(e) = peer.send(data).await {
-                                                                                tracing::error!("Failed to send ACK: {}", e);
-                                                                            }
+                                                            match raft_sender.send(raft_msg) {
+                                                                Ok(_) => {
+                                                                    let ack = RpcMessage::new_response(
+                                                                        req.id,
+                                                                        ResponsePayload::CustomResponse {
+                                                                            success: true,
+                                                                            data: bytes::Bytes::new(),
                                                                         }
-                                                                    }
-                                                                    Err(e) => {
-                                                                        tracing::error!("Failed to step Raft: {}", e);
-                                                                        // Send error response
-                                                                        let err_resp = RpcMessage::new_response(
-                                                                            req.id,
-                                                                            ResponsePayload::CustomResponse {
-                                                                                success: false,
-                                                                                data: bytes::Bytes::new(),
-                                                                            }
-                                                                        );
-                                                                        if let Ok(data) = crate::rpc::serialize(&err_resp) {
-                                                                            let _ = peer.send(data).await;
+                                                                    );
+                                                                    Self::spawn_rpc_response(Arc::clone(&peer), ack);
+                                                                }
+                                                                Err(e) => {
+                                                                    tracing::error!("Failed to enqueue Raft message: {}", e);
+                                                                    let err_resp = RpcMessage::new_response(
+                                                                        req.id,
+                                                                        ResponsePayload::CustomResponse {
+                                                                            success: false,
+                                                                            data: bytes::Bytes::new(),
                                                                         }
-                                                                    }
+                                                                    );
+                                                                    Self::spawn_rpc_response(Arc::clone(&peer), err_resp);
                                                                 }
                                                             }
-                                                        }
-                                                        _ => {
-                                                            // Non-Raft messages go through normal RPC handler
-                                                            rpc_clone.notify_message(addr, msg, Some(Arc::clone(&peer))).await;
+                                                        } else {
+                                                            tracing::error!("Failed to decode Raft message from {}", addr);
                                                         }
                                                     }
+                                                    _ => {
+                                                        // Non-Raft messages go through normal RPC handler
+                                                        rpc_clone.notify_message(addr, msg, Some(Arc::clone(&peer))).await;
+                                                    }
+                                                }
                                                 }
                                                 _ => {
                                                     rpc_clone.notify_message(addr, msg, Some(Arc::clone(&peer))).await;
                                                 }
                                             }
                                         }
+                                        // Yield to allow ready handler/ticker to run between bursts
+                                        yield_now().await;
                                     }
                                 });
                             }
@@ -834,15 +837,19 @@ impl OctopiiNode {
         });
     }
 
-    /// Spawn task to tick Raft periodically
-    fn spawn_raft_ticker(&self) {
+    /// Spawn the unified Raft event loop that owns the RawNode
+    fn spawn_raft_event_loop(&self, mut raft_rx: mpsc::UnboundedReceiver<Message>) {
         let raft = Arc::clone(&self.raft);
+        let state_machine = Arc::clone(&self.state_machine);
+        let rpc = Arc::clone(&self.rpc);
+        let peer_addrs = Arc::clone(&self.peer_addrs);
+        let proposal_queue = Arc::clone(&self.proposal_queue);
+        let pending_conf_changes = Arc::clone(&self.pending_conf_changes);
         let mut shutdown_rx = self.shutdown_tx.subscribe();
+        let ready_notify = self.raft.ready_notifier();
 
-        tracing::info!("Spawning Raft ticker (100ms interval) with automatic leader election");
+        tracing::info!("Spawning consolidated Raft event loop");
 
-        // Randomize election timeout between 15-30 ticks (1.5-3 seconds)
-        // This prevents split votes when multiple nodes lose leader simultaneously
         use rand::Rng;
         let max_ticks_without_leader: u64 = rand::thread_rng().gen_range(15..=30);
 
@@ -851,17 +858,36 @@ impl OctopiiNode {
             let mut ticks_without_leader = 0u64;
 
             loop {
+                let mut process_ready = false;
+
                 tokio::select! {
                     recv = shutdown_rx.recv() => {
                         let _ = recv;
-                        tracing::info!("Raft ticker shutting down");
+                        tracing::info!("Raft event loop shutting down");
                         break;
+                    }
+                    maybe_msg = raft_rx.recv() => {
+                        match maybe_msg {
+                            Some(msg) => {
+                                let msg_type = msg.get_msg_type();
+                                if let Err(e) = raft.step(msg).await {
+                                    tracing::error!("Failed to step Raft message {:?}: {}", msg_type, e);
+                                } else {
+                                    tracing::debug!("Enqueued Raft message {:?} for processing", msg_type);
+                                    process_ready = true;
+                                }
+                            }
+                            None => {
+                                tracing::warn!("Raft message channel closed, stopping event loop");
+                                break;
+                            }
+                        }
                     }
                     _ = ticker.tick() => {
                         raft.tick().await;
                         tracing::trace!("Raft ticked");
+                        process_ready = true;
 
-                        // Automatic leader election with randomized timeout
                         if !raft.has_leader().await {
                             ticks_without_leader += 1;
                             if ticks_without_leader >= max_ticks_without_leader {
@@ -879,273 +905,296 @@ impl OctopiiNode {
                             ticks_without_leader = 0;
                         }
                     }
+                    _ = ready_notify.notified() => {
+                        process_ready = true;
+                    }
                 }
+
+                if process_ready {
+                    Self::handle_raft_ready(
+                        &raft,
+                        &state_machine,
+                        &rpc,
+                        &peer_addrs,
+                        &proposal_queue,
+                        &pending_conf_changes,
+                    )
+                    .await;
+                }
+            }
+
+            tracing::info!("Raft event loop exited");
+        });
+    }
+
+    fn spawn_rpc_response(peer: Arc<PeerConnection>, response: RpcMessage) {
+        tokio::spawn(async move {
+            match crate::rpc::serialize(&response) {
+                Ok(data) => match timeout(Duration::from_secs(2), peer.send(data)).await {
+                    Ok(Ok(())) => {}
+                    Ok(Err(e)) => tracing::error!("Failed to send RPC response: {}", e),
+                    Err(_) => tracing::warn!("Timed out sending RPC response"),
+                },
+                Err(e) => tracing::error!("Failed to serialize RPC response: {}", e),
             }
         });
     }
 
-    /// Spawn task to handle Raft ready events
-    fn spawn_raft_ready_handler(&self) {
-        let raft = Arc::clone(&self.raft);
-        let state_machine = Arc::clone(&self.state_machine);
-        let rpc = Arc::clone(&self.rpc);
-        let peer_addrs = Arc::clone(&self.peer_addrs);
-        let proposal_queue = Arc::clone(&self.proposal_queue);
-        let pending_conf_changes = Arc::clone(&self.pending_conf_changes);
-        let mut shutdown_rx = self.shutdown_tx.subscribe();
+    /// Drain and handle all pending Ready states from the RawNode
+    async fn handle_raft_ready(
+        raft: &Arc<RaftNode>,
+        state_machine: &Arc<StateMachine>,
+        rpc: &Arc<RpcHandler>,
+        peer_addrs: &Arc<RwLock<HashMap<u64, SocketAddr>>>,
+        proposal_queue: &Arc<ProposalQueue>,
+        pending_conf_changes: &Arc<RwLock<HashMap<u64, oneshot::Sender<raft::prelude::ConfState>>>>,
+    ) {
+        loop {
+            let ready_opt = raft.ready().await;
+            let Some(mut ready) = ready_opt else {
+                break;
+            };
 
-        tracing::info!("Spawning Raft ready handler");
+            let node_id = raft.id();
+            tracing::info!(
+                "[Node {}] Raft ready: has {} messages, {} committed entries, {} new entries, snapshot: {}",
+                node_id,
+                ready.messages().len(),
+                ready.committed_entries().len(),
+                ready.entries().len(),
+                !ready.snapshot().is_empty()
+            );
 
-        self.runtime.spawn(async move {
-            let mut checker = interval(Duration::from_millis(10));
-            let mut check_count = 0;
-            'main: loop {
-                tokio::select! {
-                    recv = shutdown_rx.recv() => {
-                        let _ = recv;
-                        tracing::info!("Raft ready handler shutting down");
-                        break 'main;
-                    }
-                    _ = checker.tick() => {
-                        check_count += 1;
-                        if check_count % 100 == 0 {
-                            tracing::debug!("Ready handler alive, checked {} times", check_count);
-                        }
-                    }
+            let mut last_applied_index = None;
+
+            if let Some(hs) = ready.hs() {
+                tracing::debug!(
+                    "[Node {}] Persisting HardState: term={}, vote={}, commit={}",
+                    node_id,
+                    hs.term,
+                    hs.vote,
+                    hs.commit
+                );
+                raft.persist_hard_state(hs.clone()).await;
+            }
+
+            if !ready.entries().is_empty() {
+                tracing::info!(
+                    "[Node {}] Persisting {} new entries to storage",
+                    node_id,
+                    ready.entries().len()
+                );
+                raft.persist_entries(ready.entries()).await;
+            }
+
+            Self::send_raft_messages(ready.take_messages(), rpc, peer_addrs).await;
+
+            if let Some(idx) = Self::apply_committed_entries(
+                ready.take_committed_entries(),
+                raft,
+                state_machine,
+                proposal_queue,
+                pending_conf_changes,
+            )
+            .await
+            {
+                last_applied_index = Some(idx);
+            }
+
+            Self::send_raft_messages(ready.take_persisted_messages(), rpc, peer_addrs).await;
+
+            let mut light_rd = raft.advance(ready).await;
+
+            tracing::info!(
+                "LightReady: {} committed entries, {} messages",
+                light_rd.committed_entries().len(),
+                light_rd.messages().len()
+            );
+
+            if let Some(idx) = Self::apply_committed_entries(
+                light_rd.take_committed_entries(),
+                raft,
+                state_machine,
+                proposal_queue,
+                pending_conf_changes,
+            )
+            .await
+            {
+                last_applied_index = Some(idx);
+            }
+
+            Self::send_raft_messages(light_rd.take_messages(), rpc, peer_addrs).await;
+
+            if let Some(last_applied_index) = last_applied_index {
+                if let Err(e) = state_machine.compact_state_machine() {
+                    tracing::warn!("State machine compaction failed: {}", e);
                 }
 
-                let ready_opt = tokio::select! {
-                    recv = shutdown_rx.recv() => {
-                        let _ = recv;
-                        tracing::info!("Raft ready handler shutting down (waiting for ready)");
-                        break 'main;
-                    }
-                    ready = raft.ready() => ready,
-                };
+                let sm_snapshot = state_machine.snapshot();
+                let serializable_snapshot: Vec<(String, Vec<u8>)> = sm_snapshot
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.to_vec()))
+                    .collect();
+                let snapshot_data = rkyv::to_bytes::<_, 4096>(&serializable_snapshot)
+                    .unwrap_or_default()
+                    .to_vec();
 
-                if let Some(ready) = ready_opt {
-                    let node_id = raft.id();
-                    tracing::info!("[Node {}] Raft ready: has {} messages, {} committed entries, {} new entries, snapshot: {}",
-                        node_id,
-                        ready.messages().len(),
-                        ready.committed_entries().len(),
-                        ready.entries().len(),
-                        !ready.snapshot().is_empty()
-                    );
-
-                    // Persist hard state if it changed
-                    if let Some(hs) = ready.hs() {
-                        tracing::debug!("[Node {}] Persisting HardState: term={}, vote={}, commit={}",
-                            node_id, hs.term, hs.vote, hs.commit);
-                        raft.persist_hard_state(hs.clone()).await;
-                    }
-
-                    // Persist new entries to storage (must be done before sending messages)
-                    if !ready.entries().is_empty() {
-                        tracing::info!("[Node {}] Persisting {} new entries to storage", node_id, ready.entries().len());
-                        raft.persist_entries(ready.entries()).await;
-                    }
-
-                    // Send outgoing Raft messages to peers
-                    for msg in ready.messages() {
-                        let to = msg.to;
-                        let from = msg.from;
-                        let msg_type = msg.get_msg_type();
-                        let peer_addrs_read = peer_addrs.read().await;
-
-                        if let Some(peer_addr) = peer_addrs_read.get(&to) {
-                            if let Some(payload) = raft_message_to_rpc(&msg) {
-                                tracing::info!(
-                                    "Sending Raft message to peer {}: {:?} -> {}",
-                                    to,
-                                    msg_type,
-                                    peer_addr
-                                );
-
-                                // Send message via RPC
-                                let rpc_clone = Arc::clone(&rpc);
-                                let raft_clone = Arc::clone(&raft);
-                                let peer_addr = *peer_addr;
-
-                                tokio::spawn(async move {
-                                    match rpc_clone.request(
-                                        peer_addr,
-                                        payload,
-                                        Duration::from_secs(5),
-                                    ).await {
-                                        Ok(response) => {
-                                            tracing::trace!("Received Raft response from {}: {:?}", peer_addr, response.payload);
-
-                                            // Convert response back to Raft message and step it
-                                            // Use the captured msg_type from the original message
-                                            if let Some(raft_resp_msg) = rpc_response_to_raft(to, from, msg_type, &response.payload) {
-                                                tracing::debug!("Stepping Raft response back: {:?}", raft_resp_msg.get_msg_type());
-
-                                                if let Err(e) = raft_clone.step(raft_resp_msg).await {
-                                                    tracing::error!("Failed to step Raft response: {}", e);
-                                                }
-                                            }
-                                        }
-                                        Err(e) => {
-                                            tracing::warn!("Failed to send Raft message to {}: {}", peer_addr, e);
-                                        }
-                                    }
-                                });
-                            }
-                        } else {
-                            tracing::warn!("No address found for peer {}", to);
-                        }
-                    }
-
-                    // Advance Raft state and get LightReady with committed entries
-                    let light_rd = raft.advance(ready).await;
-
-                    tracing::info!("LightReady: {} committed entries, {} messages",
-                        light_rd.committed_entries().len(),
-                        light_rd.messages().len()
-                    );
-
-                    // Apply committed entries to state machine (from LightReady)
-                    let mut last_applied_index = 0u64;
-                    for entry in light_rd.committed_entries().iter() {
-                        last_applied_index = entry.index;
-                        // Check if this is a ConfChange entry
-                        if entry.get_entry_type() == raft::prelude::EntryType::EntryConfChange {
-                            tracing::info!("Applying ConfChange entry: index={}, term={}",
-                                entry.index, entry.term);
-
-                            // Decode and apply ConfChange
-                            let parse_result: protobuf::ProtobufResult<raft::prelude::ConfChange> =
-                                protobuf::Message::parse_from_bytes(&entry.data);
-                            match parse_result {
-                                Ok(cc) => {
-                                    let node_id = cc.node_id;
-                                    match raft.apply_conf_change(&cc).await {
-                                        Ok(conf_state) => {
-                                            tracing::info!("✓ ConfChange applied: {:?} for node {}, voters: {:?}",
-                                                cc.get_change_type(), node_id, conf_state.voters);
-
-                                            // Notify any waiting caller
-                                            if let Some(tx) = pending_conf_changes.write().await.remove(&node_id) {
-                                                if tx.send(conf_state.clone()).is_err() {
-                                                    tracing::warn!("ConfChange waiter dropped for node {}", node_id);
-                                                }
-                                            }
-                                        }
-                                        Err(e) => {
-                                            tracing::error!("Failed to apply ConfChange: {}", e);
-                                            // Remove pending waiter on error
-                                            pending_conf_changes.write().await.remove(&node_id);
-                                        }
-                                    }
-                                }
-                                Err(e) => {
-                                    tracing::error!("Failed to decode ConfChange: {:?}", e);
-                                }
-                            }
-                        } else if !entry.data.is_empty() {
-                            tracing::info!("Applying committed entry: index={}, term={}, {} bytes",
-                                entry.index, entry.term, entry.data.len());
-
-                            // Apply to state machine
-                            let apply_result = state_machine.apply(&entry.data);
-
-                            // If this node is the leader, respond to the client
-                            if raft.is_leader().await {
-                                if let Some(proposal) = proposal_queue.pop() {
-                                    tracing::debug!("Responding to proposal, {} remaining in queue", proposal_queue.len());
-
-                                    let response_result = match apply_result {
-                                        Ok(result) => {
-                                            tracing::info!("Entry applied successfully: {:?}", result);
-                                            Ok(result)
-                                        }
-                                        Err(e) => {
-                                            tracing::error!("Failed to apply entry: {}", e);
-                                            Err(crate::error::OctopiiError::Rpc(e))
-                                        }
-                                    };
-
-                                    // Send response to client (ignore if client disconnected)
-                                    let _ = proposal.responder.send(response_result);
-                                } else {
-                                    // This shouldn't happen - we have a committed entry but no pending proposal
-                                    tracing::warn!("Committed entry but no pending proposal (possibly from follower sync)");
-                                }
-                            } else {
-                                // Followers just apply without responding to clients
-                                match apply_result {
-                                    Ok(result) => tracing::info!("Entry applied successfully: {:?}", result),
-                                    Err(e) => tracing::error!("Failed to apply entry: {}", e),
-                                }
-                            }
-                        }
-                    }
-
-                    // Send messages from LightReady
-                    for msg in light_rd.messages() {
-                        let to = msg.to;
-                        let peer_addrs_read = peer_addrs.read().await;
-
-                        if let Some(peer_addr) = peer_addrs_read.get(&to) {
-                            if let Some(payload) = raft_message_to_rpc(&msg) {
-                                tracing::debug!(
-                                    "Sending LightReady Raft message to peer {}: {:?} -> {}",
-                                    to,
-                                    msg.get_msg_type(),
-                                    peer_addr
-                                );
-
-                                let rpc_clone = Arc::clone(&rpc);
-                                let peer_addr = *peer_addr;
-                                tokio::spawn(async move {
-                                    match rpc_clone.request(
-                                        peer_addr,
-                                        payload,
-                                        Duration::from_secs(5),
-                                    ).await {
-                                        Ok(response) => {
-                                            tracing::trace!("Received Raft response from {}: {:?}", peer_addr, response.payload);
-                                        }
-                                        Err(e) => {
-                                            tracing::warn!("Failed to send Raft message to {}: {}", peer_addr, e);
-                                        }
-                                    }
-                                });
-                            }
-                        }
-                    }
-
-                    // Trigger compaction if we applied entries
-                    if last_applied_index > 0 {
-                        // 1. Try state machine compaction (threshold-based)
-                        if let Err(e) = state_machine.compact_state_machine() {
-                            tracing::warn!("State machine compaction failed: {}", e);
-                        }
-
-                        // 2. Try log compaction (threshold-based)
-                        // Get state machine snapshot for Raft snapshot data
-                        // Convert HashMap<String, Bytes> to serializable format
-                        let sm_snapshot = state_machine.snapshot();
-                        let serializable_snapshot: Vec<(String, Vec<u8>)> = sm_snapshot
-                            .iter()
-                            .map(|(k, v)| (k.clone(), v.to_vec()))
-                            .collect();
-                        let snapshot_data = rkyv::to_bytes::<_, 4096>(&serializable_snapshot)
-                            .unwrap_or_default()
-                            .to_vec();
-
-                        // Try to compact logs (will only compact if threshold reached)
-                        if let Err(e) = raft.try_compact_logs(last_applied_index, snapshot_data).await {
-                            tracing::warn!("Log compaction failed: {}", e);
-                        }
-                    }
-
-                    // Finish advancing (completes the apply phase)
-                    raft.advance_apply().await;
+                if let Err(e) = raft
+                    .try_compact_logs(last_applied_index, snapshot_data)
+                    .await
+                {
+                    tracing::warn!("Log compaction failed: {}", e);
                 }
             }
-        });
+
+            raft.advance_apply().await;
+        }
+    }
+
+    async fn send_raft_messages(
+        messages: Vec<Message>,
+        rpc: &Arc<RpcHandler>,
+        peer_addrs: &Arc<RwLock<HashMap<u64, SocketAddr>>>,
+    ) {
+        if messages.is_empty() {
+            return;
+        }
+
+        for msg in messages {
+            let to = msg.to;
+            let msg_type = msg.get_msg_type();
+            let peer_addr = {
+                let guard = peer_addrs.read().await;
+                guard.get(&to).copied()
+            };
+
+            if let Some(peer_addr) = peer_addr {
+                if let Some(payload) = raft_message_to_rpc(&msg) {
+                    tracing::info!(
+                        "Sending Raft message to peer {}: {:?} -> {}",
+                        to,
+                        msg_type,
+                        peer_addr
+                    );
+
+                    let rpc_clone = Arc::clone(rpc);
+                    tokio::spawn(async move {
+                        if let Err(e) = rpc_clone
+                            .request(peer_addr, payload, Duration::from_secs(5))
+                            .await
+                        {
+                            tracing::warn!("Failed to send Raft message to {}: {}", peer_addr, e);
+                        }
+                    });
+                }
+            } else {
+                tracing::warn!("No address found for peer {}", to);
+            }
+        }
+    }
+
+    async fn apply_committed_entries(
+        entries: Vec<Entry>,
+        raft: &Arc<RaftNode>,
+        state_machine: &Arc<StateMachine>,
+        proposal_queue: &Arc<ProposalQueue>,
+        pending_conf_changes: &Arc<RwLock<HashMap<u64, oneshot::Sender<raft::prelude::ConfState>>>>,
+    ) -> Option<u64> {
+        if entries.is_empty() {
+            return None;
+        }
+
+        let mut last_applied_index = None;
+        let is_leader = raft.is_leader().await;
+
+        for entry in entries {
+            last_applied_index = Some(entry.index);
+
+            if entry.get_entry_type() == raft::prelude::EntryType::EntryConfChange {
+                tracing::info!(
+                    "Applying ConfChange entry: index={}, term={}",
+                    entry.index,
+                    entry.term
+                );
+
+                let parse_result: protobuf::ProtobufResult<raft::prelude::ConfChange> =
+                    protobuf::Message::parse_from_bytes(&entry.data);
+                match parse_result {
+                    Ok(cc) => {
+                        let node_id = cc.node_id;
+                        match raft.apply_conf_change(&cc).await {
+                            Ok(conf_state) => {
+                                tracing::info!(
+                                    "✓ ConfChange applied: {:?} for node {}, voters: {:?}",
+                                    cc.get_change_type(),
+                                    node_id,
+                                    conf_state.voters
+                                );
+                                if let Some(tx) =
+                                    pending_conf_changes.write().await.remove(&node_id)
+                                {
+                                    if tx.send(conf_state.clone()).is_err() {
+                                        tracing::warn!(
+                                            "ConfChange waiter dropped for node {}",
+                                            node_id
+                                        );
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                tracing::error!("Failed to apply ConfChange: {}", e);
+                                pending_conf_changes.write().await.remove(&node_id);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to decode ConfChange: {:?}", e);
+                    }
+                }
+            } else if !entry.data.is_empty() {
+                tracing::info!(
+                    "Applying committed entry: index={}, term={}, {} bytes",
+                    entry.index,
+                    entry.term,
+                    entry.data.len()
+                );
+
+                let apply_result = state_machine.apply(&entry.data);
+
+                if is_leader {
+                    if let Some(proposal) = proposal_queue.pop() {
+                        tracing::debug!(
+                            "Responding to proposal, {} remaining in queue",
+                            proposal_queue.len()
+                        );
+
+                        let response_result = match apply_result {
+                            Ok(result) => {
+                                tracing::info!("Entry applied successfully: {:?}", result);
+                                Ok(result)
+                            }
+                            Err(e) => {
+                                tracing::error!("Failed to apply entry: {}", e);
+                                Err(crate::error::OctopiiError::Rpc(e))
+                            }
+                        };
+
+                        let _ = proposal.responder.send(response_result);
+                    } else {
+                        tracing::warn!(
+                            "Committed entry but no pending proposal (possibly from follower sync)"
+                        );
+                    }
+                } else {
+                    match apply_result {
+                        Ok(result) => tracing::info!("Entry applied successfully: {:?}", result),
+                        Err(e) => tracing::error!("Failed to apply entry: {}", e),
+                    }
+                }
+            }
+        }
+
+        last_applied_index
     }
 
     /// Trigger graceful shutdown for background tasks and transport

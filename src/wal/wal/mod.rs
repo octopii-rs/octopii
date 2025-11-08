@@ -5,7 +5,7 @@ mod runtime;
 mod storage;
 
 pub use block::Entry;
-pub use config::{FsyncSchedule, disable_fd_backend, enable_fd_backend};
+pub use config::{disable_fd_backend, enable_fd_backend, FsyncSchedule};
 pub use runtime::{ReadConsistency, WalIndex, Walrus};
 
 #[doc(hidden)]

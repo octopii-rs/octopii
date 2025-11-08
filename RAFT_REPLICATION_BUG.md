@@ -4,6 +4,22 @@
 **Branch**: `claude/raft-improvements-analysis-011CUvozkUzpxyut8m7n8J3L`
 **Status**: ❌ BLOCKED - Critical bug preventing automatic election tests
 
+## Latest Update (2025-11-09)
+
+### ✅ Root Cause Identified: MsgAppend Heartbeats Converted to MsgHeartbeat
+- The RPC adapter in `src/raft/rpc.rs` was converting every AppendEntries RPC that contained zero entries into `MessageType::MsgHeartbeat`.
+- When the leader adds a fresh peer, raft-rs deliberately sends empty `MsgAppend` messages so the follower can reject them with its real `last_index`. Those rejections drive the leader to decrement `next_index` or send snapshots.
+- Because we downcasted them to `MsgHeartbeat`, followers always responded `success=true` without log comparison. The leader therefore believed followers were fully caught up and never sent actual entries or snapshots. This matches the observed logs (`entries: []`, followers stuck at `last_index=0`).
+
+### ✅ Fix Implemented
+- Added an `is_heartbeat` flag to `RequestPayload::AppendEntries` (`src/rpc/message.rs`) so the original Raft message type survives the RPC hop.
+- `raft_message_to_rpc` now sets `is_heartbeat` to `false` for `MsgAppend` (even when empty) and `true` for real `MsgHeartbeat`.
+- `rpc_to_raft_message` uses the flag to reconstruct the correct `MessageType`, ensuring empty AppendEntries continue to behave like AppendEntries on the follower.
+- Added a tiny helper crate in `tools/protoc-installer`. Running `cargo run --manifest-path tools/protoc-installer/Cargo.toml` builds the vendored `protoc` from `protobuf-src` and prints its absolute path so you can `export PROTOC=<printed path>` before running main project builds/tests.
+
+### ⛔️ Verification Pending
+- After setting `PROTOC` to the vendored binary above, rerun `cargo test --test raft_comprehensive_test test_automatic_election_after_leader_failure -- --nocapture`. (Running inside the Codex sandbox currently fails earlier with `PermissionDenied` while binding UDP sockets, so execute the test on the host if you hit that.)
+
 ## Failing Test
 
 **Test File**: `tests/raft_comprehensive/automatic_election_tests.rs`

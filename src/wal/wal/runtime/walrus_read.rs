@@ -2,7 +2,7 @@ use super::allocator::BlockStateTracker;
 use super::reader::ColReaderInfo;
 use super::{ReadConsistency, Walrus};
 use crate::wal::wal::block::{Block, Entry, Metadata};
-use crate::wal::wal::config::{MAX_BATCH_ENTRIES, PREFIX_META_SIZE, checksum64, debug_print};
+use crate::wal::wal::config::{checksum64, debug_print, MAX_BATCH_ENTRIES, PREFIX_META_SIZE};
 use std::io;
 use std::sync::{Arc, RwLock};
 
@@ -575,7 +575,10 @@ impl Walrus {
 
                     unsafe {
                         ring.submission().push(&read_op).map_err(|e| {
-                            io::Error::new(io::ErrorKind::Other, format!("io_uring push failed: {}", e))
+                            io::Error::new(
+                                io::ErrorKind::Other,
+                                format!("io_uring push failed: {}", e),
+                            )
                         })?;
                     }
                 }

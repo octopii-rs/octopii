@@ -56,7 +56,10 @@ fn test_crash_during_proposal() {
         tokio::time::sleep(Duration::from_secs(3)).await;
 
         // Verify convergence
-        cluster.verify_convergence(Duration::from_secs(10)).await.expect("Convergence failed");
+        cluster
+            .verify_convergence(Duration::from_secs(10))
+            .await
+            .expect("Convergence failed");
 
         cluster.shutdown_all();
         tracing::info!("✓ Test passed: Crash during proposal");
@@ -105,7 +108,10 @@ fn test_all_nodes_crash_and_recover() {
         // Restart ALL nodes
         tracing::info!("Restarting all nodes...");
         for i in 1..=3 {
-            cluster.restart_node(i).await.expect("Failed to restart node");
+            cluster
+                .restart_node(i)
+                .await
+                .expect("Failed to restart node");
         }
         tokio::time::sleep(Duration::from_secs(2)).await;
 
@@ -120,7 +126,10 @@ fn test_all_nodes_crash_and_recover() {
         }
         tokio::time::sleep(Duration::from_secs(2)).await;
 
-        cluster.verify_convergence(Duration::from_secs(10)).await.expect("Convergence failed");
+        cluster
+            .verify_convergence(Duration::from_secs(10))
+            .await
+            .expect("Convergence failed");
 
         cluster.shutdown_all();
         tracing::info!("✓ Test passed: All nodes crash and recover");
@@ -167,7 +176,10 @@ fn test_rolling_restarts() {
             cluster.crash_node(node_id).ok();
             tokio::time::sleep(Duration::from_millis(500)).await;
 
-            cluster.restart_node(node_id).await.expect("Failed to restart");
+            cluster
+                .restart_node(node_id)
+                .await
+                .expect("Failed to restart");
             tokio::time::sleep(Duration::from_secs(2)).await;
 
             // Make a proposal after each restart
@@ -179,7 +191,10 @@ fn test_rolling_restarts() {
         // Final convergence check
         tokio::time::sleep(Duration::from_secs(3)).await;
 
-        cluster.verify_convergence(Duration::from_secs(10)).await.expect("Convergence failed");
+        cluster
+            .verify_convergence(Duration::from_secs(10))
+            .await
+            .expect("Convergence failed");
 
         cluster.shutdown_all();
         tracing::info!("✓ Test passed: Rolling restarts");
@@ -237,7 +252,10 @@ fn test_rapid_crash_recovery_cycles() {
 
         tokio::time::sleep(Duration::from_secs(3)).await;
 
-        cluster.verify_convergence(Duration::from_secs(10)).await.expect("Convergence failed");
+        cluster
+            .verify_convergence(Duration::from_secs(10))
+            .await
+            .expect("Convergence failed");
 
         cluster.shutdown_all();
         tracing::info!("✓ Test passed: Rapid crash/recovery cycles");

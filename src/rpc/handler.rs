@@ -1,11 +1,13 @@
-use super::{serialize, MessageId, RpcMessage, RpcRequest, RpcResponse, ResponsePayload};
+use super::{
+    deserialize, serialize, MessageId, ResponsePayload, RpcMessage, RpcRequest, RpcResponse,
+};
 use crate::error::{OctopiiError, Result};
 use crate::transport::{PeerConnection, QuicTransport};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use tokio::sync::{oneshot, RwLock};
+use tokio::sync::{oneshot, Mutex, RwLock};
 use tokio::time::{timeout, Duration};
 
 /// Callback for handling incoming requests
@@ -17,6 +19,7 @@ pub struct RpcHandler {
     next_id: AtomicU64,
     pending_requests: Arc<RwLock<HashMap<MessageId, oneshot::Sender<RpcResponse>>>>,
     request_handler: Arc<RwLock<Option<RequestHandler>>>,
+    peer_receivers: Arc<Mutex<HashSet<SocketAddr>>>,
 }
 
 impl RpcHandler {
@@ -27,6 +30,7 @@ impl RpcHandler {
             next_id: AtomicU64::new(1),
             pending_requests: Arc::new(RwLock::new(HashMap::new())),
             request_handler: Arc::new(RwLock::new(None)),
+            peer_receivers: Arc::new(Mutex::new(HashSet::new())),
         }
     }
 
@@ -41,7 +45,7 @@ impl RpcHandler {
 
     /// Send a request and wait for response
     pub async fn request(
-        &self,
+        self: &Arc<Self>,
         addr: SocketAddr,
         payload: super::RequestPayload,
         timeout_duration: Duration,
@@ -57,9 +61,15 @@ impl RpcHandler {
             pending.insert(id, tx);
         }
 
-        // Serialize and send
+        // Serialize and send (ensure receive loop for this peer)
         let data = serialize(&request)?;
-        self.transport.send(addr, data).await?;
+        let peer = self.transport.connect(addr).await?;
+        self.ensure_peer_receiver(addr, Arc::clone(&peer)).await;
+
+        timeout(timeout_duration, peer.send(data))
+            .await
+            .map_err(|_| OctopiiError::Rpc("Request send timeout".to_string()))?
+            .map_err(|e| OctopiiError::Rpc(format!("Transport send failed: {}", e)))?;
 
         // Wait for response with timeout
         match timeout(timeout_duration, rx).await {
@@ -76,13 +86,18 @@ impl RpcHandler {
 
     /// Send a one-way message (no response expected)
     pub async fn send_one_way(
-        &self,
+        self: &Arc<Self>,
         addr: SocketAddr,
         message: super::OneWayMessage,
     ) -> Result<()> {
         let msg = RpcMessage::new_one_way(message);
         let data = serialize(&msg)?;
-        self.transport.send(addr, data).await
+        let peer = self.transport.connect(addr).await?;
+        self.ensure_peer_receiver(addr, Arc::clone(&peer)).await;
+
+        peer.send(data).await.map_err(|e| {
+            OctopiiError::Rpc(format!("Failed to send one-way message to {}: {}", addr, e))
+        })
     }
 
     /// Notify the handler of an incoming message
@@ -91,12 +106,21 @@ impl RpcHandler {
     /// which prevents context switching starvation with Quinn QUIC.
     ///
     /// The peer parameter is used to send responses back on the same connection.
-    pub async fn notify_message(&self, addr: SocketAddr, msg: RpcMessage, peer: Option<Arc<PeerConnection>>) {
-        tracing::debug!("RPC notify_message from {}: {:?}", addr, match &msg {
-            RpcMessage::Request(req) => format!("Request(id={})", req.id),
-            RpcMessage::Response(resp) => format!("Response(id={})", resp.id),
-            RpcMessage::OneWay(_) => "OneWay".to_string(),
-        });
+    pub async fn notify_message(
+        &self,
+        addr: SocketAddr,
+        msg: RpcMessage,
+        peer: Option<Arc<PeerConnection>>,
+    ) {
+        tracing::debug!(
+            "RPC notify_message from {}: {:?}",
+            addr,
+            match &msg {
+                RpcMessage::Request(req) => format!("Request(id={})", req.id),
+                RpcMessage::Response(resp) => format!("Response(id={})", resp.id),
+                RpcMessage::OneWay(_) => "OneWay".to_string(),
+            }
+        );
 
         match msg {
             RpcMessage::Request(req) => {
@@ -114,7 +138,12 @@ impl RpcHandler {
     }
 
     /// Handle an incoming request
-    async fn handle_request(&self, addr: SocketAddr, req: RpcRequest, peer: Option<Arc<PeerConnection>>) {
+    async fn handle_request(
+        &self,
+        addr: SocketAddr,
+        req: RpcRequest,
+        peer: Option<Arc<PeerConnection>>,
+    ) {
         let handler = self.request_handler.read().await;
 
         let response_payload = match handler.as_ref() {
@@ -149,13 +178,44 @@ impl RpcHandler {
         }
     }
 
-    fn clone(&self) -> Self {
-        Self {
-            transport: Arc::clone(&self.transport),
-            next_id: AtomicU64::new(self.next_id.load(Ordering::SeqCst)),
-            pending_requests: Arc::clone(&self.pending_requests),
-            request_handler: Arc::clone(&self.request_handler),
+    async fn ensure_peer_receiver(self: &Arc<Self>, addr: SocketAddr, peer: Arc<PeerConnection>) {
+        let mut receivers = self.peer_receivers.lock().await;
+        if receivers.contains(&addr) {
+            return;
         }
+        receivers.insert(addr);
+        drop(receivers);
+
+        let rpc = Arc::clone(self);
+        tokio::spawn(async move {
+            loop {
+                match peer.recv().await {
+                    Ok(Some(data)) => match deserialize::<RpcMessage>(&data) {
+                        Ok(msg) => {
+                            rpc.notify_message(addr, msg, Some(Arc::clone(&peer))).await;
+                        }
+                        Err(e) => {
+                            tracing::error!(
+                                "Failed to deserialize RPC message from {}: {}",
+                                addr,
+                                e
+                            );
+                        }
+                    },
+                    Ok(None) => {
+                        tracing::info!("Peer {} closed connection", addr);
+                        break;
+                    }
+                    Err(e) => {
+                        tracing::warn!("Peer {} recv error: {}", addr, e);
+                        break;
+                    }
+                }
+            }
+
+            let mut receivers = rpc.peer_receivers.lock().await;
+            receivers.remove(&addr);
+        });
     }
 }
 

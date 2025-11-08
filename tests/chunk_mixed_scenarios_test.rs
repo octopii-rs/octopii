@@ -77,9 +77,7 @@ async fn test_mixed_file_and_memory_transfers() {
         .map(|source| {
             let peer = Arc::clone(&peer1);
             let source = source.clone();
-            tokio::spawn(async move {
-                peer.send_chunk_verified(&source).await.unwrap()
-            })
+            tokio::spawn(async move { peer.send_chunk_verified(&source).await.unwrap() })
         })
         .collect();
 
@@ -87,9 +85,7 @@ async fn test_mixed_file_and_memory_transfers() {
     let receiver_tasks: Vec<_> = (0..6)
         .map(|_| {
             let peer = Arc::clone(&peer2);
-            tokio::spawn(async move {
-                peer.recv_chunk_verified().await.unwrap().unwrap()
-            })
+            tokio::spawn(async move { peer.recv_chunk_verified().await.unwrap().unwrap() })
         })
         .collect();
 
@@ -130,12 +126,12 @@ async fn test_varying_chunk_sizes_parallel() {
 
     // Create chunks of varying sizes: 1KB, 10KB, 100KB, 1MB, 5MB, 10MB
     let sizes = vec![
-        1 * 1024,           // 1KB
-        10 * 1024,          // 10KB
-        100 * 1024,         // 100KB
-        1 * 1024 * 1024,    // 1MB
-        5 * 1024 * 1024,    // 5MB
-        10 * 1024 * 1024,   // 10MB
+        1 * 1024,         // 1KB
+        10 * 1024,        // 10KB
+        100 * 1024,       // 100KB
+        1 * 1024 * 1024,  // 1MB
+        5 * 1024 * 1024,  // 5MB
+        10 * 1024 * 1024, // 10MB
     ];
 
     println!("Creating chunks of varying sizes: 1KB to 10MB...");
@@ -187,9 +183,7 @@ async fn test_varying_chunk_sizes_parallel() {
     let receiver_tasks: Vec<_> = (0..chunks.len())
         .map(|_| {
             let peer = Arc::clone(&peer2);
-            tokio::spawn(async move {
-                peer.recv_chunk_verified().await.unwrap().unwrap()
-            })
+            tokio::spawn(async move { peer.recv_chunk_verified().await.unwrap().unwrap() })
         })
         .collect();
 
@@ -281,9 +275,7 @@ async fn test_rapid_small_chunks() {
     let receiver_tasks: Vec<_> = (0..num_chunks)
         .map(|_| {
             let peer = Arc::clone(&peer2);
-            tokio::spawn(async move {
-                peer.recv_chunk_verified().await.unwrap().unwrap()
-            })
+            tokio::spawn(async move { peer.recv_chunk_verified().await.unwrap().unwrap() })
         })
         .collect();
 
@@ -342,16 +334,12 @@ async fn test_interleaved_rpc_and_chunk_transfer() {
     let chunk_sender = {
         let peer = Arc::clone(&peer1);
         let chunk = chunk.clone();
-        tokio::spawn(async move {
-            peer.send_chunk_verified(&chunk).await.unwrap()
-        })
+        tokio::spawn(async move { peer.send_chunk_verified(&chunk).await.unwrap() })
     };
 
     let chunk_receiver = {
         let peer = Arc::clone(&peer2);
-        tokio::spawn(async move {
-            peer.recv_chunk_verified().await.unwrap().unwrap()
-        })
+        tokio::spawn(async move { peer.recv_chunk_verified().await.unwrap().unwrap() })
     };
 
     // Wait for chunk transfer to complete
@@ -374,9 +362,7 @@ async fn test_interleaved_rpc_and_chunk_transfer() {
     let rpc_receivers: Vec<_> = (0..10)
         .map(|_| {
             let peer = Arc::clone(&peer2);
-            tokio::spawn(async move {
-                peer.recv().await.unwrap().unwrap()
-            })
+            tokio::spawn(async move { peer.recv().await.unwrap().unwrap() })
         })
         .collect();
 

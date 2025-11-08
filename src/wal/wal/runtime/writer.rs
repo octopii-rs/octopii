@@ -3,12 +3,12 @@ use super::reader::Reader;
 use crate::wal::wal::block::Block;
 #[cfg(target_os = "linux")]
 use crate::wal::wal::block::Metadata;
-use crate::wal::wal::config::{
-    DEFAULT_BLOCK_SIZE, FsyncSchedule, MAX_BATCH_BYTES, MAX_BATCH_ENTRIES, PREFIX_META_SIZE,
-    debug_print,
-};
 #[cfg(target_os = "linux")]
-use crate::wal::wal::config::{USE_FD_BACKEND, checksum64};
+use crate::wal::wal::config::{checksum64, USE_FD_BACKEND};
+use crate::wal::wal::config::{
+    debug_print, FsyncSchedule, DEFAULT_BLOCK_SIZE, MAX_BATCH_BYTES, MAX_BATCH_ENTRIES,
+    PREFIX_META_SIZE,
+};
 use std::collections::HashSet;
 #[cfg(target_os = "linux")]
 use std::convert::TryFrom;

@@ -67,9 +67,7 @@ async fn test_parallel_transfers_to_single_peer() {
     let receiver_tasks: Vec<_> = (0..num_chunks)
         .map(|_| {
             let peer = Arc::clone(&peer2);
-            tokio::spawn(async move {
-                peer.recv_chunk_verified().await.unwrap().unwrap()
-            })
+            tokio::spawn(async move { peer.recv_chunk_verified().await.unwrap().unwrap() })
         })
         .collect();
 
@@ -160,7 +158,10 @@ async fn test_parallel_transfers_to_multiple_peers() {
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     // Send to all peers in parallel
-    println!("Sending {}MB to {} peers in parallel...", chunk_size_mb, num_peers);
+    println!(
+        "Sending {}MB to {} peers in parallel...",
+        chunk_size_mb, num_peers
+    );
     let start = std::time::Instant::now();
 
     let sender_tasks: Vec<_> = peer_addrs
@@ -275,9 +276,7 @@ async fn test_high_concurrency_stress() {
     let receiver_tasks: Vec<_> = (0..num_concurrent)
         .map(|_| {
             let peer = Arc::clone(&peer2);
-            tokio::spawn(async move {
-                peer.recv_chunk_verified().await.unwrap().unwrap()
-            })
+            tokio::spawn(async move { peer.recv_chunk_verified().await.unwrap().unwrap() })
         })
         .collect();
 
@@ -306,10 +305,7 @@ async fn test_high_concurrency_stress() {
         .map(|r| r.as_ref().unwrap())
         .collect();
     for expected in &chunks {
-        assert!(
-            received_set.remove(expected),
-            "Expected chunk not found"
-        );
+        assert!(received_set.remove(expected), "Expected chunk not found");
     }
     assert!(received_set.is_empty());
 
@@ -388,9 +384,7 @@ async fn test_burst_transfers() {
         let receiver_tasks: Vec<_> = (0..chunks_per_burst)
             .map(|_| {
                 let peer = Arc::clone(&peer2);
-                tokio::spawn(async move {
-                    peer.recv_chunk_verified().await.unwrap().unwrap()
-                })
+                tokio::spawn(async move { peer.recv_chunk_verified().await.unwrap().unwrap() })
             })
             .collect();
 
