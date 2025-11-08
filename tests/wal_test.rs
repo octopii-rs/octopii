@@ -23,7 +23,7 @@ async fn cleanup_wal(path: &PathBuf) {
     let _ = tokio::fs::remove_file(path).await;
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_wal_basic_operations() {
     let wal_path = test_wal_path("basic");
     cleanup_wal(&wal_path).await;
@@ -58,7 +58,7 @@ async fn test_wal_basic_operations() {
     cleanup_wal(&wal_path).await;
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_wal_batching() {
     let wal_path = test_wal_path("batching");
     cleanup_wal(&wal_path).await;
@@ -94,7 +94,7 @@ async fn test_wal_batching() {
     cleanup_wal(&wal_path).await;
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_wal_recovery() {
     let wal_path = test_wal_path("recovery");
     cleanup_wal(&wal_path).await;
@@ -128,7 +128,7 @@ async fn test_wal_recovery() {
     cleanup_wal(&wal_path).await;
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_wal_raft_entries() {
     // Test serializing/deserializing actual Raft entries (protobuf)
     let wal_path = test_wal_path("raft_entries");
@@ -172,7 +172,7 @@ async fn test_wal_raft_entries() {
     cleanup_wal(&wal_path).await;
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_wal_large_entries() {
     // Test with large entries (like Raft snapshots or big proposals)
     let wal_path = test_wal_path("large_entries");
@@ -211,7 +211,7 @@ async fn test_wal_large_entries() {
     cleanup_wal(&wal_path).await;
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_wal_concurrent_writes() {
     // Test concurrent writes from multiple tasks (like multiple Raft proposals)
     let wal_path = test_wal_path("concurrent");
@@ -253,7 +253,7 @@ async fn test_wal_concurrent_writes() {
     cleanup_wal(&wal_path).await;
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_wal_empty_recovery() {
     // Test recovering from an empty/non-existent WAL
     let wal_path = test_wal_path("empty_recovery");
@@ -274,7 +274,7 @@ async fn test_wal_empty_recovery() {
     cleanup_wal(&wal_path).await;
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_wal_flush_guarantees() {
     // Test that explicit flush persists data immediately
     let wal_path = test_wal_path("flush_guarantees");
@@ -301,7 +301,7 @@ async fn test_wal_flush_guarantees() {
     cleanup_wal(&wal_path).await;
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_wal_sequential_writes() {
     // Test that sequential writes maintain order (critical for Raft log)
     let wal_path = test_wal_path("sequential");
@@ -331,7 +331,7 @@ async fn test_wal_sequential_writes() {
     cleanup_wal(&wal_path).await;
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_wal_multiple_flush_cycles() {
     // Test multiple write-flush cycles (like Raft hard state updates)
     let wal_path = test_wal_path("multi_flush");
@@ -361,7 +361,7 @@ async fn test_wal_multiple_flush_cycles() {
     cleanup_wal(&wal_path).await;
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_wal_zero_byte_entries() {
     // Test edge case: zero-byte entries
     let wal_path = test_wal_path("zero_byte");
