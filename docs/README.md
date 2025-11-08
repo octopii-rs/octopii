@@ -16,6 +16,8 @@ Octopii is a minimal distributed file transfer and RPC system built on QUIC tran
 - **Chunk Transfer**: Send large files (1GB+) with SHA256 verification and application-level ACK
 - **Simple RPC**: Request/response messaging with bincode serialization
 - **QUIC Transport**: Multiplexed streams, connection pooling, TLS 1.3 encryption
+- **Durable Storage**: Production-grade WAL (Walrus) with crash recovery and topic isolation
+- **Raft Integration**: Distributed consensus with fully durable state machine and storage
 
 ## Getting Started
 
