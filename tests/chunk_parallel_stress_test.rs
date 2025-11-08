@@ -31,18 +31,20 @@ async fn test_parallel_transfers_to_single_peer() {
         })
         .collect();
 
-    // Spawn receivers
-    let receiver_tasks: Vec<_> = (0..num_chunks)
-        .map(|_| {
-            let t2_clone = Arc::clone(&transport2);
-            tokio::spawn(async move {
-                let (_, peer) = t2_clone.accept().await.unwrap();
-                peer.recv_chunk_verified().await.unwrap().unwrap()
-            })
-        })
-        .collect();
+    // Accept connection once
+    let t2_clone = Arc::clone(&transport2);
+    let receiver_peer_task = tokio::spawn(async move {
+        let (_, peer) = t2_clone.accept().await.unwrap();
+        Arc::new(peer)
+    });
 
     tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // Connect once
+    let peer1 = Arc::new(transport1.connect(actual_addr2).await.unwrap());
+
+    // Wait for receiver to accept
+    let peer2 = receiver_peer_task.await.unwrap();
 
     // Send all chunks in parallel
     println!("Starting {} parallel transfers...", num_chunks);
@@ -51,13 +53,22 @@ async fn test_parallel_transfers_to_single_peer() {
     let sender_tasks: Vec<_> = chunks
         .iter()
         .map(|chunk| {
-            let transport = Arc::clone(&transport1);
+            let peer = Arc::clone(&peer1);
             let chunk = chunk.clone();
             tokio::spawn(async move {
-                let peer = transport.connect(actual_addr2).await.unwrap();
                 peer.send_chunk_verified(&ChunkSource::Memory(chunk))
                     .await
                     .unwrap()
+            })
+        })
+        .collect();
+
+    // Receive all chunks in parallel
+    let receiver_tasks: Vec<_> = (0..num_chunks)
+        .map(|_| {
+            let peer = Arc::clone(&peer2);
+            tokio::spawn(async move {
+                peer.recv_chunk_verified().await.unwrap().unwrap()
             })
         })
         .collect();
@@ -78,13 +89,19 @@ async fn test_parallel_transfers_to_single_peer() {
         assert_eq!(result.unwrap(), chunk_size as u64);
     }
 
-    // Verify all receives completed
+    // Verify all receives completed (order may not match due to concurrent streams)
     let received_results = join_all(receiver_tasks).await;
-    for (i, result) in received_results.iter().enumerate() {
-        let received = result.as_ref().unwrap();
-        assert_eq!(received.len(), chunk_size);
-        assert_eq!(received, &chunks[i]);
+    let mut received_set: std::collections::HashSet<_> = received_results
+        .iter()
+        .map(|r| r.as_ref().unwrap())
+        .collect();
+    for expected in &chunks {
+        assert!(
+            received_set.remove(expected),
+            "Expected chunk not found in received data"
+        );
     }
+    assert!(received_set.is_empty(), "Received unexpected data");
 
     transport1.close();
     transport2.close();
@@ -223,18 +240,20 @@ async fn test_high_concurrency_stress() {
         })
         .collect();
 
-    // Spawn receivers
-    let receiver_tasks: Vec<_> = (0..num_concurrent)
-        .map(|_| {
-            let t2 = Arc::clone(&transport2);
-            tokio::spawn(async move {
-                let (_, peer) = t2.accept().await.unwrap();
-                peer.recv_chunk_verified().await.unwrap().unwrap()
-            })
-        })
-        .collect();
+    // Accept connection once
+    let t2_clone = Arc::clone(&transport2);
+    let receiver_peer_task = tokio::spawn(async move {
+        let (_, peer) = t2_clone.accept().await.unwrap();
+        Arc::new(peer)
+    });
 
     tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // Connect once
+    let peer1 = Arc::new(transport1.connect(actual_addr2).await.unwrap());
+
+    // Wait for receiver to accept
+    let peer2 = receiver_peer_task.await.unwrap();
 
     // Launch all transfers at once
     let start = std::time::Instant::now();
@@ -242,13 +261,22 @@ async fn test_high_concurrency_stress() {
     let sender_tasks: Vec<_> = chunks
         .iter()
         .map(|chunk| {
-            let t1 = Arc::clone(&transport1);
+            let peer = Arc::clone(&peer1);
             let chunk = chunk.clone();
             tokio::spawn(async move {
-                let peer = t1.connect(actual_addr2).await.unwrap();
                 peer.send_chunk_verified(&ChunkSource::Memory(chunk))
                     .await
                     .unwrap()
+            })
+        })
+        .collect();
+
+    // Receive all in parallel
+    let receiver_tasks: Vec<_> = (0..num_concurrent)
+        .map(|_| {
+            let peer = Arc::clone(&peer2);
+            tokio::spawn(async move {
+                peer.recv_chunk_verified().await.unwrap().unwrap()
             })
         })
         .collect();
@@ -272,10 +300,18 @@ async fn test_high_concurrency_stress() {
         assert_eq!(result.unwrap(), chunk_size as u64);
     }
 
-    for (i, result) in received_results.iter().enumerate() {
-        let received = result.as_ref().unwrap();
-        assert_eq!(received, &chunks[i]);
+    // Verify all chunks received (order may not match)
+    let mut received_set: std::collections::HashSet<_> = received_results
+        .iter()
+        .map(|r| r.as_ref().unwrap())
+        .collect();
+    for expected in &chunks {
+        assert!(
+            received_set.remove(expected),
+            "Expected chunk not found"
+        );
     }
+    assert!(received_set.is_empty());
 
     transport1.close();
     transport2.close();
@@ -311,6 +347,21 @@ async fn test_burst_transfers() {
         }
     }
 
+    // Accept connection once
+    let t2_clone = Arc::clone(&transport2);
+    let receiver_peer_task = tokio::spawn(async move {
+        let (_, peer) = t2_clone.accept().await.unwrap();
+        Arc::new(peer)
+    });
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // Connect once
+    let peer1 = Arc::new(transport1.connect(actual_addr2).await.unwrap());
+
+    // Wait for receiver to accept
+    let peer2 = receiver_peer_task.await.unwrap();
+
     let total_start = std::time::Instant::now();
 
     for burst_num in 0..bursts {
@@ -319,30 +370,26 @@ async fn test_burst_transfers() {
         let burst_end = burst_start + chunks_per_burst;
         let burst_chunks = &all_chunks[burst_start..burst_end];
 
-        // Spawn receivers for this burst
-        let receiver_tasks: Vec<_> = (0..chunks_per_burst)
-            .map(|_| {
-                let t2 = Arc::clone(&transport2);
-                tokio::spawn(async move {
-                    let (_, peer) = t2.accept().await.unwrap();
-                    peer.recv_chunk_verified().await.unwrap().unwrap()
-                })
-            })
-            .collect();
-
-        tokio::time::sleep(Duration::from_millis(50)).await;
-
         // Send this burst
         let sender_tasks: Vec<_> = burst_chunks
             .iter()
             .map(|chunk| {
-                let t1 = Arc::clone(&transport1);
+                let peer = Arc::clone(&peer1);
                 let chunk = chunk.clone();
                 tokio::spawn(async move {
-                    let peer = t1.connect(actual_addr2).await.unwrap();
                     peer.send_chunk_verified(&ChunkSource::Memory(chunk))
                         .await
                         .unwrap()
+                })
+            })
+            .collect();
+
+        // Receive this burst
+        let receiver_tasks: Vec<_> = (0..chunks_per_burst)
+            .map(|_| {
+                let peer = Arc::clone(&peer2);
+                tokio::spawn(async move {
+                    peer.recv_chunk_verified().await.unwrap().unwrap()
                 })
             })
             .collect();
