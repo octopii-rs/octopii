@@ -21,10 +21,11 @@ fn test_automatic_election_after_leader_failure() {
 
         tracing::info!("=== Starting automatic election after leader failure test ===");
 
-        // Create cluster with only leader initially (following TiKV pattern)
-        // Followers will be added as learners dynamically
-        let mut cluster = TestCluster::new(vec![1], 8200).await;
-        cluster.start_all().await.expect("Failed to start cluster");
+        // Create cluster with all 3 nodes, but only leader will start initially
+        // Followers will be added via ConfChange (matching TiKV pattern)
+        let mut cluster = TestCluster::new(vec![1, 2, 3], 8200).await;
+        // Only start the leader (node 1)
+        cluster.nodes[0].start().await.expect("Failed to start leader");
 
         tokio::time::sleep(Duration::from_millis(500)).await;
 
@@ -47,64 +48,23 @@ fn test_automatic_election_after_leader_failure() {
         tokio::time::sleep(Duration::from_secs(2)).await;
         tracing::info!("✓ Leader log advanced");
 
-        // CRITICAL: Compact the leader's log to create a snapshot
-        // This forces raft-rs to send MsgSnapshot to new learners instead of trying
-        // to send entries with prev_log_index that learners don't have
-        tracing::info!("Compacting leader log to create snapshot...");
+        // Add peers as voters directly (matching TiKV five_mem_node pattern)
+        // This should trigger proper snapshot/entry replication from raft-rs
+        tracing::info!("Adding node 2 as voter");
+        let addr2 = format!("127.0.0.1:{}", 8200 + 1).parse().unwrap();
         cluster.nodes[0].get_node().unwrap()
-            .compact_log().await
-            .expect("Failed to compact log");
-        tokio::time::sleep(Duration::from_secs(1)).await;
-        tracing::info!("✓ Log compacted");
-
-        // Now add peers as learners first (they can have empty logs)
-        // Then promote to voters once caught up
-        tracing::info!("Adding node 2 as learner");
-        cluster.add_learner(2).await.expect("Failed to add learner 2");
-        cluster.nodes[1].start().await.expect("Failed to start learner 2");
-        tokio::time::sleep(Duration::from_secs(3)).await; // Give more time for network setup
-
-        tracing::info!("Adding node 3 as learner");
-        cluster.add_learner(3).await.expect("Failed to add learner 3");
-        cluster.nodes[2].start().await.expect("Failed to start learner 3");
-        tokio::time::sleep(Duration::from_secs(3)).await; // Give more time for network setup
-
-        // Make more proposals for learners to catch up on
-        tracing::info!("Making proposals for learners to replicate...");
-        for i in 1..=10 {
-            let cmd = format!("SET learner_catchup{} value{}", i, i);
-            cluster.nodes[0].propose(cmd.as_bytes().to_vec()).await
-                .expect("Failed to propose");
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
+            .add_peer(2, addr2).await
+            .expect("Failed to add peer 2");
+        cluster.nodes[1].start().await.expect("Failed to start node 2");
         tokio::time::sleep(Duration::from_secs(2)).await;
 
-        // Wait for learners to catch up
-        for node_id in 2..=3 {
-            let start = std::time::Instant::now();
-            loop {
-                if start.elapsed() > Duration::from_secs(15) {
-                    panic!("Learner {} did not catch up after 15s", node_id);
-                }
-                if cluster.is_learner_caught_up(node_id).await.unwrap_or(false) {
-                    tracing::info!("✓ Learner {} caught up", node_id);
-                    break;
-                }
-                tokio::time::sleep(Duration::from_millis(500)).await;
-            }
-        }
-
-        // Extra stabilization time
+        tracing::info!("Adding node 3 as voter");
+        let addr3 = format!("127.0.0.1:{}", 8200 + 2).parse().unwrap();
+        cluster.nodes[0].get_node().unwrap()
+            .add_peer(3, addr3).await
+            .expect("Failed to add peer 3");
+        cluster.nodes[2].start().await.expect("Failed to start node 3");
         tokio::time::sleep(Duration::from_secs(2)).await;
-
-        // Promote learners to voters (one at a time with enough time between)
-        tracing::info!("Promoting learner 2 to voter");
-        cluster.promote_learner(2).await.expect("Failed to promote learner 2");
-        tokio::time::sleep(Duration::from_secs(3)).await; // Give cluster time to stabilize
-
-        tracing::info!("Promoting learner 3 to voter");
-        cluster.promote_learner(3).await.expect("Failed to promote learner 3");
-        tokio::time::sleep(Duration::from_secs(3)).await; // Give cluster time to stabilize
 
         tracing::info!("✓ All nodes added as voters: [1, 2, 3]");
 
