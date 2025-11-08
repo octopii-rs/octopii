@@ -35,7 +35,7 @@ impl OctopiiNode {
 
         // Initialize components on the isolated runtime
         let transport = Arc::new(runtime.block_on(QuicTransport::new(config.bind_addr))?);
-        let rpc = Arc::new(RpcHandler::new(Arc::clone(&transport), &runtime));
+        let rpc = Arc::new(RpcHandler::new(Arc::clone(&transport)));
 
         // Create WAL
         let wal_path = config.wal_dir.join(format!("node_{}.wal", config.node_id));
@@ -300,12 +300,12 @@ impl OctopiiNode {
                                                 }
                                                 _ => {
                                                     // Non-Raft messages go through normal RPC handler
-                                                    let _ = rpc_clone.notify_message(addr, msg);
+                                                    rpc_clone.notify_message(addr, msg, Some(Arc::clone(&peer))).await;
                                                 }
                                             }
                                         }
                                         _ => {
-                                            let _ = rpc_clone.notify_message(addr, msg);
+                                            rpc_clone.notify_message(addr, msg, Some(Arc::clone(&peer))).await;
                                         }
                                     }
                                 }
