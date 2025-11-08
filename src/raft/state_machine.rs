@@ -43,10 +43,12 @@ impl StateMachine {
         if let Some(wal) = &self.wal {
             tracing::info!("Starting state machine recovery from Walrus...");
             let mut recovered = HashMap::new();
+            let mut first_read = true;
 
             loop {
-                match wal.walrus.read_next(TOPIC_STATE_MACHINE, false) {
+                match wal.walrus.read_next(TOPIC_STATE_MACHINE, first_read) {
                     Ok(Some(entry)) => {
+                        first_read = false;
                         // Zero-copy deserialize with rkyv
                         let archived = unsafe {
                             rkyv::archived_root::<StateMachineEntry>(&entry.data)
