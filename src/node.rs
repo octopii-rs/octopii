@@ -585,6 +585,25 @@ impl OctopiiNode {
         }
     }
 
+    /// Trigger log compaction to create a snapshot
+    /// This is useful before adding learners to ensure they receive a snapshot
+    pub async fn compact_log(&self) -> Result<()> {
+        // Get current commit index from Raft
+        let hs = self.raft.hard_state().await;
+        let commit_index = hs.commit;
+
+        // Get state machine snapshot data
+        let snapshot = self.state_machine.snapshot();
+        let snapshot_data = bincode::serialize(&snapshot)
+            .map_err(|e| crate::error::OctopiiError::Wal(format!("Failed to serialize snapshot: {}", e)))?;
+
+        // Compact the Raft log
+        self.raft.try_compact_logs(commit_index, snapshot_data).await?;
+
+        tracing::info!("Log compacted at commit_index={}", commit_index);
+        Ok(())
+    }
+
     /// Get the node ID
     pub fn id(&self) -> u64 {
         self.config.node_id
@@ -749,7 +768,7 @@ impl OctopiiNode {
                                                 RpcMessage::Request(req) => {
                                                     match &req.payload {
                                                         RequestPayload::AppendEntries { .. } | RequestPayload::RequestVote { .. } => {
-                                                            tracing::debug!("Received Raft request from {}: {:?}", addr, req.payload);
+                                                            tracing::info!("Received Raft request from {}: {:?}", addr, req.payload);
 
                                                             // Convert RPC to Raft message
                                                             if let Some(raft_msg) = rpc_to_raft_message(0, node_id, &req.payload) {
@@ -905,7 +924,9 @@ impl OctopiiNode {
                 };
 
                 if let Some(ready) = ready_opt {
-                    tracing::info!("Raft ready: has {} messages, {} committed entries, {} new entries, snapshot: {}",
+                    let node_id = raft.id();
+                    tracing::info!("[Node {}] Raft ready: has {} messages, {} committed entries, {} new entries, snapshot: {}",
+                        node_id,
                         ready.messages().len(),
                         ready.committed_entries().len(),
                         ready.entries().len(),
@@ -914,14 +935,14 @@ impl OctopiiNode {
 
                     // Persist hard state if it changed
                     if let Some(hs) = ready.hs() {
-                        tracing::debug!("Persisting HardState: term={}, vote={}, commit={}",
-                            hs.term, hs.vote, hs.commit);
+                        tracing::debug!("[Node {}] Persisting HardState: term={}, vote={}, commit={}",
+                            node_id, hs.term, hs.vote, hs.commit);
                         raft.persist_hard_state(hs.clone()).await;
                     }
 
                     // Persist new entries to storage (must be done before sending messages)
                     if !ready.entries().is_empty() {
-                        tracing::debug!("Persisting {} new entries to storage", ready.entries().len());
+                        tracing::info!("[Node {}] Persisting {} new entries to storage", node_id, ready.entries().len());
                         raft.persist_entries(ready.entries()).await;
                     }
 

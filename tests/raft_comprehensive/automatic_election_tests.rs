@@ -47,6 +47,16 @@ fn test_automatic_election_after_leader_failure() {
         tokio::time::sleep(Duration::from_secs(2)).await;
         tracing::info!("✓ Leader log advanced");
 
+        // CRITICAL: Compact the leader's log to create a snapshot
+        // This forces raft-rs to send MsgSnapshot to new learners instead of trying
+        // to send entries with prev_log_index that learners don't have
+        tracing::info!("Compacting leader log to create snapshot...");
+        cluster.nodes[0].get_node().unwrap()
+            .compact_log().await
+            .expect("Failed to compact log");
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        tracing::info!("✓ Log compacted");
+
         // Now add peers as learners first (they can have empty logs)
         // Then promote to voters once caught up
         tracing::info!("Adding node 2 as learner");
