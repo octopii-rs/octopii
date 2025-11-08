@@ -16,7 +16,12 @@ pub struct TestNode {
 
 impl TestNode {
     /// Create a new test node with unique isolated WAL (async version)
-    pub async fn new(node_id: u64, addr: SocketAddr, peers: Vec<SocketAddr>, is_initial_leader: bool) -> Self {
+    pub async fn new(
+        node_id: u64,
+        addr: SocketAddr,
+        peers: Vec<SocketAddr>,
+        is_initial_leader: bool,
+    ) -> Self {
         let temp_dir = TempDir::new().unwrap();
         let thread_id = std::thread::current().id();
         let timestamp = std::time::SystemTime::now()
@@ -60,6 +65,9 @@ impl TestNode {
 
     /// Simulate crash by dropping the node
     pub fn crash(&mut self) {
+        if let Some(node) = self.node.as_ref() {
+            node.shutdown();
+        }
         self.node = None;
     }
 
@@ -71,6 +79,10 @@ impl TestNode {
 
         // Use shared runtime from current context (no nesting issues!)
         let runtime = OctopiiRuntime::from_handle(tokio::runtime::Handle::current());
+        if let Some(node) = self.node.as_ref() {
+            node.shutdown();
+        }
+        self.node = None;
         self.node = Some(OctopiiNode::new(config, runtime).await?);
         Ok(())
     }
@@ -132,7 +144,11 @@ impl TestCluster {
         let addrs: Vec<SocketAddr> = node_ids
             .iter()
             .enumerate()
-            .map(|(idx, _)| format!("127.0.0.1:{}", base_port + idx as u16).parse().unwrap())
+            .map(|(idx, _)| {
+                format!("127.0.0.1:{}", base_port + idx as u16)
+                    .parse()
+                    .unwrap()
+            })
             .collect();
 
         // Create each node with peers list (excluding itself)
@@ -236,7 +252,10 @@ impl TestCluster {
             return Err("No running nodes to verify".to_string());
         }
 
-        tracing::info!("✓ State machine consistency check passed for {} nodes", snapshots.len());
+        tracing::info!(
+            "✓ State machine consistency check passed for {} nodes",
+            snapshots.len()
+        );
         Ok(())
     }
 

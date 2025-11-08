@@ -1,21 +1,27 @@
 use crate::chunk::{ChunkSource, TransferResult};
 use crate::config::Config;
 use crate::error::Result;
-use crate::raft::{RaftNode, StateMachine, WalStorage, raft_message_to_rpc, rpc_to_raft_message, raft_response_to_rpc, rpc_response_to_raft};
-use crate::rpc::{deserialize, RpcHandler, RpcMessage, RpcRequest, RequestPayload, ResponsePayload, MessageId};
+use crate::raft::{
+    raft_message_to_rpc, raft_response_to_rpc, rpc_response_to_raft, rpc_to_raft_message, RaftNode,
+    StateMachine, WalStorage,
+};
+use crate::rpc::{
+    deserialize, MessageId, RequestPayload, ResponsePayload, RpcHandler, RpcMessage, RpcRequest,
+};
 use crate::runtime::OctopiiRuntime;
 use crate::transport::QuicTransport;
 use crate::wal::WriteAheadLog;
 use bytes::Bytes;
 use futures::future::join_all;
 use raft::prelude::MessageType;
+use raft::Storage;
 use std::collections::{HashMap, VecDeque};
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Instant;
-use tokio::sync::RwLock;
-use tokio::sync::oneshot;
+use tokio::sync::{broadcast, oneshot, RwLock};
 use tokio::time::{interval, timeout, Duration};
 
 /// Bounded tracker for Raft message types to correlate requests with responses
@@ -85,7 +91,7 @@ impl ProposalQueue {
     fn push(&self, metadata: ProposalMetadata) -> std::result::Result<(), ()> {
         let mut queue = self.queue.lock().unwrap();
         if queue.len() >= self.max_size {
-            return Err(());  // Queue full
+            return Err(()); // Queue full
         }
         queue.push_back(metadata);
         Ok(())
@@ -118,6 +124,10 @@ pub struct OctopiiNode {
     msg_type_tracker: Arc<MessageTypeTracker>,
     /// Bounded queue for pending proposals (max 10000 in-flight proposals)
     proposal_queue: Arc<ProposalQueue>,
+    /// Broadcast channel used to signal background tasks to shut down gracefully
+    shutdown_tx: broadcast::Sender<()>,
+    /// Flag ensuring shutdown is triggered at most once
+    shutdown_triggered: AtomicBool,
 }
 
 impl OctopiiNode {
@@ -148,11 +158,14 @@ impl OctopiiNode {
 
         // Create WAL
         let wal_path = config.wal_dir.join(format!("node_{}.wal", config.node_id));
-        let wal = Arc::new(WriteAheadLog::new(
-            wal_path,
-            config.wal_batch_size,
-            Duration::from_millis(config.wal_flush_interval_ms),
-        ).await?);
+        let wal = Arc::new(
+            WriteAheadLog::new(
+                wal_path,
+                config.wal_batch_size,
+                Duration::from_millis(config.wal_flush_interval_ms),
+            )
+            .await?,
+        );
 
         // Create Raft storage and node
         let storage = WalStorage::new(Arc::clone(&wal));
@@ -162,7 +175,7 @@ impl OctopiiNode {
         for (idx, addr) in config.peers.iter().enumerate() {
             let peer_id = (idx + 1) as u64;
             let peer_id_adjusted = if peer_id >= config.node_id {
-                peer_id + 1  // Skip our own ID
+                peer_id + 1 // Skip our own ID
             } else {
                 peer_id
             };
@@ -170,13 +183,26 @@ impl OctopiiNode {
             tracing::info!("Mapped peer {} -> {}", peer_id_adjusted, addr);
         }
 
-        let peer_ids: Vec<u64> = peer_addrs_map.keys().copied().collect();
-        let raft = Arc::new(RaftNode::new(
-            config.node_id,
-            peer_ids,
-            storage,
-            config.is_initial_leader,
-        ).await?);
+        let mut peer_ids: Vec<u64> = peer_addrs_map.keys().copied().collect();
+        peer_ids.sort_unstable();
+
+        // Bootstrap configuration state to include the entire cluster if this is a fresh start
+        let mut initial_voters = peer_ids.clone();
+        initial_voters.push(config.node_id);
+        initial_voters.sort_unstable();
+        initial_voters.dedup();
+
+        let current_state = storage.initial_state()?;
+        if current_state.conf_state.voters != initial_voters {
+            let mut conf_state = raft::prelude::ConfState::default();
+            conf_state.voters = initial_voters.clone();
+            storage.set_conf_state(conf_state);
+            tracing::info!("Bootstrap conf state with voters: {:?}", initial_voters);
+        }
+
+        let raft = Arc::new(
+            RaftNode::new(config.node_id, peer_ids, storage, config.is_initial_leader).await?,
+        );
 
         // Create state machine with WAL backing (enables durability!)
         let state_machine = Arc::new(StateMachine::with_wal(Arc::clone(&wal)));
@@ -186,6 +212,9 @@ impl OctopiiNode {
 
         // Create bounded proposal queue (10000 max in-flight proposals)
         let proposal_queue = Arc::new(ProposalQueue::new(10000));
+
+        // Channel for signaling graceful shutdown to background tasks
+        let (shutdown_tx, _) = broadcast::channel(16);
 
         let node = Self {
             runtime,
@@ -197,6 +226,8 @@ impl OctopiiNode {
             peer_addrs: Arc::new(RwLock::new(peer_addrs_map)),
             msg_type_tracker,
             proposal_queue,
+            shutdown_tx,
+            shutdown_triggered: AtomicBool::new(false),
         };
 
         tracing::info!(
@@ -239,10 +270,10 @@ impl OctopiiNode {
         // This is safe because we're creating a NEW runtime, not nesting
         let node = std::thread::scope(|s| {
             s.spawn(move || {
-                handle.block_on(async move {
-                    Self::new(config_clone, runtime_clone).await
-                })
-            }).join().expect("Thread panicked")
+                handle.block_on(async move { Self::new(config_clone, runtime_clone).await })
+            })
+            .join()
+            .expect("Thread panicked")
         })?;
 
         Ok(node)
@@ -277,10 +308,14 @@ impl OctopiiNode {
 
         // Push to proposal queue
         let metadata = ProposalMetadata { responder: tx };
-        self.proposal_queue.push(metadata)
+        self.proposal_queue
+            .push(metadata)
             .map_err(|_| crate::error::OctopiiError::Rpc("Proposal queue full".to_string()))?;
 
-        tracing::debug!("Proposal queued, {} proposals pending", self.proposal_queue.len());
+        tracing::debug!(
+            "Proposal queued, {} proposals pending",
+            self.proposal_queue.len()
+        );
 
         // Propose to Raft
         self.raft.propose(command).await?;
@@ -288,7 +323,9 @@ impl OctopiiNode {
         // Wait for proposal to be committed and applied
         match rx.await {
             Ok(result) => result,
-            Err(_) => Err(crate::error::OctopiiError::Rpc("Proposal response channel closed".to_string())),
+            Err(_) => Err(crate::error::OctopiiError::Rpc(
+                "Proposal response channel closed".to_string(),
+            )),
         }
     }
 
@@ -430,12 +467,14 @@ impl OctopiiNode {
         // Unwrap JoinHandle results (panics are propagated as errors)
         results
             .into_iter()
-            .map(|r| r.unwrap_or_else(|e| {
-                TransferResult::failure(
-                    "0.0.0.0:0".parse().unwrap(),
-                    format!("Task panicked: {}", e),
-                )
-            }))
+            .map(|r| {
+                r.unwrap_or_else(|e| {
+                    TransferResult::failure(
+                        "0.0.0.0:0".parse().unwrap(),
+                        format!("Task panicked: {}", e),
+                    )
+                })
+            })
             .collect()
     }
 
@@ -449,13 +488,19 @@ impl OctopiiNode {
                 match &req.payload {
                     RequestPayload::AppendEntries { .. } | RequestPayload::RequestVote { .. } => {
                         // Raft messages are handled in network acceptor, this shouldn't be reached
-                        tracing::warn!("Raft message reached RPC handler (should be handled in acceptor)");
+                        tracing::warn!(
+                            "Raft message reached RPC handler (should be handled in acceptor)"
+                        );
                         ResponsePayload::Error {
                             message: "Raft messages handled separately".to_string(),
                         }
                     }
                     RequestPayload::Custom { operation, data } => {
-                        tracing::debug!("Handling custom RPC: operation={}, data={} bytes", operation, data.len());
+                        tracing::debug!(
+                            "Handling custom RPC: operation={}, data={} bytes",
+                            operation,
+                            data.len()
+                        );
                         ResponsePayload::CustomResponse {
                             success: true,
                             data: Bytes::from("OK"),
@@ -472,82 +517,92 @@ impl OctopiiNode {
         let rpc = Arc::clone(&self.rpc);
         let raft = Arc::clone(&self.raft);
         let node_id = self.config.node_id;
+        let mut shutdown_rx = self.shutdown_tx.subscribe();
 
         tracing::info!("Spawning network acceptor for node {}", node_id);
 
         self.runtime.spawn(async move {
             loop {
-                match transport.accept().await {
-                    Ok((addr, peer)) => {
-                        tracing::debug!("Accepted connection from {}", addr);
+                tokio::select! {
+                    recv = shutdown_rx.recv() => {
+                        let _ = recv;
+                        tracing::info!("Network acceptor shutting down");
+                        break;
+                    }
+                    accept_res = transport.accept() => {
+                        match accept_res {
+                            Ok((addr, peer)) => {
+                                tracing::debug!("Accepted connection from {}", addr);
 
-                        let rpc_clone = Arc::clone(&rpc);
-                        let raft_clone = Arc::clone(&raft);
-                        let peer = Arc::new(peer);
+                                let rpc_clone = Arc::clone(&rpc);
+                                let raft_clone = Arc::clone(&raft);
+                                let peer = Arc::new(peer);
 
-                        tokio::spawn(async move {
-                            while let Ok(Some(data)) = peer.recv().await {
-                                if let Ok(msg) = deserialize::<RpcMessage>(&data) {
-                                    // Handle Raft messages directly for async processing
-                                    match &msg {
-                                        RpcMessage::Request(req) => {
-                                            match &req.payload {
-                                                RequestPayload::AppendEntries { .. } | RequestPayload::RequestVote { .. } => {
-                                                    tracing::debug!("Received Raft request from {}: {:?}", addr, req.payload);
+                                tokio::spawn(async move {
+                                    while let Ok(Some(data)) = peer.recv().await {
+                                        if let Ok(msg) = deserialize::<RpcMessage>(&data) {
+                                            // Handle Raft messages directly for async processing
+                                            match &msg {
+                                                RpcMessage::Request(req) => {
+                                                    match &req.payload {
+                                                        RequestPayload::AppendEntries { .. } | RequestPayload::RequestVote { .. } => {
+                                                            tracing::debug!("Received Raft request from {}: {:?}", addr, req.payload);
 
-                                                    // Convert RPC to Raft message
-                                                    if let Some(raft_msg) = rpc_to_raft_message(0, node_id, &req.payload) {
-                                                        // Step the Raft state machine
-                                                        match raft_clone.step(raft_msg).await {
-                                                            Ok(_) => {
-                                                                tracing::trace!("Raft message processed successfully");
+                                                            // Convert RPC to Raft message
+                                                            if let Some(raft_msg) = rpc_to_raft_message(0, node_id, &req.payload) {
+                                                                // Step the Raft state machine
+                                                                match raft_clone.step(raft_msg).await {
+                                                                    Ok(_) => {
+                                                                        tracing::trace!("Raft message processed successfully");
 
-                                                                // Check for immediate response messages
-                                                                if let Some(ready) = raft_clone.ready().await {
-                                                                    // Send response messages immediately
-                                                                    for resp_msg in ready.messages() {
-                                                                        if let Some(resp_payload) = raft_response_to_rpc(resp_msg) {
-                                                                            tracing::debug!("Sending immediate Raft response: {:?}", resp_msg.get_msg_type());
+                                                                        // Check for immediate response messages
+                                                                        if let Some(ready) = raft_clone.ready().await {
+                                                                            // Send response messages immediately
+                                                                            for resp_msg in ready.messages() {
+                                                                                if let Some(resp_payload) = raft_response_to_rpc(resp_msg) {
+                                                                                    tracing::debug!("Sending immediate Raft response: {:?}", resp_msg.get_msg_type());
 
-                                                                            let response = RpcMessage::new_response(req.id, resp_payload);
-                                                                            if let Ok(data) = crate::rpc::serialize(&response) {
-                                                                                if let Err(e) = peer.send(data).await {
-                                                                                    tracing::error!("Failed to send Raft response: {}", e);
+                                                                                    let response = RpcMessage::new_response(req.id, resp_payload);
+                                                                                    if let Ok(data) = crate::rpc::serialize(&response) {
+                                                                                        if let Err(e) = peer.send(data).await {
+                                                                                            tracing::error!("Failed to send Raft response: {}", e);
+                                                                                        }
+                                                                                    }
                                                                                 }
                                                                             }
+
+                                                                            // Advance without processing entries (ready handler will do full processing)
+                                                                            let _light_rd = raft_clone.advance(ready).await;
+                                                                            raft_clone.advance_apply().await;
+
+                                                                            // Note: We don't apply entries here - the main ready handler does that
+                                                                            // This is just for sending immediate responses to avoid latency
                                                                         }
                                                                     }
-
-                                                                    // Advance without processing entries (ready handler will do full processing)
-                                                                    let _light_rd = raft_clone.advance(ready).await;
-                                                                    raft_clone.advance_apply().await;
-
-                                                                    // Note: We don't apply entries here - the main ready handler does that
-                                                                    // This is just for sending immediate responses to avoid latency
+                                                                    Err(e) => {
+                                                                        tracing::error!("Failed to step Raft: {}", e);
+                                                                    }
                                                                 }
                                                             }
-                                                            Err(e) => {
-                                                                tracing::error!("Failed to step Raft: {}", e);
-                                                            }
+                                                        }
+                                                        _ => {
+                                                            // Non-Raft messages go through normal RPC handler
+                                                            rpc_clone.notify_message(addr, msg, Some(Arc::clone(&peer))).await;
                                                         }
                                                     }
                                                 }
                                                 _ => {
-                                                    // Non-Raft messages go through normal RPC handler
                                                     rpc_clone.notify_message(addr, msg, Some(Arc::clone(&peer))).await;
                                                 }
                                             }
                                         }
-                                        _ => {
-                                            rpc_clone.notify_message(addr, msg, Some(Arc::clone(&peer))).await;
-                                        }
                                     }
-                                }
+                                });
                             }
-                        });
-                    }
-                    Err(e) => {
-                        tracing::error!("Failed to accept connection: {}", e);
+                            Err(e) => {
+                                tracing::error!("Failed to accept connection: {}", e);
+                            }
+                        }
                     }
                 }
             }
@@ -557,15 +612,24 @@ impl OctopiiNode {
     /// Spawn task to tick Raft periodically
     fn spawn_raft_ticker(&self) {
         let raft = Arc::clone(&self.raft);
+        let mut shutdown_rx = self.shutdown_tx.subscribe();
 
         tracing::info!("Spawning Raft ticker (100ms interval)");
 
         self.runtime.spawn(async move {
             let mut ticker = interval(Duration::from_millis(100));
             loop {
-                ticker.tick().await;
-                raft.tick().await;
-                tracing::trace!("Raft ticked");
+                tokio::select! {
+                    recv = shutdown_rx.recv() => {
+                        let _ = recv;
+                        tracing::info!("Raft ticker shutting down");
+                        break;
+                    }
+                    _ = ticker.tick() => {
+                        raft.tick().await;
+                        tracing::trace!("Raft ticked");
+                    }
+                }
             }
         });
     }
@@ -577,21 +641,38 @@ impl OctopiiNode {
         let rpc = Arc::clone(&self.rpc);
         let peer_addrs = Arc::clone(&self.peer_addrs);
         let proposal_queue = Arc::clone(&self.proposal_queue);
+        let mut shutdown_rx = self.shutdown_tx.subscribe();
 
         tracing::info!("Spawning Raft ready handler");
 
         self.runtime.spawn(async move {
             let mut checker = interval(Duration::from_millis(10));
             let mut check_count = 0;
-            loop {
-                checker.tick().await;
-                check_count += 1;
-
-                if check_count % 100 == 0 {
-                    tracing::debug!("Ready handler alive, checked {} times", check_count);
+            'main: loop {
+                tokio::select! {
+                    recv = shutdown_rx.recv() => {
+                        let _ = recv;
+                        tracing::info!("Raft ready handler shutting down");
+                        break 'main;
+                    }
+                    _ = checker.tick() => {
+                        check_count += 1;
+                        if check_count % 100 == 0 {
+                            tracing::debug!("Ready handler alive, checked {} times", check_count);
+                        }
+                    }
                 }
 
-                if let Some(ready) = raft.ready().await {
+                let ready_opt = tokio::select! {
+                    recv = shutdown_rx.recv() => {
+                        let _ = recv;
+                        tracing::info!("Raft ready handler shutting down (waiting for ready)");
+                        break 'main;
+                    }
+                    ready = raft.ready() => ready,
+                };
+
+                if let Some(ready) = ready_opt {
                     tracing::info!("Raft ready: has {} messages, {} committed entries, {} new entries, snapshot: {}",
                         ready.messages().len(),
                         ready.committed_entries().len(),
@@ -800,6 +881,27 @@ impl OctopiiNode {
                 }
             }
         });
+    }
+
+    /// Trigger graceful shutdown for background tasks and transport
+    fn initiate_shutdown(&self) {
+        if self.shutdown_triggered.swap(true, Ordering::SeqCst) {
+            return;
+        }
+
+        let _ = self.shutdown_tx.send(());
+        self.transport.close();
+    }
+
+    /// Public shutdown helper (used in tests)
+    pub fn shutdown(&self) {
+        self.initiate_shutdown();
+    }
+}
+
+impl Drop for OctopiiNode {
+    fn drop(&mut self) {
+        self.initiate_shutdown();
     }
 }
 
