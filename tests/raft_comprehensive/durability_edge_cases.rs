@@ -50,7 +50,10 @@ fn test_crash_immediately_after_proposal() {
         tokio::time::sleep(Duration::from_secs(3)).await;
 
         // Verify convergence
-        cluster.verify_convergence(Duration::from_secs(10)).await.expect("Convergence failed");
+        cluster
+            .verify_convergence(Duration::from_secs(10))
+            .await
+            .expect("Convergence failed");
 
         cluster.shutdown_all();
         tracing::info!("✓ Test passed: Crash immediately after proposal");
@@ -116,7 +119,10 @@ fn test_durable_state_after_many_operations() {
         tokio::time::sleep(Duration::from_secs(2)).await;
 
         // Verify cluster is functional
-        cluster.verify_convergence(Duration::from_secs(10)).await.expect("Convergence failed");
+        cluster
+            .verify_convergence(Duration::from_secs(10))
+            .await
+            .expect("Convergence failed");
 
         cluster.shutdown_all();
         tracing::info!("✓ Test passed: Durable state after many operations");
@@ -170,7 +176,10 @@ fn test_interleaved_operations_and_crashes() {
         // Wait for everything to settle
         tokio::time::sleep(Duration::from_secs(5)).await;
 
-        cluster.verify_convergence(Duration::from_secs(10)).await.expect("Convergence failed");
+        cluster
+            .verify_convergence(Duration::from_secs(10))
+            .await
+            .expect("Convergence failed");
 
         cluster.shutdown_all();
         tracing::info!("✓ Test passed: Interleaved operations and crashes");

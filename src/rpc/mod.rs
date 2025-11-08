@@ -1,11 +1,10 @@
-mod message;
 mod handler;
+mod message;
 
-pub use message::{
-    RpcMessage, RpcRequest, RpcResponse, MessageId,
-    RequestPayload, ResponsePayload, OneWayMessage
-};
 pub use handler::RpcHandler;
+pub use message::{
+    MessageId, OneWayMessage, RequestPayload, ResponsePayload, RpcMessage, RpcRequest, RpcResponse,
+};
 
 use crate::error::Result;
 use bytes::Bytes;

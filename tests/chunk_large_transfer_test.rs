@@ -48,7 +48,8 @@ async fn test_large_chunk_10mb() {
     let bytes_sent = peer1.send_chunk_verified(&chunk).await.unwrap();
     let duration = start.elapsed();
 
-    println!("Transferred 10MB in {:?} ({:.2} MB/s)",
+    println!(
+        "Transferred 10MB in {:?} ({:.2} MB/s)",
         duration,
         10.0 / duration.as_secs_f64()
     );
@@ -99,7 +100,8 @@ async fn test_large_chunk_100mb() {
     let bytes_sent = peer1.send_chunk_verified(&chunk).await.unwrap();
     let duration = start.elapsed();
 
-    println!("Transferred 100MB in {:?} ({:.2} MB/s)",
+    println!(
+        "Transferred 100MB in {:?} ({:.2} MB/s)",
         duration,
         100.0 / duration.as_secs_f64()
     );
@@ -111,7 +113,7 @@ async fn test_large_chunk_100mb() {
     assert_eq!(received.len(), original_data.len());
 
     // For large data, just verify checksums match
-    use sha2::{Sha256, Digest};
+    use sha2::{Digest, Sha256};
     let mut hasher1 = Sha256::new();
     hasher1.update(&original_data);
     let hash1 = hasher1.finalize();
@@ -164,7 +166,8 @@ async fn test_large_memory_chunk_50mb() {
     let bytes_sent = peer1.send_chunk_verified(&chunk).await.unwrap();
     let duration = start.elapsed();
 
-    println!("Transferred 50MB from memory in {:?} ({:.2} MB/s)",
+    println!(
+        "Transferred 50MB from memory in {:?} ({:.2} MB/s)",
         duration,
         50.0 / duration.as_secs_f64()
     );
@@ -222,9 +225,8 @@ async fn test_sequential_large_transfers() {
     for (i, (path, _)) in test_files.iter().enumerate() {
         // Spawn receiver for this transfer
         let peer2_clone = Arc::clone(&peer2);
-        let receiver_handle = tokio::spawn(async move {
-            peer2_clone.recv_chunk_verified().await.unwrap()
-        });
+        let receiver_handle =
+            tokio::spawn(async move { peer2_clone.recv_chunk_verified().await.unwrap() });
 
         // Small delay to ensure receiver is ready
         tokio::time::sleep(Duration::from_millis(10)).await;
@@ -238,7 +240,8 @@ async fn test_sequential_large_transfers() {
     }
 
     let total_duration = total_start.elapsed();
-    println!("Total: 50MB in {:?} ({:.2} MB/s average)",
+    println!(
+        "Total: 50MB in {:?} ({:.2} MB/s average)",
         total_duration,
         50.0 / total_duration.as_secs_f64()
     );

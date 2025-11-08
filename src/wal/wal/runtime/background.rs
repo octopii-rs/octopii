@@ -1,11 +1,11 @@
-use crate::wal::wal::config::{FsyncSchedule, debug_print};
-use crate::wal::wal::storage::{StorageImpl, open_storage_for_path};
+use crate::wal::wal::config::{debug_print, FsyncSchedule};
+use crate::wal::wal::storage::{open_storage_for_path, StorageImpl};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
@@ -94,7 +94,10 @@ pub(super) fn start_background_workers(fsync_schedule: FsyncSchedule) -> Arc<mps
                     if !fsync_batch.is_empty() {
                         // Try io_uring if available, otherwise fallback to sync flush
                         if let Some(ring) = ring.as_mut() {
-                            debug_print!("[flush] batching {} fsync operations (io_uring)", fsync_batch.len());
+                            debug_print!(
+                                "[flush] batching {} fsync operations (io_uring)",
+                                fsync_batch.len()
+                            );
 
                             // Push all fsync operations to submission queue
                             for (i, (raw_fd, _path)) in fsync_batch.iter().enumerate() {
@@ -145,7 +148,10 @@ pub(super) fn start_background_workers(fsync_schedule: FsyncSchedule) -> Arc<mps
                             }
                         } else {
                             // Fallback: No io_uring, use sync flush
-                            debug_print!("[flush] fallback: syncing {} files without io_uring", fsync_batch.len());
+                            debug_print!(
+                                "[flush] fallback: syncing {} files without io_uring",
+                                fsync_batch.len()
+                            );
                             for (_fd, path) in fsync_batch.iter() {
                                 if let Some(storage) = pool.get_mut(path) {
                                     if let Err(e) = storage.flush() {

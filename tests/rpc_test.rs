@@ -1,5 +1,7 @@
 use bytes::Bytes;
-use octopii::rpc::{deserialize, RpcHandler, RpcMessage, RpcRequest, RequestPayload, ResponsePayload};
+use octopii::rpc::{
+    deserialize, RequestPayload, ResponsePayload, RpcHandler, RpcMessage, RpcRequest,
+};
 use octopii::transport::QuicTransport;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -77,7 +79,9 @@ async fn test_rpc_request_response() {
     tokio::spawn(async move {
         while let Ok(Some(data)) = client_peer_for_recv.recv().await {
             if let Ok(msg) = deserialize::<RpcMessage>(&data) {
-                rpc1_for_recv.notify_message(addr2, msg, Some(Arc::clone(&client_peer_for_recv))).await;
+                rpc1_for_recv
+                    .notify_message(addr2, msg, Some(Arc::clone(&client_peer_for_recv)))
+                    .await;
             }
         }
     });

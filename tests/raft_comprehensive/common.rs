@@ -273,9 +273,12 @@ impl TestCluster {
 
         if let Some(leader_node) = leader {
             // Address should be base_port + (node_id - 1) to match TestCluster::new address assignment
-            let addr: SocketAddr = format!("127.0.0.1:{}", self.base_port + (node_id - 1) as u16).parse()?;
+            let addr: SocketAddr =
+                format!("127.0.0.1:{}", self.base_port + (node_id - 1) as u16).parse()?;
             if let Some(node) = leader_node.get_node() {
-                node.add_learner(node_id, addr).await.map_err(|e| e.to_string())?;
+                node.add_learner(node_id, addr)
+                    .await
+                    .map_err(|e| e.to_string())?;
 
                 // Create the learner node and add to cluster
                 let all_addrs: Vec<SocketAddr> = self.nodes.iter().map(|n| n.addr).collect();
@@ -292,7 +295,10 @@ impl TestCluster {
     }
 
     /// Promote a learner to voter
-    pub async fn promote_learner(&mut self, node_id: u64) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn promote_learner(
+        &mut self,
+        node_id: u64,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let leader = self.nodes.iter().find(|n| {
             if let Some(node) = n.get_node() {
                 tokio::task::block_in_place(|| {
@@ -305,7 +311,9 @@ impl TestCluster {
 
         if let Some(leader_node) = leader {
             if let Some(node) = leader_node.get_node() {
-                node.promote_learner(node_id).await.map_err(|e| e.to_string())?;
+                node.promote_learner(node_id)
+                    .await
+                    .map_err(|e| e.to_string())?;
                 Ok(())
             } else {
                 Err("Leader node not running".into())
@@ -316,7 +324,10 @@ impl TestCluster {
     }
 
     /// Check if a learner is caught up
-    pub async fn is_learner_caught_up(&self, node_id: u64) -> Result<bool, Box<dyn std::error::Error>> {
+    pub async fn is_learner_caught_up(
+        &self,
+        node_id: u64,
+    ) -> Result<bool, Box<dyn std::error::Error>> {
         let leader = self.nodes.iter().find(|n| {
             if let Some(node) = n.get_node() {
                 tokio::task::block_in_place(|| {
@@ -329,7 +340,10 @@ impl TestCluster {
 
         if let Some(leader_node) = leader {
             if let Some(node) = leader_node.get_node() {
-                Ok(node.is_learner_caught_up(node_id).await.map_err(|e| e.to_string())?)
+                Ok(node
+                    .is_learner_caught_up(node_id)
+                    .await
+                    .map_err(|e| e.to_string())?)
             } else {
                 Err("Leader node not running".into())
             }
@@ -368,7 +382,10 @@ impl TestCluster {
 
     /// Get WAL disk usage for a node
     pub fn get_wal_disk_usage(&self, node_id: u64) -> Result<u64, Box<dyn std::error::Error>> {
-        let node = self.nodes.iter().find(|n| n.node_id == node_id)
+        let node = self
+            .nodes
+            .iter()
+            .find(|n| n.node_id == node_id)
             .ok_or_else(|| format!("Node {} not found", node_id))?;
 
         let wal_path = &node.config.wal_dir;

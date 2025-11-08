@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use bytes::Bytes;
+use serde::{Deserialize, Serialize};
 
 /// Unique identifier for RPC messages
 pub type MessageId = u64;
@@ -25,36 +25,10 @@ pub struct RpcRequest {
 /// Request payload types
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum RequestPayload {
-    /// Raft AppendEntries RPC
-    AppendEntries {
-        term: u64,
-        leader_id: u64,
-        prev_log_index: u64,
-        prev_log_term: u64,
-        entries: Vec<Bytes>,
-        leader_commit: u64,
-    },
-    /// Raft RequestVote RPC
-    RequestVote {
-        term: u64,
-        candidate_id: u64,
-        last_log_index: u64,
-        last_log_term: u64,
-    },
-    /// Raft Snapshot transfer
-    RaftSnapshot {
-        term: u64,
-        leader_id: u64,
-        snapshot_index: u64,
-        snapshot_term: u64,
-        snapshot_data: Bytes,
-        conf_state_data: Bytes,
-    },
+    /// Generic Raft message serialized via protobuf
+    RaftMessage { message: Bytes },
     /// Custom application-level request
-    Custom {
-        operation: String,
-        data: Bytes,
-    },
+    Custom { operation: String, data: Bytes },
 }
 
 /// RPC response
@@ -68,29 +42,15 @@ pub struct RpcResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ResponsePayload {
     /// AppendEntries response
-    AppendEntriesResponse {
-        term: u64,
-        success: bool,
-    },
+    AppendEntriesResponse { term: u64, success: bool },
     /// RequestVote response
-    RequestVoteResponse {
-        term: u64,
-        vote_granted: bool,
-    },
+    RequestVoteResponse { term: u64, vote_granted: bool },
     /// Snapshot response
-    SnapshotResponse {
-        term: u64,
-        success: bool,
-    },
+    SnapshotResponse { term: u64, success: bool },
     /// Custom application response
-    CustomResponse {
-        success: bool,
-        data: Bytes,
-    },
+    CustomResponse { success: bool, data: Bytes },
     /// Error response
-    Error {
-        message: String,
-    },
+    Error { message: String },
 }
 
 /// One-way message (no response expected)

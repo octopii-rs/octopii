@@ -12,7 +12,7 @@ const TOPIC_CONF_STATE: &str = "raft_conf_state";
 const TOPIC_SNAPSHOT: &str = "raft_snapshot";
 
 // Log compaction threshold: create snapshot after this many entries
-const LOG_COMPACTION_THRESHOLD: u64 = 500;  // Reduced from 1000 for more aggressive compaction
+const LOG_COMPACTION_THRESHOLD: u64 = 500; // Reduced from 1000 for more aggressive compaction
 
 // Serializable wrapper types for rkyv
 
@@ -127,8 +127,12 @@ impl WalStorage {
         if let Ok(hs) = self.recover_hard_state() {
             if hs.term > 0 || hs.vote > 0 || hs.commit > 0 {
                 *self.hard_state.write().unwrap() = hs.clone();
-                tracing::info!("✓ Recovered hard state: term={}, vote={}, commit={}",
-                    hs.term, hs.vote, hs.commit);
+                tracing::info!(
+                    "✓ Recovered hard state: term={}, vote={}, commit={}",
+                    hs.term,
+                    hs.vote,
+                    hs.commit
+                );
             }
         }
 
@@ -136,8 +140,11 @@ impl WalStorage {
         if let Ok(cs) = self.recover_conf_state() {
             if !cs.voters.is_empty() {
                 *self.conf_state.write().unwrap() = cs.clone();
-                tracing::info!("✓ Recovered conf state: voters={:?}, learners={:?}",
-                    cs.voters, cs.learners);
+                tracing::info!(
+                    "✓ Recovered conf state: voters={:?}, learners={:?}",
+                    cs.voters,
+                    cs.learners
+                );
             }
         }
 
@@ -145,8 +152,11 @@ impl WalStorage {
         if let Ok(snap) = self.recover_snapshot() {
             if snap.get_metadata().index > 0 {
                 *self.snapshot.write().unwrap() = snap.clone();
-                tracing::info!("✓ Recovered snapshot at index {} (term {})",
-                    snap.get_metadata().index, snap.get_metadata().term);
+                tracing::info!(
+                    "✓ Recovered snapshot at index {} (term {})",
+                    snap.get_metadata().index,
+                    snap.get_metadata().term
+                );
             }
         }
 
@@ -173,14 +183,15 @@ impl WalStorage {
                 Ok(Some(entry)) => {
                     entry_count += 1;
                     // Zero-copy deserialize with rkyv
-                    let archived = unsafe {
-                        rkyv::archived_root::<HardStateData>(&entry.data)
-                    };
+                    let archived = unsafe { rkyv::archived_root::<HardStateData>(&entry.data) };
                     let data: HardStateData = match archived.deserialize(&mut rkyv::Infallible) {
                         Ok(d) => d,
-                        Err(_) => { tracing::warn!("Failed to deserialize hard state entry"); break; }
+                        Err(_) => {
+                            tracing::warn!("Failed to deserialize hard state entry");
+                            break;
+                        }
                     };
-                            latest = Some((&data).into());
+                    latest = Some((&data).into());
                 }
                 Ok(None) => break,
                 Err(_) => break,
@@ -188,7 +199,10 @@ impl WalStorage {
         }
 
         if entry_count > 0 {
-            tracing::debug!("Recovered hard_state from {} entries (older entries reclaimable)", entry_count);
+            tracing::debug!(
+                "Recovered hard_state from {} entries (older entries reclaimable)",
+                entry_count
+            );
         }
 
         Ok(latest.unwrap_or_default())
@@ -204,9 +218,7 @@ impl WalStorage {
             match walrus.read_next(TOPIC_CONF_STATE, true) {
                 Ok(Some(entry)) => {
                     entry_count += 1;
-                    let archived = unsafe {
-                        rkyv::archived_root::<ConfStateData>(&entry.data)
-                    };
+                    let archived = unsafe { rkyv::archived_root::<ConfStateData>(&entry.data) };
                     let data: ConfStateData = match archived.deserialize(&mut rkyv::Infallible) {
                         Ok(d) => d,
                         Err(_) => {
@@ -238,10 +250,9 @@ impl WalStorage {
             match walrus.read_next(TOPIC_SNAPSHOT, true) {
                 Ok(Some(entry)) => {
                     entry_count += 1;
-                    let archived = unsafe {
-                        rkyv::archived_root::<SnapshotData>(&entry.data)
-                    };
-                    let snap_data: SnapshotData = match archived.deserialize(&mut rkyv::Infallible) {
+                    let archived = unsafe { rkyv::archived_root::<SnapshotData>(&entry.data) };
+                    let snap_data: SnapshotData = match archived.deserialize(&mut rkyv::Infallible)
+                    {
                         Ok(d) => d,
                         Err(_) => {
                             tracing::warn!("Failed to deserialize snapshot entry");
@@ -279,7 +290,10 @@ impl WalStorage {
         let snapshot = self.snapshot.read().unwrap();
         let snapshot_index = snapshot.get_metadata().index;
 
-        tracing::info!("Recovering log entries (snapshot at index {}) using batch reads", snapshot_index);
+        tracing::info!(
+            "Recovering log entries (snapshot at index {}) using batch reads",
+            snapshot_index
+        );
 
         // Read log entries in batches WITH checkpointing
         // CRITICAL: We checkpoint ALL entries (even old ones) to enable Walrus space reclamation,
@@ -298,7 +312,8 @@ impl WalStorage {
                         total_entries += 1;
 
                         // Deserialize protobuf Entry (from raft-rs)
-                        let parse_result: protobuf::ProtobufResult<Entry> = protobuf::Message::parse_from_bytes(&entry_data.data);
+                        let parse_result: protobuf::ProtobufResult<Entry> =
+                            protobuf::Message::parse_from_bytes(&entry_data.data);
                         match parse_result {
                             Ok(raft_entry) => {
                                 if raft_entry.index > snapshot_index {
@@ -309,7 +324,10 @@ impl WalStorage {
                                     // But we STILL checkpointed them (checkpoint=true above)
                                     // This allows Walrus to reclaim their blocks!
                                     compacted_entries += 1;
-                                    tracing::trace!("Skipping compacted entry at index {}", raft_entry.index);
+                                    tracing::trace!(
+                                        "Skipping compacted entry at index {}",
+                                        raft_entry.index
+                                    );
                                 }
                             }
                             Err(e) => {
@@ -350,18 +368,18 @@ impl WalStorage {
             data: snapshot.data.to_vec(),
         };
 
-        let bytes = rkyv::to_bytes::<_, 4096>(&snap_data)
-            .map_err(|e| crate::error::OctopiiError::Wal(
-                format!("Failed to serialize snapshot: {:?}", e)
-            ))?;
-
-        // Persist to Walrus
-        tokio::task::block_in_place(|| {
-            self.wal.walrus.append_for_topic(TOPIC_SNAPSHOT, &bytes)
+        let bytes = rkyv::to_bytes::<_, 4096>(&snap_data).map_err(|e| {
+            crate::error::OctopiiError::Wal(format!("Failed to serialize snapshot: {:?}", e))
         })?;
 
-        tracing::debug!("Persisted snapshot at index {} (term {})",
-            snapshot.get_metadata().index, snapshot.get_metadata().term);
+        // Persist to Walrus
+        tokio::task::block_in_place(|| self.wal.walrus.append_for_topic(TOPIC_SNAPSHOT, &bytes))?;
+
+        tracing::debug!(
+            "Persisted snapshot at index {} (term {})",
+            snapshot.get_metadata().index,
+            snapshot.get_metadata().term
+        );
 
         // Update in-memory state
         let mut snap = self.snapshot.write().unwrap();
@@ -399,9 +417,7 @@ impl WalStorage {
         // ATOMIC batch write to Walrus (up to 2000 entries, which is plenty for Raft)
         // This is 2-5x faster than individual appends due to io_uring batching on Linux
         let walrus = &self.wal.walrus;
-        tokio::task::block_in_place(|| {
-            walrus.batch_append_for_topic(TOPIC_LOG, &batch_refs)
-        })?;
+        tokio::task::block_in_place(|| walrus.batch_append_for_topic(TOPIC_LOG, &batch_refs))?;
 
         tracing::debug!("Batch appended {} entries to WAL", entries.len());
 
@@ -426,17 +442,18 @@ impl WalStorage {
     pub fn set_hard_state(&self, hs: HardState) {
         // Serialize with rkyv
         let data = HardStateData::from(&hs);
-        let bytes = rkyv::to_bytes::<_, 256>(&data)
-            .expect("Failed to serialize hard state");
+        let bytes = rkyv::to_bytes::<_, 256>(&data).expect("Failed to serialize hard state");
 
         // Persist to Walrus (sync for simplicity in ready handler)
-        tokio::task::block_in_place(|| {
-            self.wal.walrus.append_for_topic(TOPIC_HARD_STATE, &bytes)
-        })
-        .expect("Failed to persist hard state");
+        tokio::task::block_in_place(|| self.wal.walrus.append_for_topic(TOPIC_HARD_STATE, &bytes))
+            .expect("Failed to persist hard state");
 
-        tracing::debug!("✓ Persisted hard state: term={}, vote={}, commit={}",
-            data.term, data.vote, data.commit);
+        tracing::debug!(
+            "✓ Persisted hard state: term={}, vote={}, commit={}",
+            data.term,
+            data.vote,
+            data.commit
+        );
 
         // Update in-memory cache
         let mut state = self.hard_state.write().unwrap();
@@ -447,17 +464,17 @@ impl WalStorage {
     pub fn set_conf_state(&self, cs: ConfState) {
         // Serialize with rkyv
         let data = ConfStateData::from(&cs);
-        let bytes = rkyv::to_bytes::<_, 256>(&data)
-            .expect("Failed to serialize conf state");
+        let bytes = rkyv::to_bytes::<_, 256>(&data).expect("Failed to serialize conf state");
 
         // Persist to Walrus
-        tokio::task::block_in_place(|| {
-            self.wal.walrus.append_for_topic(TOPIC_CONF_STATE, &bytes)
-        })
-        .expect("Failed to persist conf state");
+        tokio::task::block_in_place(|| self.wal.walrus.append_for_topic(TOPIC_CONF_STATE, &bytes))
+            .expect("Failed to persist conf state");
 
-        tracing::debug!("✓ Persisted conf state: voters={:?}, learners={:?}",
-            data.voters, data.learners);
+        tracing::debug!(
+            "✓ Persisted conf state: voters={:?}, learners={:?}",
+            data.voters,
+            data.learners
+        );
 
         // Update in-memory cache
         let mut state = self.conf_state.write().unwrap();
@@ -466,7 +483,11 @@ impl WalStorage {
 
     /// Compact logs by creating a snapshot and trimming old entries
     /// This prevents unbounded log growth and enables Walrus space reclamation
-    pub fn compact_logs(&self, applied_index: u64, state_machine_data: Vec<u8>) -> crate::error::Result<()> {
+    pub fn compact_logs(
+        &self,
+        applied_index: u64,
+        state_machine_data: Vec<u8>,
+    ) -> crate::error::Result<()> {
         let entries = self.entries.read().unwrap();
         let snapshot_metadata = self.snapshot.read().unwrap().get_metadata().clone();
 
@@ -480,8 +501,11 @@ impl WalStorage {
 
         drop(entries); // Release read lock before acquiring write locks
 
-        tracing::info!("Log compaction triggered: {} entries since last snapshot (threshold: {})",
-            entries_since_snapshot, LOG_COMPACTION_THRESHOLD);
+        tracing::info!(
+            "Log compaction triggered: {} entries since last snapshot (threshold: {})",
+            entries_since_snapshot,
+            LOG_COMPACTION_THRESHOLD
+        );
 
         // Create new snapshot at applied_index
         let mut snapshot = Snapshot::default();
@@ -505,8 +529,11 @@ impl WalStorage {
         let mut entries_mut = self.entries.write().unwrap();
         entries_mut.retain(|e| e.index > applied_index);
 
-        tracing::info!("✓ Log compaction complete: snapshot at index {}, {} entries retained",
-            applied_index, entries_mut.len());
+        tracing::info!(
+            "✓ Log compaction complete: snapshot at index {}, {} entries retained",
+            applied_index,
+            entries_mut.len()
+        );
 
         // Note: Old log entries before snapshot are automatically reclaimable by Walrus
         // because we use read_next(TOPIC_LOG, true) during recovery, which checkpoints

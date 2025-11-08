@@ -51,7 +51,10 @@ fn test_sustained_throughput_with_snapshots() {
         tracing::info!("Final WAL disk usage: {} bytes", wal_usage);
 
         // With 6000 proposals and compaction every 500 entries, we should see snapshots
-        assert!(proposal_count > 5000, "Should have made substantial progress");
+        assert!(
+            proposal_count > 5000,
+            "Should have made substantial progress"
+        );
 
         cluster.shutdown_all();
         tracing::info!("✓ Test passed: Sustained throughput with snapshots");
@@ -95,8 +98,14 @@ fn test_multiple_learner_workflow_stress() {
 
         // Add first learner
         tracing::info!("Adding learner 4");
-        cluster.add_learner(4).await.expect("Failed to add learner 4");
-        cluster.nodes[3].start().await.expect("Failed to start learner 4");
+        cluster
+            .add_learner(4)
+            .await
+            .expect("Failed to add learner 4");
+        cluster.nodes[3]
+            .start()
+            .await
+            .expect("Failed to start learner 4");
 
         // Continue proposals while learner catches up
         for i in 200..400 {
@@ -118,13 +127,22 @@ fn test_multiple_learner_workflow_stress() {
         }
 
         tracing::info!("Learner 4 caught up, promoting...");
-        cluster.promote_learner(4).await.expect("Failed to promote learner 4");
+        cluster
+            .promote_learner(4)
+            .await
+            .expect("Failed to promote learner 4");
         tokio::time::sleep(Duration::from_secs(2)).await;
 
         // Add second learner
         tracing::info!("Adding learner 5");
-        cluster.add_learner(5).await.expect("Failed to add learner 5");
-        cluster.nodes[4].start().await.expect("Failed to start learner 5");
+        cluster
+            .add_learner(5)
+            .await
+            .expect("Failed to add learner 5");
+        cluster.nodes[4]
+            .start()
+            .await
+            .expect("Failed to start learner 5");
 
         // More proposals
         for i in 400..600 {
@@ -146,7 +164,10 @@ fn test_multiple_learner_workflow_stress() {
         }
 
         tracing::info!("Learner 5 caught up, promoting...");
-        cluster.promote_learner(5).await.expect("Failed to promote learner 5");
+        cluster
+            .promote_learner(5)
+            .await
+            .expect("Failed to promote learner 5");
         tokio::time::sleep(Duration::from_secs(2)).await;
 
         // Verify cluster stability with 5 nodes
@@ -209,9 +230,13 @@ fn test_repeated_leader_failures_with_load() {
 
             // Make proposals for 15 seconds
             let phase_start = std::time::Instant::now();
-            while phase_start.elapsed() < Duration::from_secs(15) && start.elapsed() < test_duration {
+            while phase_start.elapsed() < Duration::from_secs(15) && start.elapsed() < test_duration
+            {
                 let cmd = format!("SET failure{} value{}", proposal_count, proposal_count);
-                cluster.nodes[leader_idx].propose(cmd.as_bytes().to_vec()).await.ok();
+                cluster.nodes[leader_idx]
+                    .propose(cmd.as_bytes().to_vec())
+                    .await
+                    .ok();
                 proposal_count += 1;
                 tokio::time::sleep(Duration::from_millis(20)).await;
             }
@@ -222,7 +247,9 @@ fn test_repeated_leader_failures_with_load() {
 
             // Crash the leader
             tracing::info!("Crashing leader node {}", leader_id);
-            cluster.crash_node(leader_id).expect("Failed to crash leader");
+            cluster
+                .crash_node(leader_id)
+                .expect("Failed to crash leader");
             leader_changes += 1;
 
             // Wait for automatic re-election (should happen within 2.5 seconds)
@@ -234,7 +261,10 @@ fn test_repeated_leader_failures_with_load() {
 
             // Restart crashed node
             tracing::info!("Restarting node {}", leader_id);
-            cluster.restart_node(leader_id).await.expect("Failed to restart node");
+            cluster
+                .restart_node(leader_id)
+                .await
+                .expect("Failed to restart node");
             tokio::time::sleep(Duration::from_secs(2)).await;
         }
 
@@ -244,9 +274,18 @@ fn test_repeated_leader_failures_with_load() {
             leader_changes
         );
 
-        assert!(leader_changes >= 3, "Should have had multiple leader changes");
-        assert!(proposal_count > 2000, "Should have made substantial progress despite failures");
-        assert!(cluster.has_leader().await, "Cluster should be stable at end");
+        assert!(
+            leader_changes >= 3,
+            "Should have had multiple leader changes"
+        );
+        assert!(
+            proposal_count > 2000,
+            "Should have made substantial progress despite failures"
+        );
+        assert!(
+            cluster.has_leader().await,
+            "Cluster should be stable at end"
+        );
 
         cluster.shutdown_all();
         tracing::info!("✓ Test passed: Repeated leader failures with load");

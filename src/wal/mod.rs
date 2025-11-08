@@ -39,9 +39,9 @@ impl WriteAheadLog {
     /// `flush_interval`: Converted to FsyncSchedule
     pub async fn new(path: PathBuf, _batch_size: usize, flush_interval: Duration) -> Result<Self> {
         // Extract parent directory and filename from path
-        let parent_dir = path
-            .parent()
-            .ok_or_else(|| OctopiiError::Wal("Invalid WAL path: no parent directory".to_string()))?;
+        let parent_dir = path.parent().ok_or_else(|| {
+            OctopiiError::Wal("Invalid WAL path: no parent directory".to_string())
+        })?;
         let key = path
             .file_name()
             .and_then(|n| n.to_str())
@@ -103,10 +103,8 @@ impl WriteAheadLog {
         let data_vec = data.to_vec();
 
         // Use block_in_place for hard thread cap (Walrus ops are non-blocking)
-        tokio::task::block_in_place(|| {
-            walrus.append_for_topic(&topic, &data_vec)
-        })
-        .map_err(|e| OctopiiError::Wal(format!("Failed to append: {}", e)))?;
+        tokio::task::block_in_place(|| walrus.append_for_topic(&topic, &data_vec))
+            .map_err(|e| OctopiiError::Wal(format!("Failed to append: {}", e)))?;
 
         // Increment write counter for read_all tracking
         self.write_counter.fetch_add(1, Ordering::SeqCst);
@@ -193,13 +191,9 @@ mod tests {
             let _ = std::fs::remove_dir_all(&actual_wal_dir);
         }
 
-        let wal = WriteAheadLog::new(
-            wal_path.clone(),
-            10,
-            Duration::from_millis(100),
-        )
-        .await
-        .unwrap();
+        let wal = WriteAheadLog::new(wal_path.clone(), 10, Duration::from_millis(100))
+            .await
+            .unwrap();
 
         // Write some entries
         let data1 = Bytes::from("hello");
@@ -218,7 +212,12 @@ mod tests {
 
         // Read back
         let entries = wal.read_all().await.unwrap();
-        assert_eq!(entries.len(), 2, "Expected 2 entries, got {}", entries.len());
+        assert_eq!(
+            entries.len(),
+            2,
+            "Expected 2 entries, got {}",
+            entries.len()
+        );
         assert_eq!(entries[0], data1);
         assert_eq!(entries[1], data2);
 
