@@ -66,9 +66,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create nodes (must be done outside of tokio runtime to avoid nested runtime panic)
     println!("Creating nodes...");
-    let node1 = OctopiiNode::new(config1)?;
-    let node2 = OctopiiNode::new(config2)?;
-    let node3 = OctopiiNode::new(config3)?;
+    let node1 = OctopiiNode::new_blocking(config1)?;
+    let node2 = OctopiiNode::new_blocking(config2)?;
+    let node3 = OctopiiNode::new_blocking(config3)?;
 
     // Create a tokio runtime for async operations
     let rt = tokio::runtime::Runtime::new()?;
