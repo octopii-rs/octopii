@@ -6,6 +6,9 @@ Welcome to the octopii documentation.
 
 - **[API Reference](API.md)** - How to use octopii in your application
 - **[Architecture](ARCHITECTURE.md)** - Internal design and how things work
+- **[Raft Consensus](RAFT.md)** - Raft integration and usage
+- **[Write-Ahead Log](WAL.md)** - WAL/Walrus usage in Octopii
+- **[RPC & Transport](RPC_AND_TRANSPORT.md)** - Network layer details
 - **[Limitations](LIMITATIONS.md)** - Current constraints and known issues
 
 ## What is Octopii?
@@ -63,10 +66,13 @@ peer.send_chunk_verified(&chunk).await; // Concurrent!
 
 ```
 docs/
-├── README.md          (This file)
-├── API.md             (How to use octopii)
-├── ARCHITECTURE.md    (How octopii works)
-└── LIMITATIONS.md     (What doesn't work yet)
+├── README.md             (This file)
+├── API.md                (How to use octopii)
+├── ARCHITECTURE.md       (How octopii works)
+├── RAFT.md               (Raft consensus integration)
+├── WAL.md                (Write-Ahead Log / Walrus)
+├── RPC_AND_TRANSPORT.md  (Network layer)
+└── LIMITATIONS.md        (What doesn't work yet)
 ```
 
 ## When to Use Octopii
