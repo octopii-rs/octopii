@@ -1,8 +1,8 @@
 /// Comprehensive cluster scenario tests for Raft
 mod common;
 
-use common::TestCluster;
 use crate::test_infrastructure::alloc_port;
+use common::TestCluster;
 use std::time::Duration;
 
 #[test]

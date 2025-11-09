@@ -1,7 +1,7 @@
 use crate::common::*;
 use crate::test_infrastructure::*;
-use std::time::Duration;
 use std::sync::Arc;
+use std::time::Duration;
 
 /// Test network partition with leader isolated
 ///
@@ -43,9 +43,30 @@ async fn test_partition_leader_isolated() {
     tracing::info!("✓ Partition created (infrastructure validated)");
 
     // Verify filters were applied to OctopiiNode
-    let node0_filters = cluster.nodes[0].node.as_ref().unwrap().send_filters.read().await.len();
-    let node1_filters = cluster.nodes[1].node.as_ref().unwrap().send_filters.read().await.len();
-    let node2_filters = cluster.nodes[2].node.as_ref().unwrap().send_filters.read().await.len();
+    let node0_filters = cluster.nodes[0]
+        .node
+        .as_ref()
+        .unwrap()
+        .send_filters
+        .read()
+        .await
+        .len();
+    let node1_filters = cluster.nodes[1]
+        .node
+        .as_ref()
+        .unwrap()
+        .send_filters
+        .read()
+        .await
+        .len();
+    let node2_filters = cluster.nodes[2]
+        .node
+        .as_ref()
+        .unwrap()
+        .send_filters
+        .read()
+        .await
+        .len();
     assert_eq!(node0_filters, 1);
     assert_eq!(node1_filters, 1);
     assert_eq!(node2_filters, 1);
@@ -80,13 +101,27 @@ async fn test_isolate_single_node() {
     tracing::info!("✓ Isolation filters applied to node 2");
 
     // Verify filters were set up on OctopiiNode
-    let node1_filters = cluster.nodes[1].node.as_ref().unwrap().send_filters.read().await.len();
+    let node1_filters = cluster.nodes[1]
+        .node
+        .as_ref()
+        .unwrap()
+        .send_filters
+        .read()
+        .await
+        .len();
     assert!(node1_filters > 0);
     tracing::info!("✓ Node 2 has {} isolation filters", node1_filters);
 
     // Clear filters (heal partition)
     cluster.clear_all_filters().await;
-    let node1_filters_after = cluster.nodes[1].node.as_ref().unwrap().send_filters.read().await.len();
+    let node1_filters_after = cluster.nodes[1]
+        .node
+        .as_ref()
+        .unwrap()
+        .send_filters
+        .read()
+        .await
+        .len();
     assert_eq!(node1_filters_after, 0);
     tracing::info!("✓ Filters cleared successfully");
 
@@ -148,11 +183,9 @@ fn test_eventually_utility() {
     });
 
     // Use eventually to wait for flag
-    eventually(
-        Duration::from_millis(10),
-        Duration::from_secs(1),
-        || flag.load(Ordering::SeqCst)
-    );
+    eventually(Duration::from_millis(10), Duration::from_secs(1), || {
+        flag.load(Ordering::SeqCst)
+    });
 
     tracing::info!("✓ eventually utility works correctly");
 }
@@ -166,16 +199,34 @@ async fn test_multiple_filters() {
     cluster.start_all().await.expect("Failed to start cluster");
 
     // Add multiple filters to the same node
-    cluster.add_send_filter(1, Box::new(DropPacketFilter::new(10))).await;
-    cluster.add_send_filter(1, Box::new(DelayFilter::new(Duration::from_millis(5)))).await;
+    cluster
+        .add_send_filter(1, Box::new(DropPacketFilter::new(10)))
+        .await;
+    cluster
+        .add_send_filter(1, Box::new(DelayFilter::new(Duration::from_millis(5))))
+        .await;
 
     // Verify filters were applied to OctopiiNode
-    let node0_filters = cluster.nodes[0].node.as_ref().unwrap().send_filters.read().await.len();
+    let node0_filters = cluster.nodes[0]
+        .node
+        .as_ref()
+        .unwrap()
+        .send_filters
+        .read()
+        .await
+        .len();
     assert_eq!(node0_filters, 2);
     tracing::info!("✓ Multiple filters can be composed");
 
     cluster.clear_send_filters(1).await;
-    let node0_filters_after = cluster.nodes[0].node.as_ref().unwrap().send_filters.read().await.len();
+    let node0_filters_after = cluster.nodes[0]
+        .node
+        .as_ref()
+        .unwrap()
+        .send_filters
+        .read()
+        .await
+        .len();
     assert_eq!(node0_filters_after, 0);
     tracing::info!("✓ Filters can be cleared");
 

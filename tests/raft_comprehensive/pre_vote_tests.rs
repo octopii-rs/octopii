@@ -1,8 +1,8 @@
 /// Pre-vote protocol tests
 mod common;
 
-use common::TestCluster;
 use crate::test_infrastructure::alloc_port;
+use common::TestCluster;
 use std::time::Duration;
 
 #[test]
@@ -263,10 +263,12 @@ fn test_pre_vote_with_one_way_partition() {
         tracing::info!("Creating one-way partition: node 3 can receive but not send");
         // Node 3 can receive messages from 1 & 2, but cannot send to them
         // This simulates asymmetric network failure
-        cluster.add_send_filter(
-            3,
-            Box::new(crate::test_infrastructure::DropPacketFilter::new(100)),
-        ).await;
+        cluster
+            .add_send_filter(
+                3,
+                Box::new(crate::test_infrastructure::DropPacketFilter::new(100)),
+            )
+            .await;
 
         tokio::time::sleep(Duration::from_millis(500)).await;
 
@@ -281,7 +283,10 @@ fn test_pre_vote_with_one_way_partition() {
 
         // Node 3 shouldn't be able to become leader (can't send messages)
         // But with prevote, it also shouldn't disrupt the cluster
-        assert!(!cluster.nodes[2].is_leader().await, "Node 3 should not be leader");
+        assert!(
+            !cluster.nodes[2].is_leader().await,
+            "Node 3 should not be leader"
+        );
         assert!(
             cluster.nodes[0].is_leader().await || cluster.nodes[1].is_leader().await,
             "Nodes 1 or 2 should still have a leader"

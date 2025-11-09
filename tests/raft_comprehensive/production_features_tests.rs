@@ -6,11 +6,10 @@
 /// - Read Index: Linearizable reads (API exposed, integration test TBD)
 ///
 /// Implements features identified in TIKV_TEST_PARITY_ANALYSIS.md Phase 1.
-
 mod common;
 
-use common::TestCluster;
 use crate::test_infrastructure::alloc_port;
+use common::TestCluster;
 use std::time::Duration;
 
 #[test]
@@ -250,9 +249,7 @@ fn test_joint_consensus_via_confchange_v2() {
 
         // Add node 4 (raft-rs uses ConfChangeV2 internally for safety)
         tracing::info!("Adding node 4 via propose_conf_change (uses ConfChangeV2 internally)");
-        let node4_addr = format!("127.0.0.1:{}", alloc_port())
-            .parse()
-            .unwrap();
+        let node4_addr = format!("127.0.0.1:{}", alloc_port()).parse().unwrap();
 
         cluster.nodes[0]
             .add_peer(4, node4_addr)
