@@ -20,7 +20,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Instant;
 use tokio::sync::{broadcast, mpsc, oneshot, RwLock};
-use tokio::task::yield_now;
+use tokio::task::{yield_now, JoinHandle};
 use tokio::time::{interval, timeout, Duration};
 
 /// Filter trait for network simulation (primarily used in testing)
@@ -93,6 +93,10 @@ pub struct OctopiiNode {
     shutdown_triggered: AtomicBool,
     /// Network filters for testing (primarily used in test mode but compiled always for simplicity)
     pub send_filters: Arc<RwLock<Vec<Box<dyn MessageFilter>>>>,
+    /// Handle to the Raft event loop task (for graceful shutdown)
+    event_loop_handle: StdMutex<Option<JoinHandle<()>>>,
+    /// Handle to the network acceptor task (for graceful shutdown)
+    network_acceptor_handle: StdMutex<Option<JoinHandle<()>>>,
 }
 
 impl OctopiiNode {
@@ -193,6 +197,8 @@ impl OctopiiNode {
             shutdown_tx,
             shutdown_triggered: AtomicBool::new(false),
             send_filters: Arc::new(RwLock::new(Vec::new())),
+            event_loop_handle: StdMutex::new(None),
+            network_acceptor_handle: StdMutex::new(None),
         };
 
         tracing::info!(
@@ -296,6 +302,8 @@ impl OctopiiNode {
             shutdown_tx,
             shutdown_triggered: AtomicBool::new(false),
             send_filters: Arc::new(RwLock::new(Vec::new())),
+            event_loop_handle: StdMutex::new(None),
+            network_acceptor_handle: StdMutex::new(None),
         };
 
         tracing::info!(
@@ -909,7 +917,7 @@ impl OctopiiNode {
 
         tracing::info!("Spawning network acceptor for node {}", node_id);
 
-        self.runtime.spawn(async move {
+        let handle = self.runtime.spawn(async move {
             loop {
                 tokio::select! {
                     recv = shutdown_rx.recv() => {
@@ -992,6 +1000,9 @@ impl OctopiiNode {
                 }
             }
         });
+
+        // Store the handle for graceful shutdown
+        *self.network_acceptor_handle.lock().unwrap() = Some(handle);
     }
 
     /// Spawn the unified Raft event loop that owns the RawNode
@@ -1011,7 +1022,7 @@ impl OctopiiNode {
         use rand::Rng;
         let max_ticks_without_leader: u64 = rand::thread_rng().gen_range(15..=30);
 
-        self.runtime.spawn(async move {
+        let handle = self.runtime.spawn(async move {
             let mut ticker = interval(Duration::from_millis(100));
             let mut ticks_without_leader = 0u64;
 
@@ -1091,6 +1102,9 @@ impl OctopiiNode {
 
             tracing::info!("Raft event loop exited");
         });
+
+        // Store the handle for graceful shutdown
+        *self.event_loop_handle.lock().unwrap() = Some(handle);
     }
 
     fn spawn_rpc_response(peer: Arc<PeerConnection>, response: RpcMessage) {
@@ -1450,8 +1464,34 @@ impl OctopiiNode {
             return;
         }
 
+        tracing::info!("Initiating graceful shutdown for node {}", self.config.node_id);
+
+        // Signal all background tasks to stop
         let _ = self.shutdown_tx.send(());
+
+        // Close transport to stop accepting new connections
         self.transport.close();
+
+        // Wait for background tasks to exit gracefully
+        // This prevents zombie tasks from interfering with node restarts
+
+        if let Some(handle) = self.event_loop_handle.lock().unwrap().take() {
+            tracing::debug!("Waiting for event loop to exit...");
+            if let Err(e) = futures::executor::block_on(handle) {
+                tracing::error!("Event loop task panicked: {:?}", e);
+            }
+            tracing::debug!("Event loop exited");
+        }
+
+        if let Some(handle) = self.network_acceptor_handle.lock().unwrap().take() {
+            tracing::debug!("Waiting for network acceptor to exit...");
+            if let Err(e) = futures::executor::block_on(handle) {
+                tracing::error!("Network acceptor task panicked: {:?}", e);
+            }
+            tracing::debug!("Network acceptor exited");
+        }
+
+        tracing::info!("Node {} shutdown complete", self.config.node_id);
     }
 
     /// Public shutdown helper (used in tests)
