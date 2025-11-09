@@ -153,7 +153,7 @@ fn test_eventually_utility() {
 }
 
 /// Test filter composition
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_multiple_filters() {
     let base_port = alloc_port();
     let mut cluster = TestCluster::new(vec![1, 2, 3], base_port).await;
