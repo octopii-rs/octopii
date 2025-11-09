@@ -2,6 +2,7 @@
 mod common;
 
 use common::TestCluster;
+use crate::test_infrastructure::alloc_port;
 use std::time::Duration;
 
 #[test]
@@ -22,7 +23,7 @@ fn test_three_node_cluster_leader_election() {
 
     test_runtime.block_on(async {
         // Create cluster INSIDE async runtime (no nested runtime issues!)
-        let mut cluster = TestCluster::new(vec![1, 2, 3], 7100).await;
+        let mut cluster = TestCluster::new(vec![1, 2, 3], alloc_port()).await;
         cluster.start_all().await.expect("Failed to start cluster");
 
         tokio::time::sleep(Duration::from_millis(500)).await;
@@ -59,7 +60,7 @@ fn test_three_node_cluster_with_proposals() {
 
         tracing::info!("=== Starting 3-node cluster with proposals test ===");
 
-        let mut cluster = TestCluster::new(vec![1, 2, 3], 7110).await;
+        let mut cluster = TestCluster::new(vec![1, 2, 3], alloc_port()).await;
         cluster.start_all().await.expect("Failed to start cluster");
 
         tokio::time::sleep(Duration::from_millis(500)).await;
@@ -104,7 +105,7 @@ fn test_five_node_cluster_leader_election() {
 
         tracing::info!("=== Starting 5-node cluster leader election test ===");
 
-        let mut cluster = TestCluster::new(vec![1, 2, 3, 4, 5], 7120).await;
+        let mut cluster = TestCluster::new(vec![1, 2, 3, 4, 5], alloc_port()).await;
         cluster.start_all().await.expect("Failed to start cluster");
 
         tokio::time::sleep(Duration::from_millis(500)).await;
@@ -141,7 +142,7 @@ fn test_follower_crash_and_recovery() {
 
         tracing::info!("=== Starting follower crash and recovery test ===");
 
-        let mut cluster = TestCluster::new(vec![1, 2, 3], 7140).await;
+        let mut cluster = TestCluster::new(vec![1, 2, 3], alloc_port()).await;
         cluster.start_all().await.expect("Failed to start cluster");
 
         tokio::time::sleep(Duration::from_millis(500)).await;
@@ -204,7 +205,7 @@ fn test_concurrent_proposals_from_leader() {
 
         tracing::info!("=== Starting concurrent proposals test ===");
 
-        let mut cluster = TestCluster::new(vec![1, 2, 3], 7160).await;
+        let mut cluster = TestCluster::new(vec![1, 2, 3], alloc_port()).await;
         cluster.start_all().await.expect("Failed to start cluster");
 
         tokio::time::sleep(Duration::from_millis(500)).await;

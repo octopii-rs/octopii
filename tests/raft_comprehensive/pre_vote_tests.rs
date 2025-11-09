@@ -2,6 +2,7 @@
 mod common;
 
 use common::TestCluster;
+use crate::test_infrastructure::alloc_port;
 use std::time::Duration;
 
 #[test]
@@ -21,7 +22,7 @@ fn test_pre_vote_stable_cluster() {
 
         tracing::info!("=== Starting pre-vote stable cluster test ===");
 
-        let mut cluster = TestCluster::new(vec![1, 2, 3], 8500).await;
+        let mut cluster = TestCluster::new(vec![1, 2, 3], alloc_port()).await;
         cluster.start_all().await.expect("Failed to start cluster");
 
         tokio::time::sleep(Duration::from_millis(500)).await;
@@ -81,7 +82,7 @@ fn test_pre_vote_with_lagging_node() {
 
         tracing::info!("=== Starting pre-vote with lagging node test ===");
 
-        let mut cluster = TestCluster::new(vec![1, 2, 3], 8510).await;
+        let mut cluster = TestCluster::new(vec![1, 2, 3], alloc_port()).await;
         cluster.start_all().await.expect("Failed to start cluster");
 
         tokio::time::sleep(Duration::from_millis(500)).await;

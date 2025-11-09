@@ -2,6 +2,7 @@
 mod common;
 
 use common::TestCluster;
+use crate::test_infrastructure::alloc_port;
 use std::time::Duration;
 
 #[test]
@@ -21,7 +22,7 @@ fn test_sustained_throughput_with_snapshots() {
 
         tracing::info!("=== Starting sustained throughput with snapshots test (60s) ===");
 
-        let mut cluster = TestCluster::new(vec![1, 2, 3], 9000).await;
+        let mut cluster = TestCluster::new(vec![1, 2, 3], alloc_port()).await;
         cluster.start_all().await.expect("Failed to start cluster");
 
         tokio::time::sleep(Duration::from_millis(500)).await;
@@ -78,7 +79,7 @@ fn test_multiple_learner_workflow_stress() {
 
         tracing::info!("=== Starting multiple learner workflow stress test (90s) ===");
 
-        let mut cluster = TestCluster::new(vec![1, 2, 3], 9010).await;
+        let mut cluster = TestCluster::new(vec![1, 2, 3], alloc_port()).await;
         cluster.start_all().await.expect("Failed to start cluster");
 
         tokio::time::sleep(Duration::from_millis(500)).await;
@@ -196,7 +197,7 @@ fn test_repeated_leader_failures_with_load() {
 
         tracing::info!("=== Starting repeated leader failures with load test (90s) ===");
 
-        let mut cluster = TestCluster::new(vec![1, 2, 3], 9020).await;
+        let mut cluster = TestCluster::new(vec![1, 2, 3], alloc_port()).await;
         cluster.start_all().await.expect("Failed to start cluster");
 
         tokio::time::sleep(Duration::from_millis(500)).await;
