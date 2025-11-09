@@ -111,6 +111,12 @@ impl TestNode {
             node.shutdown();
         }
         self.node = None;
+
+        // CRITICAL: Wait for the old node's QUIC endpoint to fully release the port
+        // Without this delay, the new node will hang trying to bind to the same port
+        // Use longer delay (2s) to ensure cleanup completes, especially after heavy write load
+        tokio::time::sleep(std::time::Duration::from_millis(2000)).await;
+
         self.node = Some(OctopiiNode::new(config, runtime).await?);
         Ok(())
     }
