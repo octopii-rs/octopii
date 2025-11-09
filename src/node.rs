@@ -11,6 +11,7 @@ use crate::wal::WriteAheadLog;
 use bytes::Bytes;
 use futures::future::join_all;
 use raft::prelude::{Entry, Message};
+use rkyv::Deserialize;
 use std::collections::{HashMap, VecDeque};
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -986,12 +987,62 @@ impl OctopiiNode {
 
             // Apply snapshot if present (must happen before persisting entries)
             if !ready.snapshot().is_empty() {
+                let snap = ready.snapshot();
                 tracing::info!(
-                    "[Node {}] Applying snapshot at index {}",
+                    "[Node {}] Applying snapshot at index {} (term {})",
                     node_id,
-                    ready.snapshot().get_metadata().index
+                    snap.get_metadata().index,
+                    snap.get_metadata().term
                 );
-                // Snapshot handling would go here if we supported it
+
+                // Deserialize state machine data from snapshot
+                let snapshot_result: std::result::Result<Vec<(String, Vec<u8>)>, String> = (|| {
+                    let archived = unsafe { rkyv::archived_root::<Vec<(String, Vec<u8>)>>(&snap.data) };
+                    archived
+                        .deserialize(&mut rkyv::Infallible)
+                        .map_err(|e| format!("Snapshot deserialization failed: {:?}", e))
+                })();
+
+                match snapshot_result {
+                    Ok(snapshot_data) => {
+                        // Restore state machine
+                        let restored_state: std::collections::HashMap<String, bytes::Bytes> =
+                            snapshot_data
+                                .into_iter()
+                                .map(|(k, v)| (k, bytes::Bytes::from(v)))
+                                .collect();
+
+                        let num_entries = restored_state.len();
+
+                        tracing::info!(
+                            "✓ Deserialized snapshot: {} entries",
+                            num_entries
+                        );
+
+                        state_machine.restore(restored_state);
+
+                        // Apply to Raft storage (persists to Walrus)
+                        if let Err(e) = raft
+                            .raw_node()
+                            .lock()
+                            .await
+                            .store()
+                            .apply_snapshot(snap.clone())
+                        {
+                            tracing::error!("Failed to apply snapshot to storage: {}", e);
+                        } else {
+                            last_applied_index = Some(snap.get_metadata().index);
+                            tracing::info!(
+                                "✓ Snapshot applied successfully: index {}, {} entries restored",
+                                snap.get_metadata().index,
+                                num_entries
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to deserialize snapshot: {}", e);
+                    }
+                }
             }
 
             // Apply committed entries BEFORE persisting new entries
