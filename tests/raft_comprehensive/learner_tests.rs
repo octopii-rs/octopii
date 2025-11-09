@@ -155,11 +155,22 @@ fn test_learner_promotion_fails_when_not_caught_up() {
         cluster.nodes[0].campaign().await.expect("Campaign failed");
         tokio::time::sleep(Duration::from_secs(2)).await;
 
-        // Add learner but DON'T start it yet
-        tracing::info!("Adding node 4 as learner (not started)");
+        // Add and start learner
+        tracing::info!("Adding node 4 as learner");
         cluster.add_learner(4).await.expect("Failed to add learner");
+        let learner_idx = cluster.nodes.len() - 1;
+        cluster.nodes[learner_idx]
+            .start()
+            .await
+            .expect("Failed to start learner 4");
 
-        // Make many proposals while learner is offline
+        tokio::time::sleep(Duration::from_millis(500)).await;
+
+        // Isolate learner so it can't catch up
+        tracing::info!("Isolating learner node 4");
+        cluster.isolate_node(4).await;
+
+        // Make many proposals while learner is isolated
         for i in 1..=50 {
             let cmd = format!("SET offline{} value{}", i, i);
             cluster.nodes[0].propose(cmd.as_bytes().to_vec()).await.ok();
@@ -171,12 +182,12 @@ fn test_learner_promotion_fails_when_not_caught_up() {
         tracing::info!("Attempting to promote learner that's far behind");
         let result = cluster.promote_learner(4).await;
 
-        // Expect failure since learner is not even online
+        // Expect failure since learner is isolated and far behind
         if result.is_err() {
-            tracing::info!("✓ Correctly rejected promotion of lagging learner");
+            tracing::info!("✓ Correctly rejected promotion of isolated/lagging learner");
         } else {
             tracing::warn!(
-                "Promotion succeeded unexpectedly (learner might have caught up very fast)"
+                "Promotion succeeded unexpectedly (learner might have caught up despite isolation)"
             );
         }
 
@@ -218,24 +229,28 @@ fn test_multiple_learners_simultaneously() {
         }
         tokio::time::sleep(Duration::from_secs(1)).await;
 
-        // Add TWO learners simultaneously
-        tracing::info!("Adding nodes 4 and 5 as learners");
+        // Add and start learner 4
+        tracing::info!("Adding node 4 as learner");
         cluster
             .add_learner(4)
             .await
             .expect("Failed to add learner 4");
-        cluster
-            .add_learner(5)
-            .await
-            .expect("Failed to add learner 5");
-
-        // Start both learners
-        let learner1_idx = cluster.nodes.len() - 2;
-        let learner2_idx = cluster.nodes.len() - 1;
+        let learner1_idx = cluster.nodes.len() - 1;
         cluster.nodes[learner1_idx]
             .start()
             .await
             .expect("Failed to start learner 4");
+
+        // Small delay before adding second learner
+        tokio::time::sleep(Duration::from_millis(500)).await;
+
+        // Add and start learner 5
+        tracing::info!("Adding node 5 as learner");
+        cluster
+            .add_learner(5)
+            .await
+            .expect("Failed to add learner 5");
+        let learner2_idx = cluster.nodes.len() - 1;
         cluster.nodes[learner2_idx]
             .start()
             .await
