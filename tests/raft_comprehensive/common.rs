@@ -191,6 +191,15 @@ impl TestNode {
             Err("Node not running".to_string())
         }
     }
+
+    /// Issue a read index request for linearizable reads
+    pub async fn read_index(&self, request_ctx: Vec<u8>) -> Result<(), String> {
+        if let Some(ref node) = self.node {
+            node.read_index(request_ctx).await.map_err(|e| e.to_string())
+        } else {
+            Err("Node not running".to_string())
+        }
+    }
 }
 
 /// Test cluster with multiple nodes
