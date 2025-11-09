@@ -271,6 +271,19 @@ impl OctopiiNode {
     pub async fn propose(&self, command: Vec<u8>) -> Result<Bytes> {
         tracing::info!("Proposing command to Raft: {} bytes", command.len());
 
+        // CRITICAL: Check if this node is the leader before accepting proposals
+        // Non-leader nodes cannot commit proposals, which would cause the response
+        // channel to hang indefinitely waiting for a commit that will never happen
+        if !self.raft.is_leader().await {
+            tracing::warn!(
+                "Rejecting proposal: node {} is not the leader",
+                self.id()
+            );
+            return Err(crate::error::OctopiiError::Rpc(
+                "Not leader - proposals must be sent to the current leader".to_string(),
+            ));
+        }
+
         // Create oneshot channel for response
         let (tx, rx) = oneshot::channel();
 

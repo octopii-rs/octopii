@@ -454,6 +454,17 @@ impl TestCluster {
         false
     }
 
+    /// Find the current leader node (returns the array index)
+    /// Returns None if no leader is found
+    pub async fn find_leader_index(&self) -> Option<usize> {
+        for (idx, node) in self.nodes.iter().enumerate() {
+            if node.is_leader().await {
+                return Some(idx);
+            }
+        }
+        None
+    }
+
     /// Get WAL disk usage for a node
     pub fn get_wal_disk_usage(&self, node_id: u64) -> Result<u64, Box<dyn std::error::Error>> {
         let node = self
