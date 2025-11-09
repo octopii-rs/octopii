@@ -68,3 +68,6 @@ mod production_features_tests;
 
 #[path = "raft_comprehensive/read_index_tests.rs"]
 mod read_index_tests;
+
+#[path = "raft_comprehensive/log_streaming_tests.rs"]
+mod log_streaming_tests;
