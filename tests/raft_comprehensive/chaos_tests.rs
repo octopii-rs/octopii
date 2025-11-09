@@ -137,12 +137,7 @@ fn test_all_nodes_crash_and_recover() {
     });
 }
 
-// TODO: This test hangs during convergence verification after rolling restarts.
-// Investigation needed: The test restarts all 3 nodes sequentially, causing complex
-// leadership transitions. Likely needs a different convergence strategy or longer stabilization time.
-// Related: test_rapid_crash_recovery_cycles (which crashes only 1 node) passes successfully.
 #[test]
-#[ignore]
 fn test_rolling_restarts() {
     let test_runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(4)
@@ -161,7 +156,6 @@ fn test_rolling_restarts() {
 
         let mut cluster = TestCluster::new(vec![1, 2, 3], alloc_port()).await;
         cluster.start_all().await.expect("Failed to start cluster");
-
         tokio::time::sleep(Duration::from_millis(500)).await;
 
         // Elect leader
@@ -176,7 +170,6 @@ fn test_rolling_restarts() {
         tokio::time::sleep(Duration::from_secs(1)).await;
 
         // Rolling restart: crash and restart each node one at a time
-        // Use the node that comes AFTER the restarted one in the sequence (most stable)
         for node_id in 1..=3 {
             tracing::info!("Rolling restart: node {}...", node_id);
 
@@ -188,29 +181,48 @@ fn test_rolling_restarts() {
                 .await
                 .expect("Failed to restart");
 
-            // Wait for node to rejoin cluster and sync
-            tokio::time::sleep(Duration::from_secs(2)).await;
+            // After restart, wait for node to rejoin
+            tokio::time::sleep(Duration::from_secs(3)).await;
 
-            // Use the next node in sequence (most stable, hasn't been recently restarted)
-            let stable_idx = (node_id % 3) as usize; // node 1->use idx 1 (node 2), node 2->use idx 2 (node 3), node 3->use idx 0 (node 1)
-
-            // Re-elect if no leader
-            if !cluster.nodes[stable_idx].is_leader().await {
-                cluster.nodes[stable_idx].campaign().await.ok();
-                tokio::time::sleep(Duration::from_secs(1)).await;
+            // After ALL nodes have been restarted, we need to re-establish leadership
+            // because all nodes are "fresh" and may not have a leader
+            if node_id == 3 {
+                tracing::info!("All nodes restarted - re-establishing leadership");
+                // Try to campaign on any node
+                for try_idx in 0..3 {
+                    cluster.nodes[try_idx].campaign().await.ok();
+                    tokio::time::sleep(Duration::from_secs(2)).await;
+                    if cluster.has_leader().await {
+                        tracing::info!("Leadership re-established on node {}", try_idx + 1);
+                        break;
+                    }
+                }
             }
 
-            // Make a proposal using the stable node
+            // Make a proposal to verify cluster health
             let cmd = format!("SET after_restart{} node{}", node_id, node_id);
-            cluster.nodes[stable_idx].propose(cmd.as_bytes().to_vec()).await.ok();
+            // Find a leader to make the proposal
+            for try_idx in 0..3 {
+                if cluster.nodes[try_idx].is_leader().await {
+                    cluster.nodes[try_idx].propose(cmd.as_bytes().to_vec()).await.ok();
+                    break;
+                }
+            }
             tokio::time::sleep(Duration::from_millis(500)).await;
         }
 
-        // Final convergence check - allow more time for full cluster stabilization
+        // Final stabilization and convergence check
         tokio::time::sleep(Duration::from_secs(3)).await;
 
+        // Ensure we have a leader before convergence check
+        if !cluster.has_leader().await {
+            tracing::info!("No leader found - triggering election");
+            cluster.nodes[0].campaign().await.ok();
+            tokio::time::sleep(Duration::from_secs(3)).await;
+        }
+
         cluster
-            .verify_convergence(Duration::from_secs(5))
+            .verify_convergence(Duration::from_secs(10))
             .await
             .expect("Convergence failed");
 
