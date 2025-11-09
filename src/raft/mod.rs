@@ -187,7 +187,11 @@ impl RaftNode {
 
         // Actually persist to WAL (not just in-memory!)
         if let Err(e) = store.append_entries(&entries_vec).await {
-            tracing::error!("Failed to persist {} entries to WAL: {}", entries_vec.len(), e);
+            tracing::error!(
+                "Failed to persist {} entries to WAL: {}",
+                entries_vec.len(),
+                e
+            );
         }
     }
 

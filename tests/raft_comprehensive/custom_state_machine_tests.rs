@@ -5,7 +5,6 @@
 /// 2. Commands are applied deterministically on all nodes
 /// 3. Snapshot/restore works correctly for custom state machines
 /// 4. Custom state machines survive crashes and restarts
-
 use crate::test_infrastructure::alloc_port;
 use bytes::Bytes;
 use octopii::{Config, OctopiiNode, OctopiiRuntime, StateMachineTrait};
@@ -37,8 +36,8 @@ impl TestCounterStateMachine {
 
 impl StateMachineTrait for TestCounterStateMachine {
     fn apply(&self, command: &[u8]) -> Result<Bytes, String> {
-        let cmd_str = String::from_utf8(command.to_vec())
-            .map_err(|e| format!("Invalid UTF-8: {}", e))?;
+        let cmd_str =
+            String::from_utf8(command.to_vec()).map_err(|e| format!("Invalid UTF-8: {}", e))?;
 
         let parts: Vec<&str> = cmd_str.split_whitespace().collect();
 
@@ -54,7 +53,9 @@ impl StateMachineTrait for TestCounterStateMachine {
                 Ok(Bytes::from(format!("{}", *counter)))
             }
             ["ADD", value] => {
-                let val: i64 = value.parse().map_err(|e| format!("Invalid number: {}", e))?;
+                let val: i64 = value
+                    .parse()
+                    .map_err(|e| format!("Invalid number: {}", e))?;
                 let mut counter = self.counter.write().unwrap();
                 *counter += val;
                 Ok(Bytes::from(format!("{}", *counter)))
@@ -139,9 +140,9 @@ impl TestNodeWithCustomStateMachine {
             bind_addr: addr,
             peers,
             wal_dir: wal_path,
-            worker_threads: 1,  // Reduced to minimize memory pressure
-            wal_batch_size: 10,  // Reduced from 100 to lower memory usage
-            wal_flush_interval_ms: 50,  // Increased to reduce fsync frequency
+            worker_threads: 1,         // Reduced to minimize memory pressure
+            wal_batch_size: 10,        // Reduced from 100 to lower memory usage
+            wal_flush_interval_ms: 50, // Increased to reduce fsync frequency
             is_initial_leader,
         };
 
@@ -150,13 +151,9 @@ impl TestNodeWithCustomStateMachine {
         // Create node with custom state machine
         // Cast to StateMachine (Arc<dyn StateMachineTrait>)
         let sm: octopii::StateMachine = state_machine.clone();
-        let node = OctopiiNode::new_with_state_machine(
-            config.clone(),
-            runtime,
-            sm,
-        )
-        .await
-        .unwrap();
+        let node = OctopiiNode::new_with_state_machine(config.clone(), runtime, sm)
+            .await
+            .unwrap();
 
         Self {
             node: Some(node),
@@ -200,14 +197,7 @@ impl TestNodeWithCustomStateMachine {
         // The WAL recovery will replay committed entries to rebuild state
         let sm: octopii::StateMachine = Arc::new(TestCounterStateMachine::new());
 
-        self.node = Some(
-            OctopiiNode::new_with_state_machine(
-                config,
-                runtime,
-                sm,
-            )
-            .await?,
-        );
+        self.node = Some(OctopiiNode::new_with_state_machine(config, runtime, sm).await?);
         Ok(())
     }
 
@@ -267,7 +257,11 @@ async fn test_custom_state_machine_replication() {
     let addrs: Vec<SocketAddr> = node_ids
         .iter()
         .enumerate()
-        .map(|(idx, _)| format!("127.0.0.1:{}", base_port + idx as u16).parse().unwrap())
+        .map(|(idx, _)| {
+            format!("127.0.0.1:{}", base_port + idx as u16)
+                .parse()
+                .unwrap()
+        })
         .collect();
 
     // Create custom state machines for each node
@@ -393,13 +387,17 @@ async fn test_custom_state_machine_snapshot_restore() {
     tracing::info!("=== Testing custom state machine snapshot/restore ===");
 
     let base_port = alloc_port();
-    let node_ids = vec![1, 2];  // Reduced to 2 nodes to lower memory pressure
+    let node_ids = vec![1, 2]; // Reduced to 2 nodes to lower memory pressure
 
     // Build address list
     let addrs: Vec<SocketAddr> = node_ids
         .iter()
         .enumerate()
-        .map(|(idx, _)| format!("127.0.0.1:{}", base_port + idx as u16).parse().unwrap())
+        .map(|(idx, _)| {
+            format!("127.0.0.1:{}", base_port + idx as u16)
+                .parse()
+                .unwrap()
+        })
         .collect();
 
     // Create custom state machines for each node
@@ -459,7 +457,8 @@ async fn test_custom_state_machine_snapshot_restore() {
         let result = node.query(b"GET").await.unwrap();
         let value = String::from_utf8_lossy(&result);
         assert_eq!(
-            value, "10",
+            value,
+            "10",
             "Node {} should have counter = 10 before crash",
             idx + 1
         );
@@ -493,10 +492,7 @@ async fn test_custom_state_machine_snapshot_restore() {
     let result = nodes[1].query(b"GET").await.unwrap();
     let value = String::from_utf8_lossy(&result);
     tracing::info!("Node 2 counter after restart: {}", value);
-    assert_eq!(
-        value, "10",
-        "Node 2 should have counter = 10 after restart"
-    );
+    assert_eq!(value, "10", "Node 2 should have counter = 10 after restart");
 
     tracing::info!("✓ Node 2 successfully restored state");
 
@@ -518,7 +514,10 @@ async fn test_custom_state_machine_snapshot_restore() {
     // Apply more commands to verify cluster is still operational
     tracing::info!("Applying 5 more INCREMENT commands to test continued replication...");
     for i in 0..5 {
-        nodes[leader_idx].propose(b"INCREMENT".to_vec()).await.unwrap();
+        nodes[leader_idx]
+            .propose(b"INCREMENT".to_vec())
+            .await
+            .unwrap();
         if i % 2 == 0 {
             tracing::info!("  Applied INCREMENT {}/5", i + 1);
         }
@@ -567,7 +566,11 @@ async fn test_custom_state_machine_determinism() {
     let addrs: Vec<SocketAddr> = node_ids
         .iter()
         .enumerate()
-        .map(|(idx, _)| format!("127.0.0.1:{}", base_port + idx as u16).parse().unwrap())
+        .map(|(idx, _)| {
+            format!("127.0.0.1:{}", base_port + idx as u16)
+                .parse()
+                .unwrap()
+        })
         .collect();
 
     // Create custom state machines
@@ -611,15 +614,15 @@ async fn test_custom_state_machine_determinism() {
 
     // Apply a complex sequence of commands
     let commands = vec![
-        "INCREMENT",   // 1
-        "INCREMENT",   // 2
-        "ADD 10",      // 12
-        "DECREMENT",   // 11
-        "INCREMENT",   // 12
-        "ADD 3",       // 15
-        "DECREMENT",   // 14
-        "DECREMENT",   // 13
-        "ADD 7",       // 20
+        "INCREMENT", // 1
+        "INCREMENT", // 2
+        "ADD 10",    // 12
+        "DECREMENT", // 11
+        "INCREMENT", // 12
+        "ADD 3",     // 15
+        "DECREMENT", // 14
+        "DECREMENT", // 13
+        "ADD 7",     // 20
     ];
 
     tracing::info!("Applying command sequence...");
@@ -640,18 +643,25 @@ async fn test_custom_state_machine_determinism() {
         let value = String::from_utf8_lossy(&result);
         tracing::info!("  Node {} counter: {}", idx + 1, value);
         assert_eq!(
-            value, expected,
+            value,
+            expected,
             "Node {} should have deterministic result = {}",
-            idx + 1, expected
+            idx + 1,
+            expected
         );
     }
 
     // Also verify via direct state machine access (not through Raft query)
     for (idx, sm) in state_machines.iter().enumerate() {
         let direct_value = sm.get_value();
-        tracing::info!("  Node {} state machine value (direct): {}", idx + 1, direct_value);
+        tracing::info!(
+            "  Node {} state machine value (direct): {}",
+            idx + 1,
+            direct_value
+        );
         assert_eq!(
-            direct_value, 20,
+            direct_value,
+            20,
             "Node {} state machine should have value = 20",
             idx + 1
         );

@@ -552,10 +552,7 @@ mod tests {
     #[test]
     fn test_conditional_filter() {
         let active = Arc::new(AtomicBool::new(true));
-        let filter = ConditionalFilter::new(
-            active.clone(),
-            Box::new(DropPacketFilter::new(100)),
-        );
+        let filter = ConditionalFilter::new(active.clone(), Box::new(DropPacketFilter::new(100)));
 
         let mut msgs = vec![create_test_message(1, 2, MessageType::MsgHeartbeat)];
 

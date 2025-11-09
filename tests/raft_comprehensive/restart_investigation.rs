@@ -69,10 +69,13 @@ fn test_single_restart_baseline() {
             let cmd = format!("SET after{} value{}", i, i);
 
             // Find current leader before each proposal
-            let leader_idx = cluster.find_leader_index().await
-                .expect("No leader found!");
-            tracing::info!("[BASELINE] Current leader is node {}, proposing: SET after{} value{}",
-                leader_idx + 1, i, i);
+            let leader_idx = cluster.find_leader_index().await.expect("No leader found!");
+            tracing::info!(
+                "[BASELINE] Current leader is node {}, proposing: SET after{} value{}",
+                leader_idx + 1,
+                i,
+                i
+            );
 
             // Propose to the current leader
             cluster.nodes[leader_idx]
@@ -131,7 +134,10 @@ fn test_double_restart_with_extended_delays() {
         for i in 1..=2 {
             let cmd = format!("SET phase1_{} value{}", i, i);
             if let Some(leader_idx) = cluster.find_leader_index().await {
-                cluster.nodes[leader_idx].propose(cmd.as_bytes().to_vec()).await.ok();
+                cluster.nodes[leader_idx]
+                    .propose(cmd.as_bytes().to_vec())
+                    .await
+                    .ok();
             }
         }
         tokio::time::sleep(Duration::from_millis(500)).await;
@@ -146,7 +152,10 @@ fn test_double_restart_with_extended_delays() {
         for i in 3..=4 {
             let cmd = format!("SET during1_{} value{}", i, i);
             if let Some(leader_idx) = cluster.find_leader_index().await {
-                cluster.nodes[leader_idx].propose(cmd.as_bytes().to_vec()).await.ok();
+                cluster.nodes[leader_idx]
+                    .propose(cmd.as_bytes().to_vec())
+                    .await
+                    .ok();
             }
         }
         tokio::time::sleep(Duration::from_secs(1)).await;
@@ -161,7 +170,10 @@ fn test_double_restart_with_extended_delays() {
         for i in 5..=6 {
             let cmd = format!("SET phase2_{} value{}", i, i);
             if let Some(leader_idx) = cluster.find_leader_index().await {
-                cluster.nodes[leader_idx].propose(cmd.as_bytes().to_vec()).await.ok();
+                cluster.nodes[leader_idx]
+                    .propose(cmd.as_bytes().to_vec())
+                    .await
+                    .ok();
             }
         }
         tokio::time::sleep(Duration::from_secs(1)).await;
@@ -176,13 +188,19 @@ fn test_double_restart_with_extended_delays() {
         for i in 7..=8 {
             let cmd = format!("SET during2_{} value{}", i, i);
             if let Some(leader_idx) = cluster.find_leader_index().await {
-                cluster.nodes[leader_idx].propose(cmd.as_bytes().to_vec()).await.ok();
+                cluster.nodes[leader_idx]
+                    .propose(cmd.as_bytes().to_vec())
+                    .await
+                    .ok();
             }
         }
         tokio::time::sleep(Duration::from_secs(1)).await;
 
         tracing::info!("[TEST1] CYCLE 2: Restarting node 3 second time...");
-        cluster.restart_node(3).await.expect("Failed second restart");
+        cluster
+            .restart_node(3)
+            .await
+            .expect("Failed second restart");
         tracing::info!("[TEST1] CYCLE 2: Waiting 5s after second restart for full recovery...");
         tokio::time::sleep(Duration::from_secs(5)).await;
 
@@ -191,7 +209,10 @@ fn test_double_restart_with_extended_delays() {
         for i in 9..=10 {
             let cmd = format!("SET final_{} value{}", i, i);
             if let Some(leader_idx) = cluster.find_leader_index().await {
-                cluster.nodes[leader_idx].propose(cmd.as_bytes().to_vec()).await.ok();
+                cluster.nodes[leader_idx]
+                    .propose(cmd.as_bytes().to_vec())
+                    .await
+                    .ok();
             }
         }
         tokio::time::sleep(Duration::from_secs(1)).await;
@@ -235,7 +256,10 @@ fn test_rapid_restart_minimal_scenario() {
         for i in 1..=2 {
             let cmd = format!("SET initial{} value{}", i, i);
             if let Some(leader_idx) = cluster.find_leader_index().await {
-                cluster.nodes[leader_idx].propose(cmd.as_bytes().to_vec()).await.ok();
+                cluster.nodes[leader_idx]
+                    .propose(cmd.as_bytes().to_vec())
+                    .await
+                    .ok();
             }
         }
         tokio::time::sleep(Duration::from_secs(1)).await;
@@ -251,14 +275,20 @@ fn test_rapid_restart_minimal_scenario() {
         tracing::info!("[TEST2] RAPID CYCLE 2: Crash -> wait 2s -> restart -> wait 3s");
         cluster.crash_node(3).ok();
         tokio::time::sleep(Duration::from_secs(2)).await;
-        cluster.restart_node(3).await.expect("Failed second restart");
+        cluster
+            .restart_node(3)
+            .await
+            .expect("Failed second restart");
         tokio::time::sleep(Duration::from_secs(3)).await;
 
         tracing::info!("[TEST2] Making final proposals");
         for i in 3..=4 {
             let cmd = format!("SET final{} value{}", i, i);
             if let Some(leader_idx) = cluster.find_leader_index().await {
-                cluster.nodes[leader_idx].propose(cmd.as_bytes().to_vec()).await.ok();
+                cluster.nodes[leader_idx]
+                    .propose(cmd.as_bytes().to_vec())
+                    .await
+                    .ok();
             }
         }
         tokio::time::sleep(Duration::from_secs(1)).await;
@@ -302,7 +332,10 @@ fn test_different_node_rapid_restarts() {
         for i in 1..=2 {
             let cmd = format!("SET initial{} value{}", i, i);
             if let Some(leader_idx) = cluster.find_leader_index().await {
-                cluster.nodes[leader_idx].propose(cmd.as_bytes().to_vec()).await.ok();
+                cluster.nodes[leader_idx]
+                    .propose(cmd.as_bytes().to_vec())
+                    .await
+                    .ok();
             }
         }
         tokio::time::sleep(Duration::from_secs(1)).await;
@@ -311,14 +344,20 @@ fn test_different_node_rapid_restarts() {
         tracing::info!("[TEST3] Cycle 1: Crash/restart node 3");
         cluster.crash_node(3).ok();
         tokio::time::sleep(Duration::from_secs(2)).await;
-        cluster.restart_node(3).await.expect("Failed to restart node 3");
+        cluster
+            .restart_node(3)
+            .await
+            .expect("Failed to restart node 3");
         tokio::time::sleep(Duration::from_secs(4)).await;
 
         tracing::info!("[TEST3] Making middle proposals");
         for i in 3..=4 {
             let cmd = format!("SET middle{} value{}", i, i);
             if let Some(leader_idx) = cluster.find_leader_index().await {
-                cluster.nodes[leader_idx].propose(cmd.as_bytes().to_vec()).await.ok();
+                cluster.nodes[leader_idx]
+                    .propose(cmd.as_bytes().to_vec())
+                    .await
+                    .ok();
             }
         }
         tokio::time::sleep(Duration::from_secs(1)).await;
@@ -327,14 +366,20 @@ fn test_different_node_rapid_restarts() {
         tracing::info!("[TEST3] Cycle 2: Crash/restart node 2 (different node)");
         cluster.crash_node(2).ok();
         tokio::time::sleep(Duration::from_secs(2)).await;
-        cluster.restart_node(2).await.expect("Failed to restart node 2");
+        cluster
+            .restart_node(2)
+            .await
+            .expect("Failed to restart node 2");
         tokio::time::sleep(Duration::from_secs(4)).await;
 
         tracing::info!("[TEST3] Making final proposals");
         for i in 5..=6 {
             let cmd = format!("SET final{} value{}", i, i);
             if let Some(leader_idx) = cluster.find_leader_index().await {
-                cluster.nodes[leader_idx].propose(cmd.as_bytes().to_vec()).await.ok();
+                cluster.nodes[leader_idx]
+                    .propose(cmd.as_bytes().to_vec())
+                    .await
+                    .ok();
             }
         }
         tokio::time::sleep(Duration::from_secs(1)).await;
@@ -413,7 +458,10 @@ fn test_original_problematic_pattern() {
         tokio::time::sleep(Duration::from_secs(1)).await;
 
         tracing::info!("[TEST4] Second restart (this is where it might hang)");
-        cluster.restart_node(3).await.expect("Failed second restart");
+        cluster
+            .restart_node(3)
+            .await
+            .expect("Failed second restart");
         tokio::time::sleep(Duration::from_secs(5)).await;
 
         tracing::info!("[TEST4] Verifying convergence (or hang here)...");

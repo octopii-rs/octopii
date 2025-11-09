@@ -2,13 +2,13 @@
 // Source: tikv/components/test_util/src/lib.rs
 // Licensed under Apache-2.0
 
+use rand::Rng;
 use std::{
     env,
     fmt::Debug,
     sync::atomic::{AtomicU16, Ordering},
     time::Duration,
 };
-use rand::Rng;
 
 static INITIAL_PORT: AtomicU16 = AtomicU16::new(0);
 /// Linux by default uses [32768, 61000] for local port.
@@ -51,9 +51,7 @@ pub fn temp_dir(prefix: impl Into<Option<&'static str>>, prefer_mem: bool) -> te
         builder.prefix(prefix);
     }
     match env::var(MEM_DISK) {
-        Ok(dir) if prefer_mem => {
-            builder.tempdir_in(dir).unwrap()
-        }
+        Ok(dir) if prefer_mem => builder.tempdir_in(dir).unwrap(),
         _ => builder.tempdir().unwrap(),
     }
 }
@@ -155,25 +153,19 @@ mod tests {
     #[test]
     fn test_eventually_success() {
         let mut counter = 0;
-        eventually(
-            Duration::from_millis(10),
-            Duration::from_secs(1),
-            || {
-                counter += 1;
-                counter >= 5
-            }
-        );
+        eventually(Duration::from_millis(10), Duration::from_secs(1), || {
+            counter += 1;
+            counter >= 5
+        });
         assert!(counter >= 5);
     }
 
     #[test]
     #[should_panic(expected = "failed to pass the check")]
     fn test_eventually_timeout() {
-        eventually(
-            Duration::from_millis(10),
-            Duration::from_millis(50),
-            || false
-        );
+        eventually(Duration::from_millis(10), Duration::from_millis(50), || {
+            false
+        });
     }
 
     #[test]
