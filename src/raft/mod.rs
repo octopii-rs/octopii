@@ -3,7 +3,7 @@ mod state_machine;
 mod storage;
 
 pub use rpc::*;
-pub use state_machine::StateMachine;
+pub use state_machine::{KvStateMachine, StateMachine, StateMachineTrait};
 pub use storage::WalStorage;
 
 use crate::error::Result;

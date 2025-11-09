@@ -1,7 +1,9 @@
 use crate::chunk::{ChunkSource, TransferResult};
 use crate::config::Config;
 use crate::error::{OctopiiError, Result};
-use crate::raft::{raft_message_to_rpc, rpc_to_raft_message, RaftNode, StateMachine, WalStorage};
+use crate::raft::{
+    raft_message_to_rpc, rpc_to_raft_message, KvStateMachine, RaftNode, StateMachine, WalStorage,
+};
 use crate::rpc::{
     deserialize, RequestPayload, ResponsePayload, RpcHandler, RpcMessage, RpcRequest,
 };
@@ -76,7 +78,7 @@ pub struct OctopiiNode {
     transport: Arc<QuicTransport>,
     rpc: Arc<RpcHandler>,
     raft: Arc<RaftNode>,
-    state_machine: Arc<StateMachine>,
+    state_machine: StateMachine,
     raft_msg_tx: mpsc::UnboundedSender<Message>,
     raft_msg_rx: StdMutex<Option<mpsc::UnboundedReceiver<Message>>>,
     /// Map peer ID to socket address
@@ -159,8 +161,8 @@ impl OctopiiNode {
             RaftNode::new(config.node_id, peer_ids, storage, config.is_initial_leader).await?,
         );
 
-        // Create state machine with WAL backing (enables durability!)
-        let state_machine = Arc::new(StateMachine::with_wal(Arc::clone(&wal)));
+        // Create default KV state machine with WAL backing (enables durability!)
+        let state_machine: StateMachine = Arc::new(KvStateMachine::with_wal(Arc::clone(&wal)));
 
         // Create bounded message type tracker (1024 in-flight messages max)
 
@@ -997,7 +999,7 @@ impl OctopiiNode {
     /// Drain and handle all pending Ready states from the RawNode
     async fn handle_raft_ready(
         raft: &Arc<RaftNode>,
-        state_machine: &Arc<StateMachine>,
+        state_machine: &StateMachine,
         rpc: &Arc<RpcHandler>,
         peer_addrs: &Arc<RwLock<HashMap<u64, SocketAddr>>>,
         proposal_queue: &Arc<ProposalQueue>,
@@ -1037,31 +1039,11 @@ impl OctopiiNode {
                     snap.get_metadata().term
                 );
 
-                // Deserialize state machine data from snapshot
-                let snapshot_result: std::result::Result<Vec<(String, Vec<u8>)>, String> = (|| {
-                    let archived = unsafe { rkyv::archived_root::<Vec<(String, Vec<u8>)>>(&snap.data) };
-                    archived
-                        .deserialize(&mut rkyv::Infallible)
-                        .map_err(|e| format!("Snapshot deserialization failed: {:?}", e))
-                })();
-
-                match snapshot_result {
-                    Ok(snapshot_data) => {
-                        // Restore state machine
-                        let restored_state: std::collections::HashMap<String, bytes::Bytes> =
-                            snapshot_data
-                                .into_iter()
-                                .map(|(k, v)| (k, bytes::Bytes::from(v)))
-                                .collect();
-
-                        let num_entries = restored_state.len();
-
-                        tracing::info!(
-                            "✓ Deserialized snapshot: {} entries",
-                            num_entries
-                        );
-
-                        state_machine.restore(restored_state);
+                // Restore state machine from snapshot data
+                // Let the state machine handle its own deserialization
+                match state_machine.restore(&snap.data) {
+                    Ok(()) => {
+                        tracing::info!("✓ State machine restored from snapshot");
 
                         // Apply to Raft storage (persists to Walrus)
                         if let Err(e) = raft
@@ -1075,9 +1057,8 @@ impl OctopiiNode {
                         } else {
                             last_applied_index = Some(snap.get_metadata().index);
                             tracing::info!(
-                                "✓ Snapshot applied successfully: index {}, {} entries restored",
-                                snap.get_metadata().index,
-                                num_entries
+                                "✓ Snapshot applied successfully: index {}",
+                                snap.get_metadata().index
                             );
                         }
                     }
@@ -1153,18 +1134,12 @@ impl OctopiiNode {
             }
 
             if let Some(last_applied_index) = last_applied_index {
-                if let Err(e) = state_machine.compact_state_machine() {
+                if let Err(e) = state_machine.compact() {
                     tracing::warn!("State machine compaction failed: {}", e);
                 }
 
-                let sm_snapshot = state_machine.snapshot();
-                let serializable_snapshot: Vec<(String, Vec<u8>)> = sm_snapshot
-                    .iter()
-                    .map(|(k, v)| (k.clone(), v.to_vec()))
-                    .collect();
-                let snapshot_data = rkyv::to_bytes::<_, 4096>(&serializable_snapshot)
-                    .unwrap_or_default()
-                    .to_vec();
+                // Get snapshot from state machine (already serialized)
+                let snapshot_data = state_machine.snapshot();
 
                 if let Err(e) = raft
                     .try_compact_logs(last_applied_index, snapshot_data)
@@ -1235,7 +1210,7 @@ impl OctopiiNode {
     async fn apply_committed_entries(
         entries: Vec<Entry>,
         raft: &Arc<RaftNode>,
-        state_machine: &Arc<StateMachine>,
+        state_machine: &StateMachine,
         proposal_queue: &Arc<ProposalQueue>,
         pending_conf_changes: &Arc<RwLock<HashMap<u64, oneshot::Sender<raft::prelude::ConfState>>>>,
     ) -> Option<u64> {

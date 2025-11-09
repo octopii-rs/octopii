@@ -14,6 +14,7 @@ pub use chunk::{ChunkSource, TransferResult};
 pub use config::Config;
 pub use error::{OctopiiError, Result};
 pub use node::OctopiiNode;
+pub use raft::{KvStateMachine, StateMachine, StateMachineTrait};
 pub use runtime::OctopiiRuntime;
 
 #[cfg(test)]
