@@ -97,11 +97,23 @@ struct SnapshotData {
 /// Raft storage implementation backed by WAL
 pub struct WalStorage {
     wal: Arc<WriteAheadLog>,
-    // In-memory cache for recent entries
-    entries: StdRwLock<Vec<Entry>>,
-    hard_state: StdRwLock<HardState>,
-    conf_state: StdRwLock<ConfState>,
-    snapshot: StdRwLock<Snapshot>,
+    // In-memory cache for recent entries (wrapped in Arc for cheap cloning)
+    entries: Arc<StdRwLock<Vec<Entry>>>,
+    hard_state: Arc<StdRwLock<HardState>>,
+    conf_state: Arc<StdRwLock<ConfState>>,
+    snapshot: Arc<StdRwLock<Snapshot>>,
+}
+
+impl Clone for WalStorage {
+    fn clone(&self) -> Self {
+        Self {
+            wal: Arc::clone(&self.wal),
+            entries: Arc::clone(&self.entries),
+            hard_state: Arc::clone(&self.hard_state),
+            conf_state: Arc::clone(&self.conf_state),
+            snapshot: Arc::clone(&self.snapshot),
+        }
+    }
 }
 
 impl WalStorage {
@@ -109,10 +121,10 @@ impl WalStorage {
     pub fn new(wal: Arc<WriteAheadLog>) -> Self {
         let storage = Self {
             wal,
-            entries: StdRwLock::new(Vec::new()),
-            hard_state: StdRwLock::new(HardState::default()),
-            conf_state: StdRwLock::new(ConfState::default()),
-            snapshot: StdRwLock::new(Snapshot::default()),
+            entries: Arc::new(StdRwLock::new(Vec::new())),
+            hard_state: Arc::new(StdRwLock::new(HardState::default())),
+            conf_state: Arc::new(StdRwLock::new(ConfState::default())),
+            snapshot: Arc::new(StdRwLock::new(Snapshot::default())),
         };
 
         // Recover state from Walrus topics
@@ -422,13 +434,15 @@ impl WalStorage {
 
         // ATOMIC batch write to Walrus (up to 2000 entries, which is plenty for Raft)
         // This is 2-5x faster than individual appends due to io_uring batching on Linux
-        let walrus = &self.wal.walrus;
-        tokio::task::block_in_place(|| walrus.batch_append_for_topic(TOPIC_LOG, &batch_refs))?;
-
-        // DUAL-WRITE: Also write to recovery topic
+        //
+        // DUAL-WRITE: Write to both main and recovery topics in a SINGLE block_in_place call
         // The recovery topic is read with a fresh cursor on each restart, ensuring complete log recovery
         // This avoids Walrus's cursor persistence interfering with Raft recovery requirements
-        tokio::task::block_in_place(|| walrus.batch_append_for_topic(TOPIC_LOG_RECOVERY, &batch_refs))?;
+        let walrus = &self.wal.walrus;
+        tokio::task::block_in_place(|| {
+            walrus.batch_append_for_topic(TOPIC_LOG, &batch_refs)?;
+            walrus.batch_append_for_topic(TOPIC_LOG_RECOVERY, &batch_refs)
+        })?;
 
         tracing::info!("✓ Batch appended {} entries to WAL (both main and recovery topics)", entries.len());
 
