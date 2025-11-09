@@ -429,22 +429,22 @@ impl WalStorage {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        // Convert to Vec<&[u8]> for batch_append API
-        let batch_refs: Vec<&[u8]> = serialized.iter().map(|v| v.as_slice()).collect();
-
-        // ATOMIC batch write to Walrus (up to 2000 entries, which is plenty for Raft)
-        // This is 2-5x faster than individual appends due to io_uring batching on Linux
-        //
-        // DUAL-WRITE: Write to both main and recovery topics in a SINGLE block_in_place call
+        // DUAL-WRITE: Write to both main and recovery topics
         // The recovery topic is read with a fresh cursor on each restart, ensuring complete log recovery
         // This avoids Walrus's cursor persistence interfering with Raft recovery requirements
+        //
+        // Using individual append_for_topic calls instead of batch_append_for_topic
+        // to avoid io_uring initialization in resource-constrained environments
         let walrus = &self.wal.walrus;
         tokio::task::block_in_place(|| {
-            walrus.batch_append_for_topic(TOPIC_LOG, &batch_refs)?;
-            walrus.batch_append_for_topic(TOPIC_LOG_RECOVERY, &batch_refs)
+            for data in &serialized {
+                walrus.append_for_topic(TOPIC_LOG, data)?;
+                walrus.append_for_topic(TOPIC_LOG_RECOVERY, data)?;
+            }
+            Ok::<(), crate::error::OctopiiError>(())
         })?;
 
-        tracing::info!("✓ Batch appended {} entries to WAL (both main and recovery topics)", entries.len());
+        tracing::info!("✓ Appended {} entries to WAL (both main and recovery topics)", entries.len());
 
         // Update in-memory cache
         let mut cache = self.entries.write().unwrap();
