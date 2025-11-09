@@ -7,6 +7,7 @@ use std::sync::{Arc, RwLock as StdRwLock};
 
 // Walrus topic names for different Raft state components
 const TOPIC_LOG: &str = "raft_log";
+const TOPIC_LOG_RECOVERY: &str = "raft_log_recovery"; // Recovery-only topic (fresh cursor on restart)
 const TOPIC_HARD_STATE: &str = "raft_hard_state";
 const TOPIC_CONF_STATE: &str = "raft_conf_state";
 const TOPIC_SNAPSHOT: &str = "raft_snapshot";
@@ -177,8 +178,7 @@ impl WalStorage {
         let mut entry_count = 0;
 
         // Use checkpoint=true to advance cursor and enable Walrus space reclamation
-        // Note: read_offset_idx file is deleted before Walrus creation (see wal/mod.rs)
-        // This ensures recovery always starts from offset 0
+        // For hard_state, we want the LATEST entry, so cursor persistence is fine
         loop {
             match walrus.read_next(TOPIC_HARD_STATE, true) {
                 Ok(Some(entry)) => {
@@ -215,6 +215,7 @@ impl WalStorage {
         let mut entry_count = 0;
 
         // Use checkpoint=true to advance cursor and enable Walrus space reclamation
+        // For conf_state, we want the LATEST entry, so cursor persistence is fine
         loop {
             match walrus.read_next(TOPIC_CONF_STATE, true) {
                 Ok(Some(entry)) => {
@@ -247,6 +248,7 @@ impl WalStorage {
         let mut entry_count = 0;
 
         // Use checkpoint=true to advance cursor and enable Walrus space reclamation
+        // For snapshot, we want the LATEST entry, so cursor persistence is fine
         loop {
             match walrus.read_next(TOPIC_SNAPSHOT, true) {
                 Ok(Some(entry)) => {
@@ -305,11 +307,12 @@ impl WalStorage {
         // Use batch reads for 10-50x faster recovery
         const MAX_BATCH_BYTES: usize = 10_000_000; // 10MB per batch
 
-        // Use checkpoint=true to advance cursor and enable Walrus space reclamation
-        // Note: read_offset_idx file is deleted before Walrus creation (see wal/mod.rs)
-        // This ensures recovery always starts from offset 0 despite checkpointing
+        // Read from TOPIC_LOG_RECOVERY instead of TOPIC_LOG for crash recovery
+        // The recovery topic has a fresh cursor on each restart (new Walrus instance),
+        // so we always read all entries from the beginning, regardless of checkpoint persistence
+        // This ensures complete log recovery while still allowing cursor persistence for normal operations
         loop {
-            match walrus.batch_read_for_topic(TOPIC_LOG, MAX_BATCH_BYTES, true) {
+            match walrus.batch_read_for_topic(TOPIC_LOG_RECOVERY, MAX_BATCH_BYTES, true) {
                 Ok(batch) if batch.is_empty() => break, // No more entries
                 Ok(batch) => {
                     for entry_data in batch {
@@ -422,7 +425,12 @@ impl WalStorage {
         let walrus = &self.wal.walrus;
         tokio::task::block_in_place(|| walrus.batch_append_for_topic(TOPIC_LOG, &batch_refs))?;
 
-        tracing::debug!("Batch appended {} entries to WAL", entries.len());
+        // DUAL-WRITE: Also write to recovery topic
+        // The recovery topic is read with a fresh cursor on each restart, ensuring complete log recovery
+        // This avoids Walrus's cursor persistence interfering with Raft recovery requirements
+        tokio::task::block_in_place(|| walrus.batch_append_for_topic(TOPIC_LOG_RECOVERY, &batch_refs))?;
+
+        tracing::info!("✓ Batch appended {} entries to WAL (both main and recovery topics)", entries.len());
 
         // Update in-memory cache
         let mut cache = self.entries.write().unwrap();
@@ -538,20 +546,19 @@ impl WalStorage {
             entries_mut.len()
         );
 
-        // Note: Old log entries before snapshot are automatically reclaimable by Walrus
-        // because we use read_next(TOPIC_LOG, true) during recovery, which checkpoints
-        // the cursor. Next recovery will skip old entries, allowing Walrus to reclaim space.
+        // Note: Old log entries before snapshot are automatically reclaimable by Walrus:
+        // - TOPIC_LOG: Normal operations checkpoint cursor, allowing space reclamation
+        // - TOPIC_LOG_RECOVERY: Recovery reads checkpoint cursor, allowing space reclamation
+        // Both topics will eventually reclaim space for entries before the snapshot index
 
         Ok(())
     }
 
-    // NOTE: Removed create_snapshot_from_walrus() and checkpoint_old_entries() methods
-    // because they had infinite loop bugs when using checkpoint=false.
-    // Walrus read_next/batch_read with checkpoint=false doesn't advance the cursor,
-    // causing the same data to be read repeatedly in an infinite loop.
+    // NOTE: Removed create_snapshot_from_walrus() and checkpoint_old_entries() methods.
     //
     // For Raft snapshots, use the state machine's snapshot() method instead,
     // which returns the current in-memory state without re-reading from Walrus.
+    // Space reclamation happens automatically via Walrus's checkpoint mechanism.
 }
 
 impl Storage for WalStorage {
