@@ -4,6 +4,10 @@ use std::net::SocketAddr;
 use std::time::Duration;
 use tempfile::TempDir;
 
+// Import test infrastructure for network simulation
+use crate::test_infrastructure::{Filter, FilterFactory, PartitionFilterFactory, IsolationFilterFactory};
+use std::sync::{Arc, RwLock};
+
 /// Test node configuration for managing nodes in a cluster
 pub struct TestNode {
     pub node: Option<OctopiiNode>,
@@ -11,6 +15,11 @@ pub struct TestNode {
     pub node_id: u64,
     pub addr: SocketAddr,
     pub _wal_dir: TempDir,
+    /// Network filters applied to this node's outgoing messages
+    /// TODO: Integrate with OctopiiNode transport layer
+    pub send_filters: Arc<RwLock<Vec<Box<dyn Filter>>>>,
+    /// Network filters applied to this node's incoming messages
+    pub recv_filters: Arc<RwLock<Vec<Box<dyn Filter>>>>,
 }
 
 impl TestNode {
@@ -51,6 +60,8 @@ impl TestNode {
             node_id,
             addr,
             _wal_dir: temp_dir,
+            send_filters: Arc::new(RwLock::new(Vec::new())),
+            recv_filters: Arc::new(RwLock::new(Vec::new())),
         }
     }
 
@@ -420,6 +431,107 @@ impl TestCluster {
     pub fn shutdown_all(&mut self) {
         for node in &mut self.nodes {
             node.crash();
+        }
+    }
+
+    // ============================================================================
+    // Network Simulation Methods (using TiKV-style filters)
+    // ============================================================================
+
+    /// Add a send filter to a specific node.
+    ///
+    /// Messages sent by this node will be filtered according to the filter logic.
+    /// NOTE: Currently stores filters for future integration with transport layer.
+    pub fn add_send_filter(&mut self, node_id: u64, filter: Box<dyn Filter>) {
+        if let Some(node) = self.nodes.iter_mut().find(|n| n.node_id == node_id) {
+            node.send_filters.write().unwrap().push(filter);
+            tracing::info!("Added send filter to node {}", node_id);
+        }
+    }
+
+    /// Add a receive filter to a specific node.
+    ///
+    /// Messages received by this node will be filtered according to the filter logic.
+    /// NOTE: Currently stores filters for future integration with transport layer.
+    pub fn add_recv_filter(&mut self, node_id: u64, filter: Box<dyn Filter>) {
+        if let Some(node) = self.nodes.iter_mut().find(|n| n.node_id == node_id) {
+            node.recv_filters.write().unwrap().push(filter);
+            tracing::info!("Added recv filter to node {}", node_id);
+        }
+    }
+
+    /// Clear all send filters from a node.
+    pub fn clear_send_filters(&mut self, node_id: u64) {
+        if let Some(node) = self.nodes.iter_mut().find(|n| n.node_id == node_id) {
+            node.send_filters.write().unwrap().clear();
+            tracing::info!("Cleared send filters for node {}", node_id);
+        }
+    }
+
+    /// Clear all receive filters from a node.
+    pub fn clear_recv_filters(&mut self, node_id: u64) {
+        if let Some(node) = self.nodes.iter_mut().find(|n| n.node_id == node_id) {
+            node.recv_filters.write().unwrap().clear();
+            tracing::info!("Cleared recv filters for node {}", node_id);
+        }
+    }
+
+    /// Create a network partition between two groups of nodes.
+    ///
+    /// After calling this, nodes in group1 cannot communicate with nodes in group2
+    /// and vice versa.
+    ///
+    /// # Example
+    /// ```
+    /// cluster.partition(vec![1], vec![2, 3]); // Isolate node 1 from 2 & 3
+    /// ```
+    ///
+    /// NOTE: Filter application is pending transport layer integration.
+    /// Currently logs partition for testing infrastructure validation.
+    pub fn partition(&mut self, group1: Vec<u64>, group2: Vec<u64>) {
+        tracing::warn!(
+            "Creating partition: {:?} <-> {:?} (filters stored, awaiting transport integration)",
+            group1, group2
+        );
+
+        let factory = PartitionFilterFactory::new(group1.clone(), group2.clone());
+
+        for node_id in group1.iter().chain(group2.iter()) {
+            let filters = factory.generate(*node_id);
+            for filter in filters {
+                self.add_send_filter(*node_id, filter);
+            }
+        }
+    }
+
+    /// Isolate a single node from all communication.
+    ///
+    /// The isolated node cannot send or receive any messages.
+    ///
+    /// NOTE: Filter application is pending transport layer integration.
+    pub fn isolate_node(&mut self, node_id: u64) {
+        tracing::warn!(
+            "Isolating node {} (filters stored, awaiting transport integration)",
+            node_id
+        );
+
+        let factory = IsolationFilterFactory::new(node_id);
+        let all_nodes: Vec<u64> = self.nodes.iter().map(|n| n.node_id).collect();
+
+        for id in all_nodes {
+            let filters = factory.generate(id);
+            for filter in filters {
+                self.add_send_filter(id, filter);
+            }
+        }
+    }
+
+    /// Remove all network filters from all nodes (heal all partitions).
+    pub fn clear_all_filters(&mut self) {
+        tracing::info!("Clearing all network filters");
+        for node in &mut self.nodes {
+            node.send_filters.write().unwrap().clear();
+            node.recv_filters.write().unwrap().clear();
         }
     }
 }
