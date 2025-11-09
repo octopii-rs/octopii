@@ -178,8 +178,12 @@ impl RaftNode {
     /// Persist entries from Ready to storage
     pub async fn persist_entries(&self, entries: &[Entry]) {
         let node = self.raw_node.lock().await;
-        node.store().append_entries_sync(entries);
-        tracing::debug!("Persisted {} entries to storage", entries.len());
+
+        // Actually persist to WAL (not just in-memory!)
+        // Keep node locked during persistence - Walrus batching makes this fast enough
+        if let Err(e) = node.store().append_entries(entries).await {
+            tracing::error!("Failed to persist {} entries to WAL: {}", entries.len(), e);
+        }
     }
 
     /// Persist hard state from Ready to storage
