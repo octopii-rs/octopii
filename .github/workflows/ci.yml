@@ -5,53 +5,88 @@ on:
   pull_request:
 
 jobs:
-  test:
+  checks:
     runs-on: self-hosted
-
     steps:
       - uses: actions/checkout@v4
-
-      - name: Setup Rust
-        uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           toolchain: stable
           cache: true
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --all-targets --all-features -- -D warnings
+      - run: cargo build --all-targets
 
-      - name: Format check
-        run: cargo fmt --all -- --check
+  unit-tests:
+    runs-on: self-hosted
+    needs: checks
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          cache: true
+      - run: cargo test --lib --no-fail-fast
 
-      - name: Clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
-
-      - name: Build
-        run: cargo build --all-targets
-
-      - name: Unit tests
-        run: cargo test --lib --no-fail-fast
-
-      - name: Integration tests
-        run: |
+  integration-tests:
+    runs-on: self-hosted
+    needs: checks
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          cache: true
+      - run: |
           cargo test --test transport_test --no-fail-fast
           cargo test --test rpc_test --no-fail-fast
           cargo test --test chunk_transfer_test --no-fail-fast
           cargo test --test chunk_error_handling_test --no-fail-fast
           cargo test --test integration_test --no-fail-fast
+      - if: always()
+        run: rm -rf /tmp/octopii_test_* /tmp/walrus_* || true
 
-      - name: WAL tests
-        run: cargo test --test wal_test --no-fail-fast
+  wal-tests:
+    runs-on: self-hosted
+    needs: checks
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          cache: true
+      - run: cargo test --test wal_test --no-fail-fast
+      - if: always()
+        run: rm -rf /tmp/test_walrus_* /tmp/walrus_* || true
 
-      - name: Raft tests (single-threaded)
-        run: |
+  raft-tests:
+    runs-on: self-hosted
+    needs: checks
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          cache: true
+      - run: |
           cargo test --test raft_cluster_test --no-fail-fast -- --test-threads=1
           cargo test --test raft_durability_test --no-fail-fast -- --test-threads=1
           cargo test --test raft_comprehensive_test --no-fail-fast -- --test-threads=1
+      - if: always()
+        run: rm -rf /tmp/octopii_test_* /tmp/walrus_* /tmp/custom_sm_test_* || true
 
-      - name: Stress tests
-        run: |
+  stress-tests:
+    runs-on: self-hosted
+    needs: checks
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          cache: true
+      - run: |
           cargo test --test chunk_parallel_stress_test --no-fail-fast
           cargo test --test chunk_mixed_scenarios_test --no-fail-fast
           cargo test --test chunk_large_transfer_test --no-fail-fast
-
-      - name: Cleanup
-        if: always()
-        run: rm -rf /tmp/octopii_test_* /tmp/walrus_* /tmp/custom_sm_test_* /tmp/chunk_test_* /tmp/test_walrus_* || true
+      - if: always()
+        run: rm -rf /tmp/chunk_test_* /tmp/octopii_test_* || true
