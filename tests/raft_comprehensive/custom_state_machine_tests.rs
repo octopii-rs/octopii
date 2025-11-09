@@ -375,21 +375,22 @@ async fn test_custom_state_machine_replication() {
 /// - Crashed nodes can restore from snapshots
 /// - State is preserved across restarts
 ///
-/// NOTE: Currently failing due to Octopii node reconnection bug.
+/// NOTE: Currently failing due to Octopii WAL recovery bug.
 ///
-/// Investigation shows:
-/// - Persistence works correctly (node recovers to counter=20 after restart)
-/// - Leader sends MsgAppend messages to restarted node
-/// - But restarted node doesn't process new entries (stays at 20 instead of 25)
+/// Investigation history:
+/// 1. FIXED: Zombie task bug - old network acceptor tasks interfered with restarts
+///    - Solution: Added graceful shutdown with JoinHandle tracking
+///    - Tasks now properly exit before restart
 ///
-/// Optimizations tried:
-/// - Reduced fsync interval to 10ms (from 100ms)
-/// - Added 100ms wait before crash to ensure fsync completes
-/// - Increased reconnection wait times
-/// - None of these fixed the issue
+/// 2. CURRENT BUG: WAL recovery incomplete after crash
+///    - Node crashes with 20 committed entries (indices 1-20)
+///    - After restart, only recovers to index 1
+///    - Leader asks to commit index 22 (new proposals 21-25)
+///    - Raft panics: "to_commit 22 is out of range [last_index 1]"
+///    - Root cause: WalStorage.initial_state() not recovering full log
 ///
-/// This is a real bug in Octopii's Raft message processing after node restart.
-#[ignore = "Node reconnection after restart - Octopii bug, not custom SM issue"]
+/// This is a real bug in Octopii's WAL recovery, not a custom state machine issue.
+#[ignore = "WAL recovery incomplete after crash - Octopii bug, not custom SM issue"]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_custom_state_machine_snapshot_restore() {
     tracing_subscriber::fmt()
