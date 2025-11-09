@@ -1,4 +1,0 @@
-# We prefer to maintain the existing code style of crossbeam-skiplist
-# to avoid conflicts during cherry-picks.
-#
-# Use the default rustfmt style by leaving rustfmt.toml empty.
