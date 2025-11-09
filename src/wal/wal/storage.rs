@@ -181,10 +181,6 @@ impl SharedMmap {
         self.storage.read(offset, dest);
     }
 
-    pub(crate) fn len(&self) -> usize {
-        self.storage.len()
-    }
-
     pub(crate) fn flush(&self) -> std::io::Result<()> {
         self.storage.flush()
     }
@@ -247,10 +243,6 @@ impl SharedMmapKeeper {
 
 pub(crate) fn set_fsync_schedule(schedule: FsyncSchedule) {
     let _ = GLOBAL_FSYNC_SCHEDULE.set(schedule);
-}
-
-pub(crate) fn fsync_schedule() -> Option<FsyncSchedule> {
-    GLOBAL_FSYNC_SCHEDULE.get().copied()
 }
 
 pub(crate) fn open_storage_for_path(path: &str) -> std::io::Result<StorageImpl> {

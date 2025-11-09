@@ -13,7 +13,6 @@ use crate::wal::WriteAheadLog;
 use bytes::Bytes;
 use futures::future::join_all;
 use raft::prelude::{Entry, Message};
-use rkyv::Deserialize;
 use std::collections::{HashMap, VecDeque};
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
