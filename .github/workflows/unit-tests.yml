@@ -1,0 +1,42 @@
+name: Unit Tests
+
+on:
+  push:
+    branches: [ main, develop, claude/** ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  unit-tests:
+    name: Unit Tests
+    runs-on: self-hosted
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          cache: true
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Build library
+        run: cargo build --lib
+
+      - name: Run library unit tests
+        run: cargo test --lib --no-fail-fast
+        env:
+          RUST_BACKTRACE: 1
+          RUST_LOG: info
+
+      - name: Run doc tests
+        run: cargo test --doc
+        env:
+          RUST_BACKTRACE: 1
