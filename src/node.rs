@@ -319,6 +319,35 @@ impl OctopiiNode {
         self.raft.campaign().await
     }
 
+    /// Transfer leadership to another node (for planned maintenance or load balancing)
+    ///
+    /// This is a cooperative operation where the current leader hands off leadership
+    /// to the specified target node. The target must be a follower and caught up.
+    ///
+    /// # Arguments
+    /// * `target_id` - The node ID to transfer leadership to
+    ///
+    /// # Returns
+    /// Ok if the transfer command was sent, Err if not currently leader
+    pub async fn transfer_leader(&self, target_id: u64) -> Result<()> {
+        self.raft.transfer_leader(target_id).await
+    }
+
+    /// Request a read index for linearizable reads
+    ///
+    /// This allows serving reads without going through the Raft log, while still
+    /// guaranteeing linearizability. The leader confirms it's still the leader
+    /// and returns a read index that can be used to serve consistent reads.
+    ///
+    /// # Arguments
+    /// * `request_ctx` - Optional context bytes to identify this read request
+    ///
+    /// # Returns
+    /// Ok if the read index request was submitted
+    pub async fn read_index(&self, request_ctx: Vec<u8>) -> Result<()> {
+        self.raft.read_index(request_ctx).await
+    }
+
     /// Add a peer to the Raft cluster dynamically
     /// This proposes a ConfChange that will be committed through Raft consensus.
     /// Blocks until the ConfChange is committed and applied, or times out after 10 seconds.
