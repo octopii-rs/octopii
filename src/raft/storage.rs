@@ -12,7 +12,7 @@ const TOPIC_CONF_STATE: &str = "raft_conf_state";
 const TOPIC_SNAPSHOT: &str = "raft_snapshot";
 
 // Log compaction threshold: create snapshot after this many entries
-const LOG_COMPACTION_THRESHOLD: u64 = 500; // Reduced from 1000 for more aggressive compaction
+const LOG_COMPACTION_THRESHOLD: u64 = 10000; // High threshold to avoid blocking fsync during normal operation
 
 // Serializable wrapper types for rkyv
 
