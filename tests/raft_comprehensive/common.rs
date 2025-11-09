@@ -7,6 +7,24 @@ use tempfile::TempDir;
 // Import test infrastructure for network simulation
 use crate::test_infrastructure::{Filter, FilterFactory, PartitionFilterFactory, IsolationFilterFactory};
 use std::sync::{Arc, RwLock};
+use raft::prelude::Message;
+
+/// Adapter to bridge test infrastructure Filter trait with OctopiiNode's MessageFilter trait
+struct FilterAdapter {
+    filter: Box<dyn Filter>,
+}
+
+impl FilterAdapter {
+    fn new(filter: Box<dyn Filter>) -> Self {
+        Self { filter }
+    }
+}
+
+impl octopii::node::MessageFilter for FilterAdapter {
+    fn before(&self, msgs: &mut Vec<Message>) -> std::result::Result<(), String> {
+        self.filter.before(msgs).map_err(|e| e.to_string())
+    }
+}
 
 /// Test node configuration for managing nodes in a cluster
 pub struct TestNode {
@@ -441,11 +459,18 @@ impl TestCluster {
     /// Add a send filter to a specific node.
     ///
     /// Messages sent by this node will be filtered according to the filter logic.
-    /// NOTE: Currently stores filters for future integration with transport layer.
-    pub fn add_send_filter(&mut self, node_id: u64, filter: Box<dyn Filter>) {
-        if let Some(node) = self.nodes.iter_mut().find(|n| n.node_id == node_id) {
-            node.send_filters.write().unwrap().push(filter);
-            tracing::info!("Added send filter to node {}", node_id);
+    pub async fn add_send_filter(&mut self, node_id: u64, filter: Box<dyn Filter>) {
+        if let Some(test_node) = self.nodes.iter_mut().find(|n| n.node_id == node_id) {
+            // Apply filter directly to OctopiiNode via adapter
+            if let Some(octopii_node) = &test_node.node {
+                let adapter = FilterAdapter::new(filter);
+                octopii_node.add_send_filter(Box::new(adapter)).await;
+                tracing::info!("✓ Applied send filter to node {}", node_id);
+            } else {
+                // Node not running, store in TestNode for later application
+                test_node.send_filters.write().unwrap().push(filter);
+                tracing::warn!("Node {} not running, filter stored for later", node_id);
+            }
         }
     }
 
@@ -461,10 +486,16 @@ impl TestCluster {
     }
 
     /// Clear all send filters from a node.
-    pub fn clear_send_filters(&mut self, node_id: u64) {
-        if let Some(node) = self.nodes.iter_mut().find(|n| n.node_id == node_id) {
-            node.send_filters.write().unwrap().clear();
-            tracing::info!("Cleared send filters for node {}", node_id);
+    pub async fn clear_send_filters(&mut self, node_id: u64) {
+        if let Some(test_node) = self.nodes.iter_mut().find(|n| n.node_id == node_id) {
+            test_node.send_filters.write().unwrap().clear();
+
+            // Also clear from OctopiiNode if running
+            if let Some(octopii_node) = &test_node.node {
+                octopii_node.clear_send_filters().await;
+            }
+
+            tracing::info!("✓ Cleared send filters for node {}", node_id);
         }
     }
 
@@ -488,9 +519,9 @@ impl TestCluster {
     ///
     /// NOTE: Filter application is pending transport layer integration.
     /// Currently logs partition for testing infrastructure validation.
-    pub fn partition(&mut self, group1: Vec<u64>, group2: Vec<u64>) {
-        tracing::warn!(
-            "Creating partition: {:?} <-> {:?} (filters stored, awaiting transport integration)",
+    pub async fn partition(&mut self, group1: Vec<u64>, group2: Vec<u64>) {
+        tracing::info!(
+            "Creating partition: {:?} <-> {:?}",
             group1, group2
         );
 
@@ -499,7 +530,7 @@ impl TestCluster {
         for node_id in group1.iter().chain(group2.iter()) {
             let filters = factory.generate(*node_id);
             for filter in filters {
-                self.add_send_filter(*node_id, filter);
+                self.add_send_filter(*node_id, filter).await;
             }
         }
     }
@@ -507,11 +538,9 @@ impl TestCluster {
     /// Isolate a single node from all communication.
     ///
     /// The isolated node cannot send or receive any messages.
-    ///
-    /// NOTE: Filter application is pending transport layer integration.
-    pub fn isolate_node(&mut self, node_id: u64) {
-        tracing::warn!(
-            "Isolating node {} (filters stored, awaiting transport integration)",
+    pub async fn isolate_node(&mut self, node_id: u64) {
+        tracing::info!(
+            "Isolating node {}",
             node_id
         );
 
@@ -521,18 +550,24 @@ impl TestCluster {
         for id in all_nodes {
             let filters = factory.generate(id);
             for filter in filters {
-                self.add_send_filter(id, filter);
+                self.add_send_filter(id, filter).await;
             }
         }
     }
 
     /// Remove all network filters from all nodes (heal all partitions).
-    pub fn clear_all_filters(&mut self) {
+    pub async fn clear_all_filters(&mut self) {
         tracing::info!("Clearing all network filters");
-        for node in &mut self.nodes {
-            node.send_filters.write().unwrap().clear();
-            node.recv_filters.write().unwrap().clear();
+        for test_node in &mut self.nodes {
+            test_node.send_filters.write().unwrap().clear();
+            test_node.recv_filters.write().unwrap().clear();
+
+            // Also clear from OctopiiNode if running
+            if let Some(octopii_node) = &test_node.node {
+                octopii_node.clear_send_filters().await;
+            }
         }
+        tracing::info!("✓ All filters cleared");
     }
 }
 

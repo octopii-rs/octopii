@@ -20,6 +20,12 @@ use tokio::sync::{broadcast, mpsc, oneshot, RwLock};
 use tokio::task::yield_now;
 use tokio::time::{interval, timeout, Duration};
 
+/// Filter trait for network simulation (primarily used in testing)
+/// This is public but typically only used via test infrastructure
+pub trait MessageFilter: Send + Sync {
+    fn before(&self, msgs: &mut Vec<Message>) -> std::result::Result<(), String>;
+}
+
 /// Metadata for a pending proposal (bounded queue to prevent unbounded growth)
 struct ProposalMetadata {
     responder: oneshot::Sender<Result<Bytes>>,
@@ -82,6 +88,8 @@ pub struct OctopiiNode {
     shutdown_tx: broadcast::Sender<()>,
     /// Flag ensuring shutdown is triggered at most once
     shutdown_triggered: AtomicBool,
+    /// Network filters for testing (primarily used in test mode but compiled always for simplicity)
+    pub send_filters: Arc<RwLock<Vec<Box<dyn MessageFilter>>>>,
 }
 
 impl OctopiiNode {
@@ -181,6 +189,7 @@ impl OctopiiNode {
             pending_conf_changes,
             shutdown_tx,
             shutdown_triggered: AtomicBool::new(false),
+            send_filters: Arc::new(RwLock::new(Vec::new())),
         };
 
         tracing::info!(
@@ -847,6 +856,7 @@ impl OctopiiNode {
         let pending_conf_changes = Arc::clone(&self.pending_conf_changes);
         let mut shutdown_rx = self.shutdown_tx.subscribe();
         let ready_notify = self.raft.ready_notifier();
+        let send_filters = Arc::clone(&self.send_filters);
 
         tracing::info!("Spawning consolidated Raft event loop");
 
@@ -918,6 +928,7 @@ impl OctopiiNode {
                         &peer_addrs,
                         &proposal_queue,
                         &pending_conf_changes,
+                        Some(&send_filters),
                     )
                     .await;
                 }
@@ -948,6 +959,7 @@ impl OctopiiNode {
         peer_addrs: &Arc<RwLock<HashMap<u64, SocketAddr>>>,
         proposal_queue: &Arc<ProposalQueue>,
         pending_conf_changes: &Arc<RwLock<HashMap<u64, oneshot::Sender<raft::prelude::ConfState>>>>,
+        send_filters: Option<&Arc<RwLock<Vec<Box<dyn MessageFilter>>>>>,
     ) {
         loop {
             let ready_opt = raft.ready().await;
@@ -970,7 +982,7 @@ impl OctopiiNode {
             // CRITICAL: Send ready.messages() FIRST, before any persistence operations.
             // These are immediate messages (votes, heartbeats, etc.) that must go out immediately.
             // This is the TiKV/raft-rs pattern - see raft-rs/examples/five_mem_node/main.rs:264-267
-            Self::send_raft_messages(ready.take_messages(), rpc, peer_addrs).await;
+            Self::send_raft_messages(ready.take_messages(), rpc, peer_addrs, send_filters).await;
 
             // Apply snapshot if present (must happen before persisting entries)
             if !ready.snapshot().is_empty() {
@@ -1021,7 +1033,7 @@ impl OctopiiNode {
             // CRITICAL: Send persisted_messages() AFTER persistence completes.
             // These messages (like MsgAppend with newly persisted entries) depend on persistence.
             // This unblocks log replication - followers won't hear about new entries until these go out.
-            Self::send_raft_messages(ready.take_persisted_messages(), rpc, peer_addrs).await;
+            Self::send_raft_messages(ready.take_persisted_messages(), rpc, peer_addrs, send_filters).await;
 
             let mut light_rd = raft.advance(ready).await;
 
@@ -1032,7 +1044,7 @@ impl OctopiiNode {
             );
 
             // Send LightReady messages first (raft-rs pattern: line 341 before 343)
-            Self::send_raft_messages(light_rd.take_messages(), rpc, peer_addrs).await;
+            Self::send_raft_messages(light_rd.take_messages(), rpc, peer_addrs, send_filters).await;
 
             // Then apply LightReady committed entries
             if let Some(idx) = Self::apply_committed_entries(
@@ -1074,12 +1086,24 @@ impl OctopiiNode {
     }
 
     async fn send_raft_messages(
-        messages: Vec<Message>,
+        mut messages: Vec<Message>,
         rpc: &Arc<RpcHandler>,
         peer_addrs: &Arc<RwLock<HashMap<u64, SocketAddr>>>,
+        #[allow(unused_variables)]
+        send_filters: Option<&Arc<RwLock<Vec<Box<dyn MessageFilter>>>>>,
     ) {
         if messages.is_empty() {
             return;
+        }
+
+        // Apply network filters (primarily used in testing)
+        if let Some(filters) = send_filters {
+            let filters_guard = filters.read().await;
+            for filter in filters_guard.iter() {
+                if let Err(e) = filter.before(&mut messages) {
+                    tracing::warn!("Filter error: {}", e);
+                }
+            }
         }
 
         for msg in messages {
@@ -1232,6 +1256,16 @@ impl OctopiiNode {
     /// Public shutdown helper (used in tests)
     pub fn shutdown(&self) {
         self.initiate_shutdown();
+    }
+
+    /// Add a send filter for network simulation (primarily used in testing)
+    pub async fn add_send_filter(&self, filter: Box<dyn MessageFilter>) {
+        self.send_filters.write().await.push(filter);
+    }
+
+    /// Clear all send filters (primarily used in testing)
+    pub async fn clear_send_filters(&self) {
+        self.send_filters.write().await.clear();
     }
 }
 

@@ -39,14 +39,17 @@ async fn test_partition_leader_isolated() {
     tracing::info!("✓ Node 1 elected as leader");
 
     // Create partition: node 1 (leader) isolated from nodes 2 & 3
-    cluster.partition(vec![1], vec![2, 3]);
+    cluster.partition(vec![1], vec![2, 3]).await;
     tracing::info!("✓ Partition created (infrastructure validated)");
 
-    // Verify filters were applied
-    assert_eq!(cluster.nodes[0].send_filters.read().unwrap().len(), 1);
-    assert_eq!(cluster.nodes[1].send_filters.read().unwrap().len(), 1);
-    assert_eq!(cluster.nodes[2].send_filters.read().unwrap().len(), 1);
-    tracing::info!("✓ Filters successfully stored on all nodes");
+    // Verify filters were applied to OctopiiNode
+    let node0_filters = cluster.nodes[0].node.as_ref().unwrap().send_filters.read().await.len();
+    let node1_filters = cluster.nodes[1].node.as_ref().unwrap().send_filters.read().await.len();
+    let node2_filters = cluster.nodes[2].node.as_ref().unwrap().send_filters.read().await.len();
+    assert_eq!(node0_filters, 1);
+    assert_eq!(node1_filters, 1);
+    assert_eq!(node2_filters, 1);
+    tracing::info!("✓ Filters successfully applied to all OctopiiNodes");
 
     // NOTE: Full partition behavior testing requires transport integration
     // For now, we validate the filter infrastructure is properly set up
@@ -73,16 +76,18 @@ async fn test_isolate_single_node() {
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     // Isolate node 2
-    cluster.isolate_node(2);
+    cluster.isolate_node(2).await;
     tracing::info!("✓ Isolation filters applied to node 2");
 
-    // Verify filters were set up
-    assert!(cluster.nodes[1].send_filters.read().unwrap().len() > 0);
-    tracing::info!("✓ Node 2 has isolation filters");
+    // Verify filters were set up on OctopiiNode
+    let node1_filters = cluster.nodes[1].node.as_ref().unwrap().send_filters.read().await.len();
+    assert!(node1_filters > 0);
+    tracing::info!("✓ Node 2 has {} isolation filters", node1_filters);
 
     // Clear filters (heal partition)
-    cluster.clear_all_filters();
-    assert_eq!(cluster.nodes[1].send_filters.read().unwrap().len(), 0);
+    cluster.clear_all_filters().await;
+    let node1_filters_after = cluster.nodes[1].node.as_ref().unwrap().send_filters.read().await.len();
+    assert_eq!(node1_filters_after, 0);
     tracing::info!("✓ Filters cleared successfully");
 
     cluster.shutdown_all();
@@ -161,14 +166,17 @@ async fn test_multiple_filters() {
     cluster.start_all().await.expect("Failed to start cluster");
 
     // Add multiple filters to the same node
-    cluster.add_send_filter(1, Box::new(DropPacketFilter::new(10)));
-    cluster.add_send_filter(1, Box::new(DelayFilter::new(Duration::from_millis(5))));
+    cluster.add_send_filter(1, Box::new(DropPacketFilter::new(10))).await;
+    cluster.add_send_filter(1, Box::new(DelayFilter::new(Duration::from_millis(5)))).await;
 
-    assert_eq!(cluster.nodes[0].send_filters.read().unwrap().len(), 2);
+    // Verify filters were applied to OctopiiNode
+    let node0_filters = cluster.nodes[0].node.as_ref().unwrap().send_filters.read().await.len();
+    assert_eq!(node0_filters, 2);
     tracing::info!("✓ Multiple filters can be composed");
 
-    cluster.clear_send_filters(1);
-    assert_eq!(cluster.nodes[0].send_filters.read().unwrap().len(), 0);
+    cluster.clear_send_filters(1).await;
+    let node0_filters_after = cluster.nodes[0].node.as_ref().unwrap().send_filters.read().await.len();
+    assert_eq!(node0_filters_after, 0);
     tracing::info!("✓ Filters can be cleared");
 
     cluster.shutdown_all();
