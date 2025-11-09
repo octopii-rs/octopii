@@ -2,6 +2,7 @@
 mod common;
 
 use common::TestCluster;
+use crate::test_infrastructure::alloc_port;
 use std::time::Duration;
 
 #[test]
@@ -21,7 +22,7 @@ fn test_batch_append_correctness() {
 
         tracing::info!("=== Starting batch append correctness test ===");
 
-        let mut cluster = TestCluster::new(vec![1, 2, 3], 8400).await;
+        let mut cluster = TestCluster::new(vec![1, 2, 3], alloc_port()).await;
         cluster.start_all().await.expect("Failed to start cluster");
 
         tokio::time::sleep(Duration::from_millis(500)).await;
@@ -75,7 +76,7 @@ fn test_batch_recovery_performance() {
 
         tracing::info!("=== Starting batch recovery performance test ===");
 
-        let mut cluster = TestCluster::new(vec![1, 2, 3], 8410).await;
+        let mut cluster = TestCluster::new(vec![1, 2, 3], alloc_port()).await;
         cluster.start_all().await.expect("Failed to start cluster");
 
         tokio::time::sleep(Duration::from_millis(500)).await;
@@ -136,7 +137,7 @@ fn test_high_throughput_proposals() {
 
         tracing::info!("=== Starting high throughput proposals test ===");
 
-        let mut cluster = TestCluster::new(vec![1, 2, 3], 8420).await;
+        let mut cluster = TestCluster::new(vec![1, 2, 3], alloc_port()).await;
         cluster.start_all().await.expect("Failed to start cluster");
 
         tokio::time::sleep(Duration::from_millis(500)).await;

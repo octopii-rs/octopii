@@ -1,4 +1,5 @@
 use crate::common::*;
+use crate::test_infrastructure::alloc_port;
 use std::time::Duration;
 
 /// Basic 3-node cluster test - like TiKV's test_put
@@ -19,7 +20,7 @@ async fn test_basic_three_node_cluster() {
         tracing::info!("=== Starting basic 3-node cluster test ===");
 
         // Create cluster with all 3 nodes as initial peers (TiKV run() pattern)
-        let mut cluster = TestCluster::new(vec![1, 2, 3], 8200).await;
+        let mut cluster = TestCluster::new(vec![1, 2, 3], alloc_port()).await;
 
         // Start all nodes - they're all part of the Raft group from the beginning
         cluster.start_all().await.expect("Failed to start cluster");
