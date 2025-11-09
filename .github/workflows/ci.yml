@@ -1,22 +1,15 @@
 name: CI
 
-# Main CI workflow - runs on all pushes and PRs
-# Runs quick smoke tests to catch obvious issues early
-
 on:
   push:
-    branches: [ main, develop, claude/** ]
   pull_request:
-    branches: [ main, develop ]
 
 jobs:
-  quick-check:
-    name: Quick Check
+  test:
     runs-on: self-hosted
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Setup Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -24,47 +17,41 @@ jobs:
           toolchain: stable
           cache: true
 
-      - name: Check formatting
+      - name: Format check
         run: cargo fmt --all -- --check
 
-      - name: Run clippy
+      - name: Clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
 
-      - name: Build all targets
+      - name: Build
         run: cargo build --all-targets
-        env:
-          RUST_BACKTRACE: 1
 
-      - name: Run quick unit tests
+      - name: Unit tests
         run: cargo test --lib --no-fail-fast
-        env:
-          RUST_BACKTRACE: 1
-          RUST_LOG: warn
 
-  integration-smoke-test:
-    name: Integration Smoke Test
-    runs-on: self-hosted
-    needs: quick-check
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Rust
-        uses: actions-rust-lang/setup-rust-toolchain@v1
-        with:
-          toolchain: stable
-          cache: true
-
-      - name: Run basic integration tests
+      - name: Integration tests
         run: |
           cargo test --test transport_test --no-fail-fast
           cargo test --test rpc_test --no-fail-fast
-        env:
-          RUST_BACKTRACE: 1
-          RUST_LOG: warn
-        timeout-minutes: 10
+          cargo test --test chunk_transfer_test --no-fail-fast
+          cargo test --test chunk_error_handling_test --no-fail-fast
+          cargo test --test integration_test --no-fail-fast
 
-      - name: Clean up
+      - name: WAL tests
+        run: cargo test --test wal_test --no-fail-fast
+
+      - name: Raft tests (single-threaded)
+        run: |
+          cargo test --test raft_cluster_test --no-fail-fast -- --test-threads=1
+          cargo test --test raft_durability_test --no-fail-fast -- --test-threads=1
+          cargo test --test raft_comprehensive_test --no-fail-fast -- --test-threads=1
+
+      - name: Stress tests
+        run: |
+          cargo test --test chunk_parallel_stress_test --no-fail-fast
+          cargo test --test chunk_mixed_scenarios_test --no-fail-fast
+          cargo test --test chunk_large_transfer_test --no-fail-fast
+
+      - name: Cleanup
         if: always()
-        run: rm -rf /tmp/octopii_test_* /tmp/walrus_* || true
+        run: rm -rf /tmp/octopii_test_* /tmp/walrus_* /tmp/custom_sm_test_* /tmp/chunk_test_* /tmp/test_walrus_* || true
