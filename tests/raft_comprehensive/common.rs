@@ -5,9 +5,11 @@ use std::time::Duration;
 use tempfile::TempDir;
 
 // Import test infrastructure for network simulation
-use crate::test_infrastructure::{Filter, FilterFactory, PartitionFilterFactory, IsolationFilterFactory};
-use std::sync::{Arc, RwLock};
+use crate::test_infrastructure::{
+    Filter, FilterFactory, IsolationFilterFactory, PartitionFilterFactory,
+};
 use raft::prelude::Message;
+use std::sync::{Arc, RwLock};
 
 /// Adapter to bridge test infrastructure Filter trait with OctopiiNode's MessageFilter trait
 struct FilterAdapter {
@@ -112,14 +114,20 @@ impl TestNode {
             node.shutdown();
         }
         self.node = None;
-        tracing::info!("[RESTART] Step 2: Node {} shutdown complete, waiting for cleanup", self.node_id);
+        tracing::info!(
+            "[RESTART] Step 2: Node {} shutdown complete, waiting for cleanup",
+            self.node_id
+        );
 
         // CRITICAL: Wait for the old node's QUIC endpoint to fully release the port
         // Without this delay, the new node will hang trying to bind to the same port
         // Use longer delay (2s) to ensure cleanup completes, especially after heavy write load
         tokio::time::sleep(std::time::Duration::from_millis(2000)).await;
 
-        tracing::info!("[RESTART] Step 3: Creating new node {} instance", self.node_id);
+        tracing::info!(
+            "[RESTART] Step 3: Creating new node {} instance",
+            self.node_id
+        );
         self.node = Some(OctopiiNode::new(config, runtime).await?);
         tracing::info!("[RESTART] Step 4: Node {} restart complete", self.node_id);
         Ok(())
@@ -195,7 +203,9 @@ impl TestNode {
     /// Issue a read index request for linearizable reads
     pub async fn read_index(&self, request_ctx: Vec<u8>) -> Result<(), String> {
         if let Some(ref node) = self.node {
-            node.read_index(request_ctx).await.map_err(|e| e.to_string())
+            node.read_index(request_ctx)
+                .await
+                .map_err(|e| e.to_string())
         } else {
             Err("Node not running".to_string())
         }
@@ -576,10 +586,7 @@ impl TestCluster {
     /// NOTE: Filter application is pending transport layer integration.
     /// Currently logs partition for testing infrastructure validation.
     pub async fn partition(&mut self, group1: Vec<u64>, group2: Vec<u64>) {
-        tracing::info!(
-            "Creating partition: {:?} <-> {:?}",
-            group1, group2
-        );
+        tracing::info!("Creating partition: {:?} <-> {:?}", group1, group2);
 
         let factory = PartitionFilterFactory::new(group1.clone(), group2.clone());
 
@@ -595,10 +602,7 @@ impl TestCluster {
     ///
     /// The isolated node cannot send or receive any messages.
     pub async fn isolate_node(&mut self, node_id: u64) {
-        tracing::info!(
-            "Isolating node {}",
-            node_id
-        );
+        tracing::info!("Isolating node {}", node_id);
 
         let factory = IsolationFilterFactory::new(node_id);
         let all_nodes: Vec<u64> = self.nodes.iter().map(|n| n.node_id).collect();

@@ -7,7 +7,6 @@
 /// - Split-brain is prevented
 ///
 /// Built on top of TiKV-style filter infrastructure integrated in node.rs
-
 use crate::common::*;
 use crate::test_infrastructure::*;
 use std::time::Duration;
@@ -62,7 +61,10 @@ async fn test_leader_election_after_partition() {
     );
 
     let new_leader = if node2_is_leader { 2 } else { 3 };
-    tracing::info!("✓ Node {} became new leader in majority partition", new_leader);
+    tracing::info!(
+        "✓ Node {} became new leader in majority partition",
+        new_leader
+    );
 
     // Note: Node 1 (isolated) may still think it's leader for a while
     // This is expected - it will eventually step down on election timeout
@@ -108,7 +110,10 @@ async fn test_minority_partition_cannot_elect_leader() {
     cluster.nodes[0].campaign().await.expect("Campaign failed");
     tokio::time::sleep(Duration::from_secs(2)).await;
 
-    assert!(cluster.nodes[0].is_leader().await, "Node 1 should be leader");
+    assert!(
+        cluster.nodes[0].is_leader().await,
+        "Node 1 should be leader"
+    );
     tracing::info!("✓ Node 1 is leader in 5-node cluster");
 
     // Create partition: minority (1,2) vs majority (3,4,5)
@@ -179,7 +184,10 @@ async fn test_partition_healing() {
     // Node 1 becomes leader
     cluster.nodes[0].campaign().await.expect("Campaign failed");
     tokio::time::sleep(Duration::from_secs(2)).await;
-    assert!(cluster.nodes[0].is_leader().await, "Node 1 should be leader");
+    assert!(
+        cluster.nodes[0].is_leader().await,
+        "Node 1 should be leader"
+    );
     tracing::info!("✓ Node 1 is initial leader");
 
     // Create partition: node 1 isolated
@@ -196,7 +204,10 @@ async fn test_partition_healing() {
         "Nodes 2 or 3 should become leader"
     );
     let new_leader_id = if node2_is_leader { 2 } else { 3 };
-    tracing::info!("✓ Node {} became new leader during partition", new_leader_id);
+    tracing::info!(
+        "✓ Node {} became new leader during partition",
+        new_leader_id
+    );
 
     // HEAL the partition - remove all filters
     cluster.clear_all_filters().await;
@@ -285,7 +296,7 @@ async fn test_proposals_fail_in_minority_partition() {
     tracing::info!("Attempting proposal on isolated node 1 (should timeout/fail)...");
     let isolated_proposal = tokio::time::timeout(
         Duration::from_secs(5),
-        cluster.nodes[0].propose(b"SET during_partition should_fail".to_vec())
+        cluster.nodes[0].propose(b"SET during_partition should_fail".to_vec()),
     )
     .await;
 
@@ -344,12 +355,17 @@ async fn test_asymmetric_partition() {
     // Node 1 becomes leader
     cluster.nodes[0].campaign().await.expect("Campaign failed");
     tokio::time::sleep(Duration::from_secs(2)).await;
-    assert!(cluster.nodes[0].is_leader().await, "Node 1 should be leader");
+    assert!(
+        cluster.nodes[0].is_leader().await,
+        "Node 1 should be leader"
+    );
     tracing::info!("✓ Node 1 is leader");
 
     // Create asymmetric partition: node 1 cannot send to nodes 2,3
     // But nodes 2,3 can still send to node 1 (using partition filter only on node 1)
-    cluster.add_send_filter(1, Box::new(PartitionFilter::new(vec![2, 3]))).await;
+    cluster
+        .add_send_filter(1, Box::new(PartitionFilter::new(vec![2, 3])))
+        .await;
     tracing::info!("✓ Asymmetric partition: node 1 can't send to nodes 2,3");
 
     // Wait for nodes 2,3 to detect leader is not responsive

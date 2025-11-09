@@ -1,8 +1,8 @@
 /// Chaos tests: random crashes, failures, and edge cases
 mod common;
 
-use common::TestCluster;
 use crate::test_infrastructure::alloc_port;
+use common::TestCluster;
 use std::time::Duration;
 
 #[test]
@@ -204,7 +204,10 @@ fn test_rolling_restarts() {
             // Find a leader to make the proposal
             for try_idx in 0..3 {
                 if cluster.nodes[try_idx].is_leader().await {
-                    cluster.nodes[try_idx].propose(cmd.as_bytes().to_vec()).await.ok();
+                    cluster.nodes[try_idx]
+                        .propose(cmd.as_bytes().to_vec())
+                        .await
+                        .ok();
                     break;
                 }
             }
@@ -262,7 +265,11 @@ fn test_rapid_crash_recovery_cycles() {
             tracing::info!("Crash/recovery cycle {} on node 3", cycle);
 
             // Use node 1 or 2 (both stable) for leadership checks and proposals
-            let stable_idx = if cluster.nodes[0].is_leader().await { 0 } else { 1 };
+            let stable_idx = if cluster.nodes[0].is_leader().await {
+                0
+            } else {
+                1
+            };
 
             // Ensure we have a leader before making proposals
             if !cluster.nodes[stable_idx].is_leader().await {
@@ -272,7 +279,10 @@ fn test_rapid_crash_recovery_cycles() {
 
             // Make a proposal using stable node
             let cmd = format!("SET cycle{} value{}", cycle, cycle);
-            cluster.nodes[stable_idx].propose(cmd.as_bytes().to_vec()).await.ok();
+            cluster.nodes[stable_idx]
+                .propose(cmd.as_bytes().to_vec())
+                .await
+                .ok();
             tokio::time::sleep(Duration::from_millis(300)).await;
 
             // Crash node 3
@@ -286,7 +296,11 @@ fn test_rapid_crash_recovery_cycles() {
         }
 
         // Use a stable node for final operations
-        let stable_idx = if cluster.nodes[0].is_leader().await { 0 } else { 1 };
+        let stable_idx = if cluster.nodes[0].is_leader().await {
+            0
+        } else {
+            1
+        };
 
         // Ensure we still have a leader before final proposals
         if !cluster.nodes[stable_idx].is_leader().await {
@@ -297,7 +311,10 @@ fn test_rapid_crash_recovery_cycles() {
         // Final proposals using stable node
         for i in 10..=12 {
             let cmd = format!("SET final{} value{}", i, i);
-            cluster.nodes[stable_idx].propose(cmd.as_bytes().to_vec()).await.ok();
+            cluster.nodes[stable_idx]
+                .propose(cmd.as_bytes().to_vec())
+                .await
+                .ok();
         }
 
         tokio::time::sleep(Duration::from_secs(2)).await;

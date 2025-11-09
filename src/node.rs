@@ -388,10 +388,7 @@ impl OctopiiNode {
         // Non-leader nodes cannot commit proposals, which would cause the response
         // channel to hang indefinitely waiting for a commit that will never happen
         if !self.raft.is_leader().await {
-            tracing::warn!(
-                "Rejecting proposal: node {} is not the leader",
-                self.id()
-            );
+            tracing::warn!("Rejecting proposal: node {} is not the leader", self.id());
             return Err(crate::error::OctopiiError::Rpc(
                 "Not leader - proposals must be sent to the current leader".to_string(),
             ));
@@ -1237,7 +1234,13 @@ impl OctopiiNode {
             // CRITICAL: Send persisted_messages() AFTER persistence completes.
             // These messages (like MsgAppend with newly persisted entries) depend on persistence.
             // This unblocks log replication - followers won't hear about new entries until these go out.
-            Self::send_raft_messages(ready.take_persisted_messages(), rpc, peer_addrs, send_filters).await;
+            Self::send_raft_messages(
+                ready.take_persisted_messages(),
+                rpc,
+                peer_addrs,
+                send_filters,
+            )
+            .await;
 
             let mut light_rd = raft.advance(ready).await;
 
@@ -1295,8 +1298,7 @@ impl OctopiiNode {
         mut messages: Vec<Message>,
         rpc: &Arc<RpcHandler>,
         peer_addrs: &Arc<RwLock<HashMap<u64, SocketAddr>>>,
-        #[allow(unused_variables)]
-        send_filters: Option<&Arc<RwLock<Vec<Box<dyn MessageFilter>>>>>,
+        #[allow(unused_variables)] send_filters: Option<&Arc<RwLock<Vec<Box<dyn MessageFilter>>>>>,
     ) {
         if messages.is_empty() {
             return;
@@ -1464,7 +1466,10 @@ impl OctopiiNode {
             return;
         }
 
-        tracing::info!("Initiating graceful shutdown for node {}", self.config.node_id);
+        tracing::info!(
+            "Initiating graceful shutdown for node {}",
+            self.config.node_id
+        );
 
         // Signal all background tasks to stop
         let _ = self.shutdown_tx.send(());

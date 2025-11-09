@@ -5,8 +5,8 @@
 
 use bytes::Bytes;
 use octopii::raft::{KvStateMachine, WalStorage};
-use octopii::StateMachineTrait;
 use octopii::wal::WriteAheadLog;
+use octopii::StateMachineTrait;
 use raft::prelude::*;
 use std::path::PathBuf;
 use std::sync::Arc;

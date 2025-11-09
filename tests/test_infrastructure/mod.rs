@@ -10,16 +10,13 @@
 
 #[macro_use]
 pub mod macros;
-pub mod util;
 pub mod filter;
+pub mod util;
 
 // Re-export commonly used items
-pub use util::{alloc_port, temp_dir, eventually, assert_eq_debug};
 pub use filter::{
-    Filter, FilterFactory, FilterError,
-    DropPacketFilter, DelayFilter, PartitionFilter,
-    PartitionFilterFactory, IsolationFilterFactory,
-    MessageTypeFilter, ConditionalFilter, CountFilter,
-    MessageDuplicationFilter, MessageReorderFilter, ThrottleFilter,
-    Direction,
+    ConditionalFilter, CountFilter, DelayFilter, Direction, DropPacketFilter, Filter, FilterError,
+    FilterFactory, IsolationFilterFactory, MessageDuplicationFilter, MessageReorderFilter,
+    MessageTypeFilter, PartitionFilter, PartitionFilterFactory, ThrottleFilter,
 };
+pub use util::{alloc_port, assert_eq_debug, eventually, temp_dir};

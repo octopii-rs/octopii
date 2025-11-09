@@ -6,11 +6,12 @@
 /// - Slow followers (network throttling)
 ///
 /// Inspired by TiKV's comprehensive network chaos testing.
-
 mod common;
 
+use crate::test_infrastructure::{
+    alloc_port, MessageDuplicationFilter, MessageReorderFilter, ThrottleFilter,
+};
 use common::TestCluster;
-use crate::test_infrastructure::{alloc_port, MessageDuplicationFilter, MessageReorderFilter, ThrottleFilter};
 use std::time::Duration;
 
 #[test]
@@ -39,9 +40,15 @@ fn test_message_duplication_idempotency() {
         tokio::time::sleep(Duration::from_secs(2)).await;
 
         // Add message duplication filter on all nodes (50% duplication rate)
-        cluster.add_send_filter(1, Box::new(MessageDuplicationFilter::new(50))).await;
-        cluster.add_send_filter(2, Box::new(MessageDuplicationFilter::new(50))).await;
-        cluster.add_send_filter(3, Box::new(MessageDuplicationFilter::new(50))).await;
+        cluster
+            .add_send_filter(1, Box::new(MessageDuplicationFilter::new(50)))
+            .await;
+        cluster
+            .add_send_filter(2, Box::new(MessageDuplicationFilter::new(50)))
+            .await;
+        cluster
+            .add_send_filter(3, Box::new(MessageDuplicationFilter::new(50)))
+            .await;
 
         tracing::info!("Duplication filters active - making proposals");
 
@@ -90,9 +97,15 @@ fn test_message_reordering() {
         tokio::time::sleep(Duration::from_secs(2)).await;
 
         // Add message reordering filter on all nodes
-        cluster.add_send_filter(1, Box::new(MessageReorderFilter::new())).await;
-        cluster.add_send_filter(2, Box::new(MessageReorderFilter::new())).await;
-        cluster.add_send_filter(3, Box::new(MessageReorderFilter::new())).await;
+        cluster
+            .add_send_filter(1, Box::new(MessageReorderFilter::new()))
+            .await;
+        cluster
+            .add_send_filter(2, Box::new(MessageReorderFilter::new()))
+            .await;
+        cluster
+            .add_send_filter(3, Box::new(MessageReorderFilter::new()))
+            .await;
 
         tracing::info!("Reordering filters active - making proposals");
 
@@ -143,10 +156,10 @@ fn test_slow_follower_with_throttling() {
 
         // Throttle node 3 to make it a slow follower
         // Allow only 5 messages per 200ms
-        cluster.add_recv_filter(3, Box::new(ThrottleFilter::new(
-            Duration::from_millis(200),
-            5,
-        )));
+        cluster.add_recv_filter(
+            3,
+            Box::new(ThrottleFilter::new(Duration::from_millis(200), 5)),
+        );
 
         tracing::info!("Throttle filter active on node 3 - making many proposals");
 
@@ -198,16 +211,20 @@ fn test_combined_network_chaos() {
 
         // Apply different chaos filters to different nodes
         // Node 1: message duplication
-        cluster.add_send_filter(1, Box::new(MessageDuplicationFilter::new(30))).await;
+        cluster
+            .add_send_filter(1, Box::new(MessageDuplicationFilter::new(30)))
+            .await;
 
         // Node 2: message reordering
-        cluster.add_send_filter(2, Box::new(MessageReorderFilter::new())).await;
+        cluster
+            .add_send_filter(2, Box::new(MessageReorderFilter::new()))
+            .await;
 
         // Node 3: throttling (slow follower)
-        cluster.add_recv_filter(3, Box::new(ThrottleFilter::new(
-            Duration::from_millis(200),
-            10,
-        )));
+        cluster.add_recv_filter(
+            3,
+            Box::new(ThrottleFilter::new(Duration::from_millis(200), 10)),
+        );
 
         tracing::info!("All chaos filters active - testing under maximum adversity");
 

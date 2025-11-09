@@ -135,10 +135,7 @@ impl LinearizabilityChecker {
             match (&op.op_type, &op.result) {
                 (OpType::Write(key, value), Some(OpResult::WriteOk)) => {
                     // Record when this write completed
-                    state.insert(
-                        key.clone(),
-                        (value.clone(), op.complete_time.unwrap()),
-                    );
+                    state.insert(key.clone(), (value.clone(), op.complete_time.unwrap()));
                 }
                 (OpType::Read(key), Some(OpResult::ReadOk(read_value))) => {
                     // Verify the read is consistent
@@ -186,23 +183,18 @@ impl LinearizabilityChecker {
                 let op1 = operations[i];
                 let op2 = operations[j];
 
-                if let (Some(end1), Some(start2)) =
-                    (op1.complete_time, Some(op2.invoke_time))
-                {
+                if let (Some(end1), Some(start2)) = (op1.complete_time, Some(op2.invoke_time)) {
                     // If op1 completed before op2 started, they have happens-before
                     if end1 < start2 {
                         // Verify op1's effects are visible to op2
                         // This is a simplified check - full verification needs more sophisticated analysis
-                        if let (
-                            OpType::Write(key1, val1),
-                            OpType::Read(key2),
-                        ) = (&op1.op_type, &op2.op_type)
+                        if let (OpType::Write(key1, val1), OpType::Read(key2)) =
+                            (&op1.op_type, &op2.op_type)
                         {
                             if key1 == key2 {
                                 // op2 (read) started after op1 (write) completed
                                 // So op2 MUST see op1's value or a later value
-                                if let Some(OpResult::ReadOk(Some(read_val))) = &op2.result
-                                {
+                                if let Some(OpResult::ReadOk(Some(read_val))) = &op2.result {
                                     // For now, we just verify it saw *something*
                                     // A full checker would verify it saw this write or a later one
                                     tracing::trace!(

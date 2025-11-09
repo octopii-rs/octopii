@@ -10,7 +10,6 @@
 /// - RESET: Resets the counter to zero
 ///
 /// Run with: cargo run --example custom_state_machine
-
 use bytes::Bytes;
 use octopii::StateMachineTrait;
 use std::sync::RwLock;
@@ -30,8 +29,8 @@ impl CounterStateMachine {
 
 impl StateMachineTrait for CounterStateMachine {
     fn apply(&self, command: &[u8]) -> Result<Bytes, String> {
-        let cmd_str = String::from_utf8(command.to_vec())
-            .map_err(|e| format!("Invalid UTF-8: {}", e))?;
+        let cmd_str =
+            String::from_utf8(command.to_vec()).map_err(|e| format!("Invalid UTF-8: {}", e))?;
 
         let parts: Vec<&str> = cmd_str.split_whitespace().collect();
 
@@ -134,7 +133,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Test restore
     counter.apply(b"RESET")?;
-    println!("After RESET: {}", String::from_utf8_lossy(&counter.apply(b"GET")?));
+    println!(
+        "After RESET: {}",
+        String::from_utf8_lossy(&counter.apply(b"GET")?)
+    );
 
     counter.restore(&snapshot)?;
     println!(

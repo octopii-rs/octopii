@@ -212,10 +212,7 @@ impl WalStorage {
         }
 
         if entry_count > 0 {
-            tracing::debug!(
-                "Recovered hard_state from {} entries",
-                entry_count
-            );
+            tracing::debug!("Recovered hard_state from {} entries", entry_count);
         }
 
         Ok(latest.unwrap_or_default())
@@ -444,7 +441,10 @@ impl WalStorage {
             Ok::<(), crate::error::OctopiiError>(())
         })?;
 
-        tracing::info!("✓ Appended {} entries to WAL (both main and recovery topics)", entries.len());
+        tracing::info!(
+            "✓ Appended {} entries to WAL (both main and recovery topics)",
+            entries.len()
+        );
 
         // Update in-memory cache
         let mut cache = self.entries.write().unwrap();
