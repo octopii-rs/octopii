@@ -12,16 +12,16 @@ const STATE_MACHINE_COMPACTION_THRESHOLD: usize = 5000;
 // Serializable types for state machine data
 #[derive(Archive, Deserialize, Serialize, Debug, Clone)]
 
-struct StateMachineEntry {
-    key: String,
-    value: Vec<u8>,
+pub struct StateMachineEntry {
+    pub key: String,
+    pub value: Vec<u8>,
 }
 
 // Serializable snapshot type
 #[derive(Archive, Deserialize, Serialize, Debug, Clone)]
 
-struct StateMachineSnapshot {
-    entries: Vec<(String, Vec<u8>)>,
+pub struct StateMachineSnapshot {
+    pub entries: Vec<(String, Vec<u8>)>,
 }
 
 /// Simple key-value state machine for demonstration (NOW DURABLE!)
