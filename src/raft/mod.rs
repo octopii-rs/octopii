@@ -31,46 +31,57 @@ impl RaftNode {
         storage: WalStorage,
         is_leader: bool,
     ) -> Result<Self> {
-        // If peers list provided, bootstrap ALL nodes with all peers (like TiKV run())
-        // Otherwise use ConfChange pattern (leader=self, followers=empty)
-        if !peers.is_empty() {
-            // TiKV run() pattern: ALL nodes start with ALL peers as voters
-            let mut all_voters = peers.clone();
-            all_voters.push(node_id);
-            all_voters.sort_unstable();
-            all_voters.dedup();
+        // Check if storage is already initialized (e.g., on restart)
+        let is_initialized = storage.initial_state()?.initialized();
 
-            let mut snapshot = Snapshot::default();
-            snapshot.mut_metadata().index = 1;
-            snapshot.mut_metadata().term = 1;
-            snapshot.mut_metadata().mut_conf_state().voters = all_voters.clone();
-
-            storage.apply_snapshot(snapshot)?;
-
+        if is_initialized {
             tracing::info!(
-                "Bootstrapped Raft node {} with voters {:?} (multi-node bootstrap)",
-                node_id,
-                all_voters
-            );
-        } else if is_leader {
-            // ConfChange pattern: Leader initializes with ONLY itself as voter
-            let mut snapshot = Snapshot::default();
-            snapshot.mut_metadata().index = 1;
-            snapshot.mut_metadata().term = 1;
-            snapshot.mut_metadata().mut_conf_state().voters = vec![node_id];
-
-            storage.apply_snapshot(snapshot)?;
-
-            tracing::info!(
-                "Bootstrapped Raft LEADER node {} (will add peers via ConfChange)",
+                "Raft node {} restarting with existing state (storage already initialized)",
                 node_id
             );
         } else {
-            // Followers start with minimal empty state for ConfChange pattern
-            tracing::info!(
-                "Created Raft FOLLOWER node {} (will initialize from leader)",
-                node_id
-            );
+            // Fresh node - bootstrap with initial snapshot
+            // If peers list provided, bootstrap ALL nodes with all peers (like TiKV run())
+            // Otherwise use ConfChange pattern (leader=self, followers=empty)
+            if !peers.is_empty() {
+                // TiKV run() pattern: ALL nodes start with ALL peers as voters
+                let mut all_voters = peers.clone();
+                all_voters.push(node_id);
+                all_voters.sort_unstable();
+                all_voters.dedup();
+
+                let mut snapshot = Snapshot::default();
+                snapshot.mut_metadata().index = 1;
+                snapshot.mut_metadata().term = 1;
+                snapshot.mut_metadata().mut_conf_state().voters = all_voters.clone();
+
+                storage.apply_snapshot(snapshot)?;
+
+                tracing::info!(
+                    "Bootstrapped Raft node {} with voters {:?} (multi-node bootstrap)",
+                    node_id,
+                    all_voters
+                );
+            } else if is_leader {
+                // ConfChange pattern: Leader initializes with ONLY itself as voter
+                let mut snapshot = Snapshot::default();
+                snapshot.mut_metadata().index = 1;
+                snapshot.mut_metadata().term = 1;
+                snapshot.mut_metadata().mut_conf_state().voters = vec![node_id];
+
+                storage.apply_snapshot(snapshot)?;
+
+                tracing::info!(
+                    "Bootstrapped Raft LEADER node {} (will add peers via ConfChange)",
+                    node_id
+                );
+            } else {
+                // Followers start with minimal empty state for ConfChange pattern
+                tracing::info!(
+                    "Created Raft FOLLOWER node {} (will initialize from leader)",
+                    node_id
+                );
+            }
         }
 
         let config = RaftConfig {
