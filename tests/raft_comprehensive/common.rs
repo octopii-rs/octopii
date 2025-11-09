@@ -105,19 +105,23 @@ impl TestNode {
         // This simulates a node restarting and recovering from persistent state
         let config = self.config.clone();
 
+        tracing::info!("[RESTART] Step 1: Shutting down node {}", self.node_id);
         // Use shared runtime from current context (no nesting issues!)
         let runtime = OctopiiRuntime::from_handle(tokio::runtime::Handle::current());
         if let Some(node) = self.node.as_ref() {
             node.shutdown();
         }
         self.node = None;
+        tracing::info!("[RESTART] Step 2: Node {} shutdown complete, waiting for cleanup", self.node_id);
 
         // CRITICAL: Wait for the old node's QUIC endpoint to fully release the port
         // Without this delay, the new node will hang trying to bind to the same port
         // Use longer delay (2s) to ensure cleanup completes, especially after heavy write load
         tokio::time::sleep(std::time::Duration::from_millis(2000)).await;
 
+        tracing::info!("[RESTART] Step 3: Creating new node {} instance", self.node_id);
         self.node = Some(OctopiiNode::new(config, runtime).await?);
+        tracing::info!("[RESTART] Step 4: Node {} restart complete", self.node_id);
         Ok(())
     }
 
