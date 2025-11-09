@@ -177,12 +177,17 @@ impl RaftNode {
 
     /// Persist entries from Ready to storage
     pub async fn persist_entries(&self, entries: &[Entry]) {
-        let node = self.raw_node.lock().await;
+        // Clone entries to avoid holding lock during WAL write
+        let entries_vec: Vec<Entry> = entries.to_vec();
+
+        let store = {
+            let node = self.raw_node.lock().await;
+            node.store().clone()
+        }; // Release lock before async WAL operations
 
         // Actually persist to WAL (not just in-memory!)
-        // Keep node locked during persistence - Walrus batching makes this fast enough
-        if let Err(e) = node.store().append_entries(entries).await {
-            tracing::error!("Failed to persist {} entries to WAL: {}", entries.len(), e);
+        if let Err(e) = store.append_entries(&entries_vec).await {
+            tracing::error!("Failed to persist {} entries to WAL: {}", entries_vec.len(), e);
         }
     }
 
