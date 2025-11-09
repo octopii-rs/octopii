@@ -375,22 +375,15 @@ async fn test_custom_state_machine_replication() {
 /// - Crashed nodes can restore from snapshots
 /// - State is preserved across restarts
 ///
-/// NOTE: Currently failing due to Octopii WAL recovery bug.
-///
-/// Investigation history:
+/// Bug Fix History:
 /// 1. FIXED: Zombie task bug - old network acceptor tasks interfered with restarts
-///    - Solution: Added graceful shutdown with JoinHandle tracking
+///    - Solution: Added graceful shutdown with JoinHandle tracking (src/node.rs)
 ///    - Tasks now properly exit before restart
 ///
-/// 2. CURRENT BUG: WAL recovery incomplete after crash
-///    - Node crashes with 20 committed entries (indices 1-20)
-///    - After restart, only recovers to index 1
-///    - Leader asks to commit index 22 (new proposals 21-25)
-///    - Raft panics: "to_commit 22 is out of range [last_index 1]"
-///    - Root cause: WalStorage.initial_state() not recovering full log
-///
-/// This is a real bug in Octopii's WAL recovery, not a custom state machine issue.
-#[ignore = "WAL recovery incomplete after crash - Octopii bug, not custom SM issue"]
+/// 2. FIXED: WAL recovery bug - incomplete log recovery after crash
+///    - Problem: Using checkpoint=true persisted read cursor, causing restarts to skip entries
+///    - Solution: Changed to checkpoint=false in all WalStorage recovery methods (src/raft/storage.rs)
+///    - Now correctly recovers all log entries on every restart
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_custom_state_machine_snapshot_restore() {
     tracing_subscriber::fmt()
