@@ -541,6 +541,179 @@ impl WalStorage {
 
         Ok(())
     }
+
+    /// Create snapshot by reading from Walrus WITHOUT checkpointing
+    ///
+    /// This allows creating snapshots from durable storage without consuming entries.
+    /// The original data remains in Walrus for future reads. This is useful for:
+    /// - Creating snapshots without keeping full state in memory
+    /// - Supporting larger-than-memory state machines
+    /// - More control over when to reclaim space (checkpoint separately)
+    ///
+    /// Uses Walrus batch_read with checkpoint=false to peek at data without consuming it.
+    pub fn create_snapshot_from_walrus(
+        &self,
+        _applied_index: u64,
+    ) -> crate::error::Result<Vec<u8>> {
+        let walrus = &self.wal.walrus;
+
+        // First, try to read latest state machine snapshot (more efficient)
+        let mut state = std::collections::HashMap::new();
+        let mut snapshot_loaded = false;
+
+        tracing::info!("Creating snapshot from Walrus (without checkpointing)");
+
+        // Step 1: Read latest state machine snapshot WITHOUT checkpointing
+        loop {
+            match walrus.read_next("state_machine_snapshot", false) {
+                Ok(Some(entry)) => {
+                    // Deserialize snapshot
+                    let archived = unsafe {
+                        rkyv::archived_root::<crate::raft::state_machine::StateMachineSnapshot>(
+                            &entry.data,
+                        )
+                    };
+                    let snapshot: crate::raft::state_machine::StateMachineSnapshot = archived
+                        .deserialize(&mut rkyv::Infallible)
+                        .map_err(|e| {
+                            crate::error::OctopiiError::Wal(format!(
+                                "Failed to deserialize state machine snapshot: {:?}",
+                                e
+                            ))
+                        })?;
+
+                    // Load snapshot into state
+                    state.clear();
+                    for (key, value) in snapshot.entries {
+                        state.insert(key, value);
+                    }
+                    snapshot_loaded = true;
+                    tracing::info!("✓ Loaded state machine snapshot: {} entries", state.len());
+                }
+                Ok(None) => break,
+                Err(e) => {
+                    tracing::warn!("Error reading state machine snapshot: {}", e);
+                    break;
+                }
+            }
+        }
+
+        // Step 2: Read state machine operations since snapshot WITHOUT checkpointing
+        let mut total_ops = 0;
+        const MAX_BATCH_BYTES: usize = 10_000_000; // 10MB per batch
+
+        loop {
+            match walrus.batch_read_for_topic("state_machine", MAX_BATCH_BYTES, false) {
+                Ok(batch) if batch.is_empty() => break,
+                Ok(batch) => {
+                    for entry_data in batch {
+                        total_ops += 1;
+
+                        // Zero-copy deserialize with rkyv
+                        let archived = unsafe {
+                            rkyv::archived_root::<crate::raft::state_machine::StateMachineEntry>(
+                                &entry_data.data,
+                            )
+                        };
+
+                        let sm_entry: crate::raft::state_machine::StateMachineEntry = archived
+                            .deserialize(&mut rkyv::Infallible)
+                            .map_err(|e| {
+                                crate::error::OctopiiError::Wal(format!(
+                                    "Failed to deserialize state machine entry: {:?}",
+                                    e
+                                ))
+                            })?;
+
+                        if sm_entry.value.is_empty() {
+                            // Tombstone - delete the key
+                            state.remove(&sm_entry.key);
+                        } else {
+                            // Normal entry - insert/update
+                            state.insert(sm_entry.key, sm_entry.value);
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("Batch read error: {}", e);
+                    break;
+                }
+            }
+        }
+
+        if snapshot_loaded {
+            tracing::info!(
+                "Created snapshot from Walrus: snapshot + {} operations = {} keys (without checkpointing)",
+                total_ops,
+                state.len()
+            );
+        } else {
+            tracing::info!(
+                "Created snapshot from Walrus: {} keys from {} operations (without checkpointing)",
+                state.len(),
+                total_ops
+            );
+        }
+
+        // Serialize for Raft snapshot
+        let snapshot_vec: Vec<(String, Vec<u8>)> = state.into_iter().collect();
+        let bytes = rkyv::to_bytes::<_, 4096>(&snapshot_vec).map_err(|e| {
+            crate::error::OctopiiError::Wal(format!("Failed to serialize snapshot: {:?}", e))
+        })?;
+
+        Ok(bytes.to_vec())
+    }
+
+    /// Checkpoint old entries after snapshot created
+    ///
+    /// This enables Walrus space reclamation by consuming (checkpointing) old entries
+    /// that have been included in a snapshot. Call this AFTER verifying the snapshot
+    /// is successfully created and persisted.
+    ///
+    /// # Arguments
+    /// * `topic` - The Walrus topic to checkpoint (e.g., "raft_log", "state_machine")
+    /// * `up_to_count` - Maximum number of entries to checkpoint
+    pub fn checkpoint_old_entries(
+        &self,
+        topic: &str,
+        up_to_count: usize,
+    ) -> crate::error::Result<()> {
+        let walrus = &self.wal.walrus;
+        let mut checkpointed = 0;
+
+        tracing::info!(
+            "Checkpointing old entries in topic '{}' (up to {})",
+            topic,
+            up_to_count
+        );
+
+        // Read and checkpoint old entries in batches
+        const MAX_BATCH_BYTES: usize = 10_000_000; // 10MB per batch
+
+        while checkpointed < up_to_count {
+            match walrus.batch_read_for_topic(topic, MAX_BATCH_BYTES, true) {
+                Ok(batch) if batch.is_empty() => break,
+                Ok(batch) => {
+                    checkpointed += batch.len();
+                    if checkpointed >= up_to_count {
+                        break;
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("Checkpoint batch read error: {}", e);
+                    break;
+                }
+            }
+        }
+
+        tracing::info!(
+            "✓ Checkpointed {} entries in topic '{}' (Walrus can reclaim space)",
+            checkpointed,
+            topic
+        );
+
+        Ok(())
+    }
 }
 
 impl Storage for WalStorage {
