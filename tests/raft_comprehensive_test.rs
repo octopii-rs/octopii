@@ -12,6 +12,11 @@
 /// - Batch operations for performance
 /// - Short-duration stress tests
 
+// Test infrastructure from TiKV
+#[path = "test_infrastructure/mod.rs"]
+#[macro_use]
+mod test_infrastructure;
+
 #[path = "raft_comprehensive/common.rs"]
 mod common;
 
@@ -48,3 +53,6 @@ mod batch_operation_tests;
 
 #[path = "raft_comprehensive/short_duration_stress_tests.rs"]
 mod short_duration_stress_tests;
+
+#[path = "raft_comprehensive/partition_tests.rs"]
+mod partition_tests;
