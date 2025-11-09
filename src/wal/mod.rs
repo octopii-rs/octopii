@@ -61,6 +61,18 @@ impl WriteAheadLog {
         std::fs::create_dir_all(&full_wal_dir)
             .map_err(|e| OctopiiError::Wal(format!("Failed to create WAL directory: {}", e)))?;
 
+        // CRITICAL: Delete the read_offset_idx file to ensure recovery starts from beginning
+        // Problem: Walrus persists read cursor positions to "read_offset_idx_index.db" file
+        //          On restart, it resumes from saved position instead of re-reading all entries
+        //          This causes incomplete Raft log recovery (e.g., only 1 entry instead of 20)
+        // Solution: Delete this file before creating Walrus instance
+        //          This forces all recovery reads to start from offset 0
+        let read_offset_idx_path = full_wal_dir.join("read_offset_idx_index.db");
+        if read_offset_idx_path.exists() {
+            let _ = std::fs::remove_file(&read_offset_idx_path);
+            tracing::debug!("Deleted read_offset_idx_index.db to ensure full WAL recovery");
+        }
+
         let full_path_str = full_wal_dir.to_string_lossy().to_string();
 
         // Create Walrus instance using block_in_place (enforces hard thread cap)

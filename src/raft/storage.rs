@@ -176,8 +176,9 @@ impl WalStorage {
         let mut latest: Option<HardState> = None;
         let mut entry_count = 0;
 
-        // Read all entries WITH checkpointing (checkpoint=true advances cursor for next read)
-        // Since we only care about LATEST hard state, older entries are automatically reclaimed
+        // Use checkpoint=true to advance cursor and enable Walrus space reclamation
+        // Note: read_offset_idx file is deleted before Walrus creation (see wal/mod.rs)
+        // This ensures recovery always starts from offset 0
         loop {
             match walrus.read_next(TOPIC_HARD_STATE, true) {
                 Ok(Some(entry)) => {
@@ -200,7 +201,7 @@ impl WalStorage {
 
         if entry_count > 0 {
             tracing::debug!(
-                "Recovered hard_state from {} entries (older entries reclaimable)",
+                "Recovered hard_state from {} entries",
                 entry_count
             );
         }
@@ -213,7 +214,7 @@ impl WalStorage {
         let mut latest: Option<ConfState> = None;
         let mut entry_count = 0;
 
-        // Read all entries WITH checkpointing
+        // Use checkpoint=true to advance cursor and enable Walrus space reclamation
         loop {
             match walrus.read_next(TOPIC_CONF_STATE, true) {
                 Ok(Some(entry)) => {
@@ -245,7 +246,7 @@ impl WalStorage {
         let mut latest: Option<Snapshot> = None;
         let mut entry_count = 0;
 
-        // Read all entries WITH checkpointing
+        // Use checkpoint=true to advance cursor and enable Walrus space reclamation
         loop {
             match walrus.read_next(TOPIC_SNAPSHOT, true) {
                 Ok(Some(entry)) => {
@@ -304,6 +305,9 @@ impl WalStorage {
         // Use batch reads for 10-50x faster recovery
         const MAX_BATCH_BYTES: usize = 10_000_000; // 10MB per batch
 
+        // Use checkpoint=true to advance cursor and enable Walrus space reclamation
+        // Note: read_offset_idx file is deleted before Walrus creation (see wal/mod.rs)
+        // This ensures recovery always starts from offset 0 despite checkpointing
         loop {
             match walrus.batch_read_for_topic(TOPIC_LOG, MAX_BATCH_BYTES, true) {
                 Ok(batch) if batch.is_empty() => break, // No more entries
@@ -321,8 +325,7 @@ impl WalStorage {
                                     entries.push(raft_entry);
                                 } else {
                                     // DISCARD entries before snapshot - already included in snapshot
-                                    // But we STILL checkpointed them (checkpoint=true above)
-                                    // This allows Walrus to reclaim their blocks!
+                                    // We still checkpoint them (checkpoint=true above) to enable Walrus space reclamation
                                     compacted_entries += 1;
                                     tracing::trace!(
                                         "Skipping compacted entry at index {}",
