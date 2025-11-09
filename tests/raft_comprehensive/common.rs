@@ -157,6 +157,32 @@ impl TestNode {
         }
     }
 
+    /// Transfer leadership to another node
+    pub async fn transfer_leader(&self, target_id: u64) -> Result<(), String> {
+        if let Some(ref node) = self.node {
+            node.transfer_leader(target_id)
+                .await
+                .map_err(|e| e.to_string())
+        } else {
+            Err("Node not running".to_string())
+        }
+    }
+
+    /// Add a peer to the cluster
+    pub async fn add_peer(
+        &self,
+        peer_id: u64,
+        addr: std::net::SocketAddr,
+    ) -> Result<raft::prelude::ConfState, String> {
+        if let Some(ref node) = self.node {
+            node.add_peer(peer_id, addr)
+                .await
+                .map_err(|e| e.to_string())
+        } else {
+            Err("Node not running".to_string())
+        }
+    }
+
     /// Query the state machine
     pub async fn query(&self, command: &[u8]) -> Result<bytes::Bytes, String> {
         if let Some(ref node) = self.node {
