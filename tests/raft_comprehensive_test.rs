@@ -59,3 +59,6 @@ mod partition_tests;
 
 #[path = "raft_comprehensive/real_partition_tests.rs"]
 mod real_partition_tests;
+
+#[path = "raft_comprehensive/message_chaos_tests.rs"]
+mod message_chaos_tests;
