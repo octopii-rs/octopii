@@ -1,0 +1,70 @@
+name: CI
+
+# Main CI workflow - runs on all pushes and PRs
+# Runs quick smoke tests to catch obvious issues early
+
+on:
+  push:
+    branches: [ main, develop, claude/** ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  quick-check:
+    name: Quick Check
+    runs-on: self-hosted
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          cache: true
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Build all targets
+        run: cargo build --all-targets
+        env:
+          RUST_BACKTRACE: 1
+
+      - name: Run quick unit tests
+        run: cargo test --lib --no-fail-fast
+        env:
+          RUST_BACKTRACE: 1
+          RUST_LOG: warn
+
+  integration-smoke-test:
+    name: Integration Smoke Test
+    runs-on: self-hosted
+    needs: quick-check
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          cache: true
+
+      - name: Run basic integration tests
+        run: |
+          cargo test --test transport_test --no-fail-fast
+          cargo test --test rpc_test --no-fail-fast
+        env:
+          RUST_BACKTRACE: 1
+          RUST_LOG: warn
+        timeout-minutes: 10
+
+      - name: Clean up
+        if: always()
+        run: rm -rf /tmp/octopii_test_* /tmp/walrus_* || true

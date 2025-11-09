@@ -1,0 +1,39 @@
+name: Raft Cluster Tests
+
+on:
+  push:
+    branches: [ main, develop, claude/** ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  raft-cluster-tests:
+    name: Raft Cluster Tests
+    runs-on: self-hosted
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          cache: true
+
+      - name: Build Raft tests
+        run: cargo build --test raft_cluster_test
+
+      - name: Run Raft cluster tests (single-threaded)
+        run: cargo test --test raft_cluster_test --no-fail-fast -- --test-threads=1
+        env:
+          RUST_BACKTRACE: 1
+          RUST_LOG: info
+        timeout-minutes: 30
+
+      - name: Clean up test artifacts
+        if: always()
+        run: |
+          # Clean up any leftover test data directories
+          rm -rf /tmp/octopii_test_* || true
+          rm -rf /tmp/walrus_* || true

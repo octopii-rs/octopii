@@ -1,0 +1,58 @@
+name: Stress Tests
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  # Allow manual triggering for stress tests
+  workflow_dispatch:
+
+jobs:
+  stress-tests:
+    name: Stress and Performance Tests
+    runs-on: self-hosted
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          cache: true
+
+      - name: Build stress tests
+        run: |
+          cargo build --test chunk_parallel_stress_test
+          cargo build --test chunk_mixed_scenarios_test
+          cargo build --test chunk_large_transfer_test
+
+      - name: Run chunk parallel stress tests
+        run: cargo test --test chunk_parallel_stress_test --no-fail-fast
+        env:
+          RUST_BACKTRACE: 1
+          RUST_LOG: info
+        timeout-minutes: 30
+
+      - name: Run chunk mixed scenarios tests
+        run: cargo test --test chunk_mixed_scenarios_test --no-fail-fast
+        env:
+          RUST_BACKTRACE: 1
+          RUST_LOG: info
+        timeout-minutes: 30
+
+      - name: Run chunk large transfer tests
+        run: cargo test --test chunk_large_transfer_test --no-fail-fast
+        env:
+          RUST_BACKTRACE: 1
+          RUST_LOG: info
+        timeout-minutes: 30
+
+      - name: Clean up test artifacts
+        if: always()
+        run: |
+          # Clean up any large test files
+          rm -rf /tmp/octopii_test_* || true
+          rm -rf /tmp/chunk_test_* || true
