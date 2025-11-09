@@ -396,16 +396,25 @@ impl WalStorage {
             snapshot.get_metadata().term
         );
 
-        // Update in-memory state
+        // Update conf state with proper persistence
+        self.set_conf_state(snapshot.get_metadata().get_conf_state().clone());
+
+        // Update hard state with proper persistence
+        // Preserve the vote field, update term and commit from snapshot
+        let current_vote = {
+            let hs = self.hard_state.read().unwrap();
+            hs.vote
+        };
+
+        let mut new_hs = HardState::default();
+        new_hs.term = snapshot.get_metadata().term;
+        new_hs.vote = current_vote;
+        new_hs.commit = snapshot.get_metadata().index;
+        self.set_hard_state(new_hs);
+
+        // Update in-memory snapshot state (do this last to avoid holding locks)
         let mut snap = self.snapshot.write().unwrap();
         *snap = snapshot.clone();
-
-        let mut conf = self.conf_state.write().unwrap();
-        *conf = snapshot.get_metadata().get_conf_state().clone();
-
-        let mut hs = self.hard_state.write().unwrap();
-        hs.term = snapshot.get_metadata().term;
-        hs.commit = snapshot.get_metadata().index;
 
         Ok(())
     }
