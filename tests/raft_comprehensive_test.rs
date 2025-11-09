@@ -56,3 +56,6 @@ mod short_duration_stress_tests;
 
 #[path = "raft_comprehensive/partition_tests.rs"]
 mod partition_tests;
+
+#[path = "raft_comprehensive/real_partition_tests.rs"]
+mod real_partition_tests;
