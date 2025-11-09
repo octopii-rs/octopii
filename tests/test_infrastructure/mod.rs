@@ -20,5 +20,6 @@ pub use filter::{
     DropPacketFilter, DelayFilter, PartitionFilter,
     PartitionFilterFactory, IsolationFilterFactory,
     MessageTypeFilter, ConditionalFilter, CountFilter,
+    MessageDuplicationFilter, MessageReorderFilter, ThrottleFilter,
     Direction,
 };
