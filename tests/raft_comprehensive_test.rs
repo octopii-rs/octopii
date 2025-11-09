@@ -65,3 +65,6 @@ mod message_chaos_tests;
 
 #[path = "raft_comprehensive/production_features_tests.rs"]
 mod production_features_tests;
+
+#[path = "raft_comprehensive/read_index_tests.rs"]
+mod read_index_tests;
