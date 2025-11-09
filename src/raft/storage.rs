@@ -9,7 +9,9 @@ use std::sync::{Arc, RwLock as StdRwLock};
 const TOPIC_LOG: &str = "raft_log";
 const TOPIC_LOG_RECOVERY: &str = "raft_log_recovery"; // Recovery-only topic (fresh cursor on restart)
 const TOPIC_HARD_STATE: &str = "raft_hard_state";
+const TOPIC_HARD_STATE_RECOVERY: &str = "raft_hard_state_recovery"; // Recovery-only topic
 const TOPIC_CONF_STATE: &str = "raft_conf_state";
+const TOPIC_CONF_STATE_RECOVERY: &str = "raft_conf_state_recovery"; // Recovery-only topic
 const TOPIC_SNAPSHOT: &str = "raft_snapshot";
 
 // Log compaction threshold: create snapshot after this many entries
@@ -189,30 +191,33 @@ impl WalStorage {
         let mut latest: Option<HardState> = None;
         let mut entry_count = 0;
 
-        // Use checkpoint=true to advance cursor and enable Walrus space reclamation
-        // For hard_state, we want the LATEST entry, so cursor persistence is fine
-        loop {
-            match walrus.read_next(TOPIC_HARD_STATE, true) {
-                Ok(Some(entry)) => {
+        // Read ALL hard_state entries in a single batch read with checkpoint=false
+        // This reads from the beginning without persisting cursor advancement
+        // Since hard_state entries are small, they should all fit in one batch
+        const MAX_BATCH_BYTES: usize = 10_000_000; // 10MB - plenty for all hard states
+
+        match walrus.batch_read_for_topic(TOPIC_HARD_STATE_RECOVERY, MAX_BATCH_BYTES, false) {
+            Ok(batch) => {
+                for entry in batch {
                     entry_count += 1;
-                    // Zero-copy deserialize with rkyv
                     let archived = unsafe { rkyv::archived_root::<HardStateData>(&entry.data) };
                     let data: HardStateData = match archived.deserialize(&mut rkyv::Infallible) {
                         Ok(d) => d,
                         Err(_) => {
                             tracing::warn!("Failed to deserialize hard state entry");
-                            break;
+                            continue;
                         }
                     };
                     latest = Some((&data).into());
                 }
-                Ok(None) => break,
-                Err(_) => break,
+            }
+            Err(e) => {
+                tracing::warn!("Error reading hard_state batch: {}", e);
             }
         }
 
         if entry_count > 0 {
-            tracing::debug!("Recovered hard_state from {} entries", entry_count);
+            tracing::debug!("Recovered hard_state from {} entries (latest used)", entry_count);
         }
 
         Ok(latest.unwrap_or_default())
@@ -223,29 +228,31 @@ impl WalStorage {
         let mut latest: Option<ConfState> = None;
         let mut entry_count = 0;
 
-        // Use checkpoint=true to advance cursor and enable Walrus space reclamation
-        // For conf_state, we want the LATEST entry, so cursor persistence is fine
-        loop {
-            match walrus.read_next(TOPIC_CONF_STATE, true) {
-                Ok(Some(entry)) => {
+        // Read ALL conf_state entries in a single batch read with checkpoint=false
+        const MAX_BATCH_BYTES: usize = 10_000_000; // 10MB - plenty for all conf states
+
+        match walrus.batch_read_for_topic(TOPIC_CONF_STATE_RECOVERY, MAX_BATCH_BYTES, false) {
+            Ok(batch) => {
+                for entry in batch {
                     entry_count += 1;
                     let archived = unsafe { rkyv::archived_root::<ConfStateData>(&entry.data) };
                     let data: ConfStateData = match archived.deserialize(&mut rkyv::Infallible) {
                         Ok(d) => d,
                         Err(_) => {
                             tracing::warn!("Failed to deserialize conf state entry");
-                            break;
+                            continue;
                         }
                     };
                     latest = Some((&data).into());
                 }
-                Ok(None) => break,
-                Err(_) => break,
+            }
+            Err(e) => {
+                tracing::warn!("Error reading conf_state batch: {}", e);
             }
         }
 
         if entry_count > 0 {
-            tracing::debug!("Recovered conf_state from {} entries", entry_count);
+            tracing::debug!("Recovered conf_state from {} entries (latest used)", entry_count);
         }
 
         Ok(latest.unwrap_or_default())
@@ -478,9 +485,14 @@ impl WalStorage {
         let data = HardStateData::from(&hs);
         let bytes = rkyv::to_bytes::<_, 256>(&data).expect("Failed to serialize hard state");
 
-        // Persist to Walrus (sync for simplicity in ready handler)
-        tokio::task::block_in_place(|| self.wal.walrus.append_for_topic(TOPIC_HARD_STATE, &bytes))
-            .expect("Failed to persist hard state");
+        // Persist to BOTH regular and recovery topics
+        // Regular topic can be used for optimization, recovery topic ensures correct recovery
+        tokio::task::block_in_place(|| {
+            self.wal.walrus.append_for_topic(TOPIC_HARD_STATE, &bytes)?;
+            self.wal.walrus.append_for_topic(TOPIC_HARD_STATE_RECOVERY, &bytes)?;
+            Ok::<(), crate::error::OctopiiError>(())
+        })
+        .expect("Failed to persist hard state");
 
         tracing::debug!(
             "✓ Persisted hard state: term={}, vote={}, commit={}",
@@ -500,9 +512,14 @@ impl WalStorage {
         let data = ConfStateData::from(&cs);
         let bytes = rkyv::to_bytes::<_, 256>(&data).expect("Failed to serialize conf state");
 
-        // Persist to Walrus
-        tokio::task::block_in_place(|| self.wal.walrus.append_for_topic(TOPIC_CONF_STATE, &bytes))
-            .expect("Failed to persist conf state");
+        // Persist to BOTH regular and recovery topics
+        // Regular topic can be used for optimization, recovery topic ensures correct recovery
+        tokio::task::block_in_place(|| {
+            self.wal.walrus.append_for_topic(TOPIC_CONF_STATE, &bytes)?;
+            self.wal.walrus.append_for_topic(TOPIC_CONF_STATE_RECOVERY, &bytes)?;
+            Ok::<(), crate::error::OctopiiError>(())
+        })
+        .expect("Failed to persist conf state");
 
         tracing::debug!(
             "✓ Persisted conf state: voters={:?}, learners={:?}",
