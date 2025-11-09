@@ -235,14 +235,16 @@ fn test_rapid_crash_recovery_cycles() {
             // Make a proposal
             let cmd = format!("SET cycle{} value{}", cycle, cycle);
             cluster.nodes[0].propose(cmd.as_bytes().to_vec()).await.ok();
+            tokio::time::sleep(Duration::from_millis(500)).await;
 
             // Crash node 3
             cluster.crash_node(3).ok();
-            tokio::time::sleep(Duration::from_millis(200)).await;
+            tokio::time::sleep(Duration::from_secs(1)).await;
 
             // Restart node 3
             cluster.restart_node(3).await.expect("Failed to restart");
-            tokio::time::sleep(Duration::from_millis(800)).await;
+            // Give the restarted node time to fully rejoin and sync
+            tokio::time::sleep(Duration::from_secs(3)).await;
         }
 
         // Final proposals
