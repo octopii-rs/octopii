@@ -31,3 +31,7 @@ io-uring = "0.6"
 
 [dev-dependencies]
 tempfile = "3"
+
+[lints.rust]
+dead_code = "allow"
+unused = "allow"
