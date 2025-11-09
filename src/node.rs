@@ -205,6 +205,109 @@ impl OctopiiNode {
         Ok(node)
     }
 
+    /// Create a new Octopii node with a custom state machine (async version)
+    ///
+    /// This allows you to use your own state machine implementation instead of
+    /// the default KV store. Your state machine must implement the StateMachineTrait.
+    ///
+    /// # Example
+    /// ```ignore
+    /// use octopii::{OctopiiNode, Config, OctopiiRuntime, StateMachine};
+    /// use std::sync::Arc;
+    ///
+    /// #[tokio::main]
+    /// async fn main() {
+    ///     let runtime = OctopiiRuntime::new(4);
+    ///     let config = Config { /* ... */ };
+    ///     let custom_sm: StateMachine = Arc::new(MyCustomStateMachine::new());
+    ///     let node = OctopiiNode::new_with_state_machine(config, runtime, custom_sm).await.unwrap();
+    /// }
+    /// ```
+    pub async fn new_with_state_machine(
+        config: Config,
+        runtime: OctopiiRuntime,
+        state_machine: StateMachine,
+    ) -> Result<Self> {
+        // Initialize components (same as new() but skip state machine creation)
+        let transport = Arc::new(QuicTransport::new(config.bind_addr).await?);
+        let rpc = Arc::new(RpcHandler::new(Arc::clone(&transport)));
+
+        // Create WAL
+        let wal_path = config.wal_dir.join(format!("node_{}.wal", config.node_id));
+        let wal = Arc::new(
+            WriteAheadLog::new(
+                wal_path,
+                config.wal_batch_size,
+                Duration::from_millis(config.wal_flush_interval_ms),
+            )
+            .await?,
+        );
+
+        // Create Raft storage and node
+        let storage = WalStorage::new(Arc::clone(&wal));
+
+        // Build peer ID mapping
+        let mut peer_addrs_map = HashMap::new();
+        for (idx, addr) in config.peers.iter().enumerate() {
+            let peer_id = (idx + 1) as u64;
+            let peer_id_adjusted = if peer_id >= config.node_id {
+                peer_id + 1
+            } else {
+                peer_id
+            };
+            peer_addrs_map.insert(peer_id_adjusted, *addr);
+            tracing::info!("Mapped peer {} -> {}", peer_id_adjusted, addr);
+        }
+
+        let mut peer_ids: Vec<u64> = peer_addrs_map.keys().copied().collect();
+        peer_ids.sort_unstable();
+
+        let raft = Arc::new(
+            RaftNode::new(config.node_id, peer_ids, storage, config.is_initial_leader).await?,
+        );
+
+        // Use the provided custom state machine instead of creating KvStateMachine
+        // Note: state_machine is already Arc<dyn StateMachineTrait>
+
+        // Create bounded proposal queue
+        let proposal_queue = Arc::new(ProposalQueue::new(10000));
+
+        // Create pending ConfChange tracker
+        let pending_conf_changes = Arc::new(RwLock::new(HashMap::new()));
+
+        // Channel for inbound Raft messages
+        let (raft_msg_tx, raft_msg_rx) = mpsc::unbounded_channel();
+
+        // Channel for signaling graceful shutdown
+        let (shutdown_tx, _) = broadcast::channel(16);
+
+        let node = Self {
+            runtime,
+            config: config.clone(),
+            transport,
+            rpc,
+            raft,
+            state_machine,
+            raft_msg_tx,
+            raft_msg_rx: StdMutex::new(Some(raft_msg_rx)),
+            peer_addrs: Arc::new(RwLock::new(peer_addrs_map)),
+            proposal_queue,
+            pending_conf_changes,
+            shutdown_tx,
+            shutdown_triggered: AtomicBool::new(false),
+            send_filters: Arc::new(RwLock::new(Vec::new())),
+        };
+
+        tracing::info!(
+            "Octopii node {} created with custom state machine: bind_addr={}, peers={:?}",
+            node.config.node_id,
+            node.config.bind_addr,
+            node.config.peers
+        );
+
+        Ok(node)
+    }
+
     /// Create a new Octopii node with blocking initialization (backward compatibility)
     ///
     /// This creates a dedicated runtime and blocks the current thread until
