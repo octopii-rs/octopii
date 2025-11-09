@@ -77,3 +77,6 @@ mod linearizability_checker;
 
 #[path = "raft_comprehensive/linearizability_tests.rs"]
 mod linearizability_tests;
+
+#[path = "raft_comprehensive/restart_investigation.rs"]
+mod restart_investigation;
