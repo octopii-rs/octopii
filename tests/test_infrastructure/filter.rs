@@ -335,6 +335,130 @@ impl Filter for CountFilter {
     }
 }
 
+/// Duplicate messages to test idempotency.
+///
+/// TiKV tests this to ensure the Raft implementation properly handles duplicate messages
+/// that can occur in real networks (e.g., due to retransmissions).
+///
+/// # Example
+/// ```
+/// let filter = MessageDuplicationFilter::new(50); // Duplicate 50% of messages
+/// ```
+#[derive(Clone)]
+pub struct MessageDuplicationFilter {
+    /// Duplication rate from 0-100 (percentage)
+    pub rate: u32,
+}
+
+impl MessageDuplicationFilter {
+    pub fn new(rate: u32) -> Self {
+        assert!(rate <= 100, "Duplication rate must be 0-100");
+        MessageDuplicationFilter { rate }
+    }
+}
+
+impl Filter for MessageDuplicationFilter {
+    fn before(&self, msgs: &mut Vec<Message>) -> Result<()> {
+        let mut duplicated = Vec::new();
+        for msg in msgs.iter() {
+            duplicated.push(msg.clone());
+            // Randomly duplicate this message
+            if rand::random::<u32>() % 100u32 < self.rate {
+                duplicated.push(msg.clone());
+            }
+        }
+        *msgs = duplicated;
+        Ok(())
+    }
+}
+
+/// Reorder messages to simulate out-of-order network delivery.
+///
+/// TiKV tests this to ensure Raft handles messages arriving out of order,
+/// which is common in real networks.
+///
+/// # Example
+/// ```
+/// let filter = MessageReorderFilter::new(); // Randomly reorder messages
+/// ```
+#[derive(Clone)]
+pub struct MessageReorderFilter;
+
+impl MessageReorderFilter {
+    pub fn new() -> Self {
+        MessageReorderFilter
+    }
+}
+
+impl Filter for MessageReorderFilter {
+    fn before(&self, msgs: &mut Vec<Message>) -> Result<()> {
+        use rand::seq::SliceRandom;
+        let mut rng = rand::thread_rng();
+        msgs.shuffle(&mut rng);
+        Ok(())
+    }
+}
+
+/// Throttle message delivery to simulate a slow follower.
+///
+/// This is useful for testing how Raft handles followers that are slow to process messages,
+/// which can trigger snapshot transfers.
+///
+/// # Example
+/// ```
+/// let filter = ThrottleFilter::new(Duration::from_millis(100), 2);
+/// // Allow 2 messages per 100ms
+/// ```
+pub struct ThrottleFilter {
+    interval: Duration,
+    max_per_interval: usize,
+    last_reset: Arc<std::sync::Mutex<std::time::Instant>>,
+    count: Arc<AtomicUsize>,
+}
+
+impl ThrottleFilter {
+    pub fn new(interval: Duration, max_per_interval: usize) -> Self {
+        ThrottleFilter {
+            interval,
+            max_per_interval,
+            last_reset: Arc::new(std::sync::Mutex::new(std::time::Instant::now())),
+            count: Arc::new(AtomicUsize::new(0)),
+        }
+    }
+}
+
+impl Filter for ThrottleFilter {
+    fn before(&self, msgs: &mut Vec<Message>) -> Result<()> {
+        let mut last_reset = self.last_reset.lock().unwrap();
+
+        // Check if we need to reset the interval
+        if last_reset.elapsed() >= self.interval {
+            *last_reset = std::time::Instant::now();
+            self.count.store(0, Ordering::SeqCst);
+        }
+
+        // Limit messages to max_per_interval
+        let current = self.count.load(Ordering::SeqCst);
+        let available = self.max_per_interval.saturating_sub(current);
+
+        if available == 0 {
+            // Throttle - drop all messages
+            msgs.clear();
+            return Err(FilterError {
+                reason: "Throttled".to_string(),
+            });
+        }
+
+        // Allow up to 'available' messages
+        if msgs.len() > available {
+            msgs.truncate(available);
+        }
+
+        self.count.fetch_add(msgs.len(), Ordering::SeqCst);
+        check_messages(msgs)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -464,5 +588,78 @@ mod tests {
         // Next call should block all
         let mut msgs = vec![create_test_message(1, 2, MessageType::MsgHeartbeat)];
         assert!(filter.before(&mut msgs).is_err());
+    }
+
+    #[test]
+    fn test_message_duplication_filter() {
+        let filter = MessageDuplicationFilter::new(100); // Duplicate all messages
+        let mut msgs = vec![
+            create_test_message(1, 2, MessageType::MsgHeartbeat),
+            create_test_message(1, 3, MessageType::MsgHeartbeat),
+        ];
+
+        filter.before(&mut msgs).unwrap();
+        // With 100% duplication rate, we should have 4 messages (2 original + 2 duplicates)
+        assert_eq!(msgs.len(), 4);
+    }
+
+    #[test]
+    fn test_message_duplication_filter_zero_rate() {
+        let filter = MessageDuplicationFilter::new(0); // No duplication
+        let mut msgs = vec![
+            create_test_message(1, 2, MessageType::MsgHeartbeat),
+            create_test_message(1, 3, MessageType::MsgHeartbeat),
+        ];
+
+        filter.before(&mut msgs).unwrap();
+        // With 0% duplication rate, should have original 2 messages
+        assert_eq!(msgs.len(), 2);
+    }
+
+    #[test]
+    fn test_message_reorder_filter() {
+        let filter = MessageReorderFilter::new();
+        let mut msgs = vec![
+            create_test_message(1, 2, MessageType::MsgHeartbeat),
+            create_test_message(1, 3, MessageType::MsgAppend),
+            create_test_message(1, 4, MessageType::MsgRequestVote),
+            create_test_message(1, 5, MessageType::MsgSnapshot),
+        ];
+
+        filter.before(&mut msgs).unwrap();
+        // Messages should still be there, just potentially reordered
+        assert_eq!(msgs.len(), 4);
+        // Verify all original messages are present (order may vary)
+        let to_values: Vec<u64> = msgs.iter().map(|m| m.to).collect();
+        assert!(to_values.contains(&2));
+        assert!(to_values.contains(&3));
+        assert!(to_values.contains(&4));
+        assert!(to_values.contains(&5));
+    }
+
+    #[test]
+    fn test_throttle_filter() {
+        let filter = ThrottleFilter::new(Duration::from_millis(100), 2);
+
+        // First batch - should allow 2 messages
+        let mut msgs = vec![
+            create_test_message(1, 2, MessageType::MsgHeartbeat),
+            create_test_message(1, 3, MessageType::MsgHeartbeat),
+            create_test_message(1, 4, MessageType::MsgHeartbeat),
+        ];
+        filter.before(&mut msgs).unwrap();
+        assert_eq!(msgs.len(), 2);
+
+        // Second batch immediately - should be throttled
+        let mut msgs = vec![create_test_message(1, 2, MessageType::MsgHeartbeat)];
+        assert!(filter.before(&mut msgs).is_err());
+
+        // Wait for interval to reset
+        std::thread::sleep(Duration::from_millis(150));
+
+        // Should allow messages again
+        let mut msgs = vec![create_test_message(1, 2, MessageType::MsgHeartbeat)];
+        assert!(filter.before(&mut msgs).is_ok());
+        assert_eq!(msgs.len(), 1);
     }
 }

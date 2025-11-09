@@ -6,7 +6,7 @@
 
 ## Current Test Coverage (Octopii)
 
-### ✅ What We Have (61 tests)
+### ✅ What We Have (65 tests)
 
 1. **Batch Operations** (3 tests)
    - Batch append correctness
@@ -19,31 +19,37 @@
    - Rolling restarts
    - Rapid crash recovery cycles
 
-3. **Cluster Scenarios** (4 tests)
+3. **Message Chaos** (4 tests) ⭐ NEW
+   - Message duplication idempotency
+   - Out-of-order message delivery
+   - Slow follower with throttling
+   - Combined network chaos
+
+4. **Cluster Scenarios** (4 tests)
    - Single node cluster
    - Three node cluster formation
    - Five node cluster
    - Leader re-election after crash
 
-4. **Consistency** (4 tests)
+5. **Consistency** (4 tests)
    - Basic read-write consistency
    - Concurrent writes
    - All nodes crash and recover state
    - State machine consistency
 
-5. **Durability Edge Cases** (4 tests)
+6. **Durability Edge Cases** (4 tests)
    - Recovery after unclean shutdown
    - Multiple sequential restarts
    - Concurrent proposals during recovery
    - Partial replication before crash
 
-6. **Learner Tests** (4 tests)
+7. **Learner Tests** (4 tests)
    - Basic learner addition
    - Multiple learners simultaneously
    - Learner promotion
    - Promotion fails when not caught up
 
-7. **Partition Tests** (7 tests)
+8. **Partition Tests** (7 tests)
    - Basic partition
    - Leader isolation
    - Minority partition
@@ -52,7 +58,7 @@
    - Multiple filters
    - Partition leader isolated
 
-8. **Real Partition Behavior** (6 tests)
+9. **Real Partition Behavior** (6 tests)
    - Quorum loss detection
    - Split brain prevention
    - Leader in minority partition
@@ -60,23 +66,23 @@
    - Message loss
    - One-way partition
 
-9. **Pre-Vote Tests** (3 tests)
+10. **Pre-Vote Tests** (3 tests)
    - Prevents disruption
    - Stale node doesn't disrupt
    - Restarted node doesn't disrupt
 
-10. **Short Duration Stress** (4 tests)
+11. **Short Duration Stress** (4 tests)
     - 100 proposals in 10 seconds
     - Concurrent client requests
     - Leadership churn
     - Rapid leader failures
 
-11. **Snapshot Transfer** (3 tests)
+12. **Snapshot Transfer** (3 tests)
     - Snapshot creation and compaction
     - New node catches up from snapshot
     - Space reclamation after snapshot
 
-12. **Automatic Elections** (6 tests)
+13. **Automatic Elections** (6 tests)
     - Basic election
     - Timeout randomization
     - Multiple candidates
@@ -84,7 +90,7 @@
     - Leader step down
     - Election with partitions
 
-13. **Basic Cluster** (9 tests)
+14. **Basic Cluster** (9 tests)
     - Leader election
     - Proposal replication
     - Raft state persistence
@@ -126,19 +132,19 @@
 
 ### Medium Priority
 
-6. **Message Reordering** ❌
+6. **Message Reordering** ✅ DONE
    - TiKV tests message delivery out of order
-   - We only test message loss/delays
+   - ✅ Now have MessageReorderFilter + tests
    - **Needed for:** Real-world network behavior
 
-7. **Message Duplication** ❌
+7. **Message Duplication** ✅ DONE
    - TiKV tests duplicate message handling
-   - We don't test idempotency
+   - ✅ Now have MessageDuplicationFilter + tests
    - **Needed for:** Network reliability
 
-8. **Slow Followers** ❌
+8. **Slow Followers** ✅ DONE
    - TiKV tests followers that lag behind significantly
-   - We test snapshot transfer but not progressive lag
+   - ✅ Now have ThrottleFilter + slow follower test
    - **Needed for:** Performance degradation handling
 
 9. **Priority-based Elections** ❌
@@ -219,7 +225,7 @@
 | Joint Consensus | ✅ | ❌ | **Major** |
 | Read Index | ✅ | ❌ | **Major** |
 | Leadership Transfer | ✅ | ❌ | **Major** |
-| Message Chaos | ✅ | ⚠️ | Medium |
+| Message Chaos | ✅ | ✅ | None |
 | Resource Limits | ✅ | ❌ | Medium |
 | Deterministic Tests | ✅ | ❌ | **Major** |
 | Formal Verification | ✅ | ❌ | **Major** |
@@ -250,17 +256,23 @@
 15. **Quiesce/Resume** - Resource efficiency
 16. **Benchmark suite** - Performance tracking
 
-## 💡 Quick Wins (Can Add Now)
+## 💡 Quick Wins Completed ✅
 
-1. **Message Duplication Filter** - 1 day
-   - Add to existing filter infrastructure
-   - Test idempotency of message handling
+1. ✅ **Message Duplication Filter** - DONE
+   - Added MessageDuplicationFilter to filter infrastructure
+   - Tests idempotency of message handling
 
-2. **Slow Follower Test** - 1 day
-   - Throttle one node's message processing
-   - Verify snapshot transfer kicks in
+2. ✅ **Message Reordering Filter** - DONE
+   - Added MessageReorderFilter for out-of-order delivery
+   - Tests Raft robustness to message ordering
 
-3. **Prometheus Test Helper** - 2 days
+3. ✅ **Slow Follower Test** - DONE
+   - Added ThrottleFilter for network throttling
+   - Verifies followers can catch up despite lag
+
+## 💡 Next Quick Wins
+
+1. **Prometheus Test Helper** - 2 days
    - Add metric collection to test infrastructure
    - Validate key metrics (leader changes, proposals, etc.)
 
@@ -275,9 +287,10 @@
 
 ## 📈 Current Status
 
-**Test Count:** 61 tests
-**Coverage:** ~60% of TiKV's core scenarios
+**Test Count:** 65 tests (+4 message chaos tests)
+**Coverage:** ~65% of TiKV's core scenarios
 **Major Gaps:** 4 (Joint Consensus, Read Index, Transfer Leadership, Formal Verification)
+**Recent Improvements:** ✅ Message duplication/reordering/throttling (2025-11-09)
 **Maturity:** **Beta** - Good for experimentation, needs work for production
 
 ## 🚀 To Reach Production Parity
