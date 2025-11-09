@@ -71,3 +71,9 @@ mod read_index_tests;
 
 #[path = "raft_comprehensive/log_streaming_tests.rs"]
 mod log_streaming_tests;
+
+#[path = "raft_comprehensive/linearizability_checker.rs"]
+mod linearizability_checker;
+
+#[path = "raft_comprehensive/linearizability_tests.rs"]
+mod linearizability_tests;
