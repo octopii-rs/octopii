@@ -528,12 +528,12 @@ async fn test_custom_state_machine_snapshot_restore() {
     tracing::info!("Waiting for replication to complete...");
     tokio::time::sleep(Duration::from_secs(8)).await;
 
-    // Verify all nodes have counter = 25
+    // Verify all nodes have counter = 15 (10 initial + 5 after restart)
     for (idx, node) in nodes.iter().enumerate() {
         let result = node.query(b"GET").await.unwrap();
         let value = String::from_utf8_lossy(&result);
         tracing::info!("  Node {} final counter: {}", idx + 1, value);
-        assert_eq!(value, "25", "Node {} should have counter = 25", idx + 1);
+        assert_eq!(value, "15", "Node {} should have counter = 15", idx + 1);
     }
 
     // Cleanup
