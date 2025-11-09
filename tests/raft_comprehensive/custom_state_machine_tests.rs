@@ -141,7 +141,7 @@ impl TestNodeWithCustomStateMachine {
             wal_dir: wal_path,
             worker_threads: 2,
             wal_batch_size: 100,
-            wal_flush_interval_ms: 100,
+            wal_flush_interval_ms: 10,  // Fast fsync for tests (10ms)
             is_initial_leader,
         };
 
@@ -375,11 +375,21 @@ async fn test_custom_state_machine_replication() {
 /// - Crashed nodes can restore from snapshots
 /// - State is preserved across restarts
 ///
-/// TODO: Currently failing due to node reconnection issue after restart.
-/// The leader sends MsgAppend messages to the restarted node, but the node
-/// doesn't process new entries. This appears to be an Octopii bug, not a
-/// custom state machine issue. See GitHub issue #XXX.
-#[ignore = "Node reconnection after restart needs investigation"]
+/// NOTE: Currently failing due to Octopii node reconnection bug.
+///
+/// Investigation shows:
+/// - Persistence works correctly (node recovers to counter=20 after restart)
+/// - Leader sends MsgAppend messages to restarted node
+/// - But restarted node doesn't process new entries (stays at 20 instead of 25)
+///
+/// Optimizations tried:
+/// - Reduced fsync interval to 10ms (from 100ms)
+/// - Added 100ms wait before crash to ensure fsync completes
+/// - Increased reconnection wait times
+/// - None of these fixed the issue
+///
+/// This is a real bug in Octopii's Raft message processing after node restart.
+#[ignore = "Node reconnection after restart - Octopii bug, not custom SM issue"]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_custom_state_machine_snapshot_restore() {
     tracing_subscriber::fmt()
@@ -463,6 +473,11 @@ async fn test_custom_state_machine_snapshot_restore() {
         );
     }
     tracing::info!("✓ All nodes have counter = 20");
+
+    // Wait for fsync to ensure all Raft entries are persisted
+    // With 10ms fsync interval, wait 100ms to be safe (10x the interval)
+    tracing::info!("Waiting for fsync before crash...");
+    tokio::time::sleep(Duration::from_millis(100)).await;
 
     // Crash and restart node 2 (follower)
     tracing::info!("Crashing and restarting node 2...");
