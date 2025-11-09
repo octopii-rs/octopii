@@ -80,3 +80,6 @@ mod linearizability_tests;
 
 #[path = "raft_comprehensive/restart_investigation.rs"]
 mod restart_investigation;
+
+#[path = "raft_comprehensive/custom_state_machine_tests.rs"]
+mod custom_state_machine_tests;

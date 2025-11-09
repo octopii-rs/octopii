@@ -4,7 +4,8 @@
 //! and are correctly recovered from Walrus.
 
 use bytes::Bytes;
-use octopii::raft::{StateMachine, WalStorage};
+use octopii::raft::{KvStateMachine, WalStorage};
+use octopii::StateMachineTrait;
 use octopii::wal::WriteAheadLog;
 use raft::prelude::*;
 use std::path::PathBuf;
@@ -225,7 +226,7 @@ async fn test_state_machine_persistence_and_recovery() {
 
     // Create state machine and apply operations
     {
-        let sm = StateMachine::with_wal(Arc::clone(&wal));
+        let sm = KvStateMachine::with_wal(Arc::clone(&wal));
 
         // Apply some SET operations
         let result = sm.apply(b"SET foo bar").unwrap();
@@ -246,7 +247,7 @@ async fn test_state_machine_persistence_and_recovery() {
 
     // Recreate state machine (simulate restart)
     let wal2 = create_wal_at_path(wal_path).await;
-    let sm2 = StateMachine::with_wal(wal2);
+    let sm2 = KvStateMachine::with_wal(wal2);
 
     // Verify all data was recovered
     let result = sm2.apply(b"GET foo").unwrap();
@@ -266,7 +267,7 @@ async fn test_state_machine_delete_with_tombstone() {
 
     // Create state machine, SET then DELETE
     {
-        let sm = StateMachine::with_wal(Arc::clone(&wal));
+        let sm = KvStateMachine::with_wal(Arc::clone(&wal));
 
         sm.apply(b"SET temp_key temp_value").unwrap();
         sm.apply(b"DELETE temp_key").unwrap();
@@ -280,7 +281,7 @@ async fn test_state_machine_delete_with_tombstone() {
 
     // After restart, verify deletion persisted
     let wal2 = create_wal_at_path(wal_path).await;
-    let sm2 = StateMachine::with_wal(wal2);
+    let sm2 = KvStateMachine::with_wal(wal2);
 
     let result = sm2.apply(b"GET temp_key").unwrap();
     assert_eq!(
@@ -296,7 +297,7 @@ async fn test_state_machine_overwrite_survives() {
     let (wal, wal_path, _temp_dir) = create_test_wal().await;
 
     {
-        let sm = StateMachine::with_wal(Arc::clone(&wal));
+        let sm = KvStateMachine::with_wal(Arc::clone(&wal));
 
         sm.apply(b"SET key v1").unwrap();
         sm.apply(b"SET key v2").unwrap();
@@ -311,7 +312,7 @@ async fn test_state_machine_overwrite_survives() {
 
     // After recovery, should have latest value
     let wal2 = create_wal_at_path(wal_path).await;
-    let sm2 = StateMachine::with_wal(wal2);
+    let sm2 = KvStateMachine::with_wal(wal2);
 
     let result = sm2.apply(b"GET key").unwrap();
     assert_eq!(
@@ -437,7 +438,7 @@ async fn test_crash_recovery_full_scenario() {
     // === Phase 1: Normal operation ===
     {
         let storage = WalStorage::new(Arc::clone(&wal));
-        let sm = StateMachine::with_wal(Arc::clone(&wal));
+        let sm = KvStateMachine::with_wal(Arc::clone(&wal));
 
         // Set initial conf state (cluster of 3 nodes)
         let mut cs = ConfState::default();
@@ -490,7 +491,7 @@ async fn test_crash_recovery_full_scenario() {
     {
         let wal2 = create_wal_at_path(wal_path).await;
         let storage2 = WalStorage::new(Arc::clone(&wal2));
-        let sm2 = StateMachine::with_wal(wal2);
+        let sm2 = KvStateMachine::with_wal(wal2);
 
         // Verify hard state recovered
         let initial = storage2.initial_state().unwrap();
@@ -536,7 +537,7 @@ async fn test_empty_state_machine_no_crash() {
     // Verify that creating a state machine without prior data doesn't crash
     let (wal, _wal_path, _temp_dir) = create_test_wal().await;
 
-    let sm = StateMachine::with_wal(wal);
+    let sm = KvStateMachine::with_wal(wal);
 
     // Should handle GET on empty state
     let result = sm.apply(b"GET nonexistent").unwrap();
