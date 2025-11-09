@@ -211,6 +211,44 @@ impl RaftNode {
         Ok(())
     }
 
+    /// Transfer leadership to another node
+    ///
+    /// This requests the current leader to transfer leadership to the specified node.
+    /// Used for planned maintenance and load balancing.
+    ///
+    /// # Arguments
+    /// * `target_id` - The ID of the node to transfer leadership to
+    pub async fn transfer_leader(&self, target_id: u64) -> Result<()> {
+        let mut node = self.raw_node.lock().await;
+        node.transfer_leader(target_id);
+        tracing::info!(
+            "Node {} requested leadership transfer to node {}",
+            self.node_id,
+            target_id
+        );
+        if node.has_ready() {
+            self.ready_notify.notify_one();
+        }
+        Ok(())
+    }
+
+    /// Request a read index for linearizable reads
+    ///
+    /// The leader confirms it's still the leader by communicating with a quorum
+    /// and returns a read index. Reads at or before this index are linearizable.
+    ///
+    /// # Arguments
+    /// * `request_ctx` - Context to identify this read request
+    pub async fn read_index(&self, request_ctx: Vec<u8>) -> Result<()> {
+        let mut node = self.raw_node.lock().await;
+        node.read_index(request_ctx);
+        tracing::info!("Node {} requested read index", self.node_id);
+        if node.has_ready() {
+            self.ready_notify.notify_one();
+        }
+        Ok(())
+    }
+
     /// Propose a configuration change (add/remove node)
     pub async fn propose_conf_change(&self, context: Vec<u8>, cc: ConfChange) -> Result<()> {
         let change_type = cc.get_change_type();
