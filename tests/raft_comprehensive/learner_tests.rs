@@ -2,6 +2,7 @@
 mod common;
 
 use common::TestCluster;
+use crate::test_infrastructure::alloc_port;
 use std::time::Duration;
 
 #[test]
@@ -21,7 +22,7 @@ fn test_add_learner_to_cluster() {
 
         tracing::info!("=== Starting add learner test ===");
 
-        let mut cluster = TestCluster::new(vec![1, 2, 3], 8100).await;
+        let mut cluster = TestCluster::new(vec![1, 2, 3], alloc_port()).await;
         cluster.start_all().await.expect("Failed to start cluster");
 
         tokio::time::sleep(Duration::from_millis(500)).await;
@@ -79,7 +80,7 @@ fn test_promote_learner_when_caught_up() {
 
         tracing::info!("=== Starting promote learner test ===");
 
-        let mut cluster = TestCluster::new(vec![1, 2, 3], 8110).await;
+        let mut cluster = TestCluster::new(vec![1, 2, 3], alloc_port()).await;
         cluster.start_all().await.expect("Failed to start cluster");
 
         tokio::time::sleep(Duration::from_millis(500)).await;
@@ -145,7 +146,7 @@ fn test_learner_promotion_fails_when_not_caught_up() {
 
         tracing::info!("=== Starting learner promotion failure test ===");
 
-        let mut cluster = TestCluster::new(vec![1, 2, 3], 8120).await;
+        let mut cluster = TestCluster::new(vec![1, 2, 3], alloc_port()).await;
         cluster.start_all().await.expect("Failed to start cluster");
 
         tokio::time::sleep(Duration::from_millis(500)).await;
@@ -201,7 +202,7 @@ fn test_multiple_learners_simultaneously() {
 
         tracing::info!("=== Starting multiple learners test ===");
 
-        let mut cluster = TestCluster::new(vec![1, 2, 3], 8130).await;
+        let mut cluster = TestCluster::new(vec![1, 2, 3], alloc_port()).await;
         cluster.start_all().await.expect("Failed to start cluster");
 
         tokio::time::sleep(Duration::from_millis(500)).await;

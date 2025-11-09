@@ -2,6 +2,7 @@
 mod common;
 
 use common::TestCluster;
+use crate::test_infrastructure::alloc_port;
 use std::time::Duration;
 
 #[test]
@@ -21,7 +22,7 @@ fn test_snapshot_creation_and_compaction() {
 
         tracing::info!("=== Starting snapshot creation test ===");
 
-        let mut cluster = TestCluster::new(vec![1, 2, 3], 8300).await;
+        let mut cluster = TestCluster::new(vec![1, 2, 3], alloc_port()).await;
         cluster.start_all().await.expect("Failed to start cluster");
 
         tokio::time::sleep(Duration::from_millis(500)).await;
@@ -75,7 +76,7 @@ fn test_new_node_catches_up_from_snapshot() {
 
         tracing::info!("=== Starting new node catches up from snapshot test ===");
 
-        let mut cluster = TestCluster::new(vec![1, 2, 3], 8310).await;
+        let mut cluster = TestCluster::new(vec![1, 2, 3], alloc_port()).await;
         cluster.start_all().await.expect("Failed to start cluster");
 
         tokio::time::sleep(Duration::from_millis(500)).await;
@@ -138,7 +139,7 @@ fn test_space_reclamation_after_snapshot() {
 
         tracing::info!("=== Starting space reclamation test ===");
 
-        let mut cluster = TestCluster::new(vec![1, 2, 3], 8320).await;
+        let mut cluster = TestCluster::new(vec![1, 2, 3], alloc_port()).await;
         cluster.start_all().await.expect("Failed to start cluster");
 
         tokio::time::sleep(Duration::from_millis(500)).await;
