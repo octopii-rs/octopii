@@ -1028,10 +1028,17 @@ impl OctopiiNode {
                         match maybe_msg {
                             Some(msg) => {
                                 let msg_type = msg.get_msg_type();
+                                let msg_from = msg.from;
+                                let msg_to = msg.to;
+                                let msg_index = msg.index;
+                                let msg_commit = msg.commit;
                                 if let Err(e) = raft.step(msg).await {
                                     tracing::error!("Failed to step Raft message {:?}: {}", msg_type, e);
                                 } else {
-                                    tracing::debug!("Enqueued Raft message {:?} for processing", msg_type);
+                                    tracing::info!(
+                                        "[Node {}] Stepped {:?} from {} (index={}, commit={}), will process_ready",
+                                        msg_to, msg_type, msg_from, msg_index, msg_commit
+                                    );
                                     process_ready = true;
                                 }
                             }
@@ -1173,8 +1180,14 @@ impl OctopiiNode {
 
             // Apply committed entries BEFORE persisting new entries
             // This follows the raft-rs example pattern
+            let committed_entries = ready.take_committed_entries();
+            tracing::info!(
+                "[Node {}] Ready has {} committed entries to apply",
+                node_id,
+                committed_entries.len()
+            );
             if let Some(idx) = Self::apply_committed_entries(
-                ready.take_committed_entries(),
+                committed_entries,
                 raft,
                 state_machine,
                 proposal_queue,
@@ -1224,8 +1237,16 @@ impl OctopiiNode {
             Self::send_raft_messages(light_rd.take_messages(), rpc, peer_addrs, send_filters).await;
 
             // Then apply LightReady committed entries
+            let light_committed = light_rd.take_committed_entries();
+            if !light_committed.is_empty() {
+                tracing::info!(
+                    "[Node {}] LightReady has {} committed entries to apply",
+                    node_id,
+                    light_committed.len()
+                );
+            }
             if let Some(idx) = Self::apply_committed_entries(
-                light_rd.take_committed_entries(),
+                light_committed,
                 raft,
                 state_machine,
                 proposal_queue,
@@ -1318,8 +1339,17 @@ impl OctopiiNode {
         pending_conf_changes: &Arc<RwLock<HashMap<u64, oneshot::Sender<raft::prelude::ConfState>>>>,
     ) -> Option<u64> {
         if entries.is_empty() {
+            tracing::debug!("[Node {}] No committed entries to apply", raft.id());
             return None;
         }
+
+        tracing::info!(
+            "[Node {}] Applying {} committed entries (indices: {} to {})",
+            raft.id(),
+            entries.len(),
+            entries.first().map(|e| e.index).unwrap_or(0),
+            entries.last().map(|e| e.index).unwrap_or(0)
+        );
 
         let mut last_applied_index = None;
         let is_leader = raft.is_leader().await;
