@@ -1595,6 +1595,35 @@ impl OctopiiNode {
     pub async fn peer_progress(&self, peer_id: u64) -> Option<(u64, u64)> {
         self.raft.peer_progress(peer_id).await
     }
+
+    /// Force-send a snapshot to a specific peer immediately.
+    /// Prepares a serving snapshot at the current commit index and flips the peer into
+    /// Snapshot state, then broadcasts to trigger the transfer.
+    pub async fn force_snapshot_to_peer(&self, peer_id: u64) -> Result<()> {
+        // Only leader can serve snapshots
+        if !self.raft.is_leader().await {
+            return Err(crate::error::OctopiiError::Raft(
+                raft::Error::ConfChangeError("Only leader can force snapshot".to_string()),
+            ));
+        }
+        // Prepare snapshot image from state machine
+        let snapshot_data = self.state_machine.snapshot();
+        self.raft.prepare_serving_snapshot(snapshot_data).await?;
+
+        // Transition the specific peer into Snapshot at current commit
+        {
+            let mut node = self.raft.raw_node().lock().await;
+            let commit_index = node.raft.hard_state().commit;
+            if let Some(pr) = node.raft.mut_prs().get_mut(peer_id) {
+                pr.become_snapshot(commit_index);
+            }
+            // Force send immediately
+            node.raft.bcast_append();
+        }
+        // Wake ready loop so the snapshot message is sent
+        self.raft.ready_notifier().notify_one();
+        Ok(())
+    }
 }
 
 impl Drop for OctopiiNode {
