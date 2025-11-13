@@ -2,6 +2,21 @@ use octopii::{Config, OctopiiNode, OctopiiRuntime};
 use std::time::Duration;
 use tokio::time::sleep;
 use std::path::PathBuf;
+use std::sync::Once;
+
+fn init_test_tracing() {
+    static INIT: Once = Once::new();
+    INIT.call_once(|| {
+        let _ = tracing_subscriber::fmt()
+            .with_env_filter(
+                tracing_subscriber::EnvFilter::try_from_default_env()
+                    .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+            )
+            .with_target(true)
+            .without_time()
+            .try_init();
+    });
+}
 
 #[test]
 fn test_smoke_single_node_leader() {
@@ -48,6 +63,7 @@ fn test_smoke_single_node_leader() {
 
 #[test]
 fn test_smoke_three_nodes_manual_election_after_shutdown() {
+    init_test_tracing();
     // Start 3 nodes, elect node1, then gracefully shut it down and manually
     // trigger election on node2 to verify basic re-election works.
     let rt = tokio::runtime::Builder::new_multi_thread()
@@ -130,6 +146,7 @@ fn test_smoke_three_nodes_manual_election_after_shutdown() {
 
 #[test]
 fn test_three_nodes_graceful_shutdown_auto_election() {
+    init_test_tracing();
     // Step closer to the comprehensive test: no manual campaign for re-election.
     // After gracefully shutting down the leader, followers should automatically elect a new leader.
     let rt = tokio::runtime::Builder::new_multi_thread()
@@ -253,6 +270,7 @@ fn test_three_nodes_graceful_shutdown_auto_election() {
 
 #[test]
 fn test_add_learner_under_load_and_promote() {
+    init_test_tracing();
     // Step closer to the comprehensive learner test:
     // 3-node cluster under load, add a learner (node 4), wait for catch-up (snapshot or append),
     // and then promote it to a voter.
@@ -391,6 +409,7 @@ fn test_add_learner_under_load_and_promote() {
 
 #[test]
 fn test_three_nodes_crash_leader_with_load_and_restart_auto_election() {
+    init_test_tracing();
     // Step even closer: run load, kill the leader, expect auto-election,
     // then restart the old leader and ensure the cluster remains stable.
     let rt = tokio::runtime::Builder::new_multi_thread()
