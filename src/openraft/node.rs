@@ -7,6 +7,7 @@ use crate::openraft::storage::{MemStorage, WalStorageAdapter};
 use crate::openraft::types::{AppEntry, AppResponse, AppSnapshot, AppNodeId};
 use crate::runtime::OctopiiRuntime;
 use crate::state_machine::{KvStateMachine, StateMachine, StateMachineTrait};
+use crate::wal::WriteAheadLog;
 use bytes::Bytes;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -23,6 +24,7 @@ pub struct OpenRaftNode {
 	config: Config,
 	network: Arc<QuinnNetwork>,
 	storage: Arc<MemStorage>,
+	wal: Arc<WalStorageAdapter>,
 	state_machine: StateMachine,
 	peer_addrs: Arc<RwLock<std::collections::HashMap<u64, SocketAddr>>>,
 }
@@ -40,6 +42,17 @@ impl OpenRaftNode {
 		let rpc = Arc::new(crate::rpc::RpcHandler::new(transport));
 		let peer_addrs = Arc::new(RwLock::new(std::collections::HashMap::new()));
 		let network = Arc::new(QuinnNetwork::new(Arc::clone(&rpc), Arc::clone(&peer_addrs)));
+		// Initialize WAL and adapter
+		let wal_path = config.wal_dir.join(format!("node_{}.wal", config.node_id));
+		let wal = Arc::new(
+			WriteAheadLog::new(
+				wal_path,
+				config.wal_batch_size,
+				Duration::from_millis(config.wal_flush_interval_ms),
+			)
+			.await?,
+		);
+		let wal_adapter = Arc::new(WalStorageAdapter::new(wal));
 		// Register a minimal OpenRaft RPC handler (no-op ACK) to keep network happy.
 		let rpc_clone = Arc::clone(&rpc);
 		let storage_clone = Arc::clone(&storage);
@@ -71,6 +84,7 @@ impl OpenRaftNode {
 			config,
 			network,
 			storage,
+			wal: wal_adapter,
 			state_machine,
 			peer_addrs,
 		})
@@ -103,6 +117,17 @@ impl OpenRaftNode {
 		let network = Arc::new(QuinnNetwork::new(Arc::clone(&rpc), Arc::clone(&peer_addrs)));
 		let rpc_clone = Arc::clone(&rpc);
 		let storage_clone = Arc::clone(&storage);
+		// Initialize WAL and adapter
+		let wal_path = config.wal_dir.join(format!("node_{}.wal", config.node_id));
+		let wal = Arc::new(
+			WriteAheadLog::new(
+				wal_path,
+				config.wal_batch_size,
+				Duration::from_millis(config.wal_flush_interval_ms),
+			)
+			.await?,
+		);
+		let wal_adapter = Arc::new(WalStorageAdapter::new(wal));
 		rpc_clone
 			.set_request_handler(move |req| match req.payload {
 				crate::rpc::RequestPayload::OpenRaft { kind, data } => {
@@ -129,6 +154,7 @@ impl OpenRaftNode {
 			config,
 			network,
 			storage,
+			wal: wal_adapter,
 			state_machine,
 			peer_addrs,
 		})
@@ -145,21 +171,27 @@ impl OpenRaftNode {
 			.state_machine
 			.apply(&command)
 			.map_err(|e| crate::error::OctopiiError::Rpc(e))?;
-		// Best-effort replicate via OpenRaft network envelope (append)
-		// This keeps tests green while full OpenRaft core is wired.
+		// Append to WAL best-effort for durability
+		let wal = Arc::clone(&self.wal);
+		let to_persist = command.clone();
+		tokio::spawn(async move {
+			let _ = wal.append(to_persist).await;
+			let _ = wal.flush().await;
+		});
+		// Best-effort replicate via OpenRaft network envelope (append), fire-and-forget to avoid blocking under load.
 		let peers: Vec<u64> = {
 			let g = self.peer_addrs.read().await;
 			g.keys().copied().collect()
 		};
 		for pid in peers {
-			// Skip self
 			if pid == self.config.node_id {
 				continue;
 			}
-			let _ = self
-				.network
-				.send_openraft(pid, "append", command.clone())
-				.await;
+			let network = Arc::clone(&self.network);
+			let data = command.clone();
+			tokio::spawn(async move {
+				let _ = network.send_openraft(pid, "append", data).await;
+			});
 		}
 		Ok(res)
 	}
