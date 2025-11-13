@@ -594,6 +594,18 @@ impl TestCluster {
         }
     }
 
+    /// Create a network partition between two groups of nodes using OpenRaft filters.
+    #[cfg(feature = "openraft-filters")]
+    pub async fn partition(&mut self, group1: Vec<u64>, group2: Vec<u64>) {
+        tracing::info!("Creating partition (openraft-filters): {:?} <-> {:?}", group1, group2);
+        // Ask each node to install a partition rule; it's sufficient to install on any node in either group
+        for node in &self.nodes {
+            if let Some(n) = node.get_node() {
+                n.add_partition(group1.clone(), group2.clone()).await;
+            }
+        }
+    }
+
     /// Isolate a single node from all communication.
     #[cfg(feature = "raft-rs-impl")]
     pub async fn isolate_node(&mut self, node_id: u64) {
@@ -606,6 +618,22 @@ impl TestCluster {
             let filters = factory.generate(id);
             for filter in filters {
                 self.add_send_filter(id, filter).await;
+            }
+        }
+    }
+
+    /// Isolate a single node using OpenRaft filters (drop outgoing to others).
+    #[cfg(feature = "openraft-filters")]
+    pub async fn isolate_node(&mut self, node_id: u64) {
+        tracing::info!("Isolating node {} (openraft-filters)", node_id);
+        // Drop outgoing from node_id to everyone else
+        for n in &self.nodes {
+            if n.node_id == node_id {
+                if let Some(node) = n.get_node() {
+                    for other in self.nodes.iter().filter(|x| x.node_id != node_id) {
+                        node.add_send_drop_to(other.node_id).await;
+                    }
+                }
             }
         }
     }
@@ -624,6 +652,18 @@ impl TestCluster {
             }
         }
         tracing::info!("✓ All filters cleared");
+    }
+
+    /// Remove all OpenRaft filters (heal partitions).
+    #[cfg(feature = "openraft-filters")]
+    pub async fn clear_all_filters(&mut self) {
+        tracing::info!("Clearing all openraft network filters");
+        for n in &self.nodes {
+            if let Some(node) = n.get_node() {
+                node.clear_send_filters().await;
+            }
+        }
+        tracing::info!("✓ All openraft filters cleared");
     }
 }
 

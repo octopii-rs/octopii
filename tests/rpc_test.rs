@@ -130,21 +130,25 @@ async fn test_rpc_one_way_message() {
     let rpc2_clone = Arc::clone(&rpc2);
     tokio::spawn(async move {
         loop {
-            if let Ok((addr, peer)) = t2_clone.accept().await {
-                let rpc = Arc::clone(&rpc2_clone);
-                let peer = Arc::new(peer);
-                tokio::spawn(async move {
-                    while let Ok(Some(data)) = peer.recv().await {
-                        if let Ok(msg) = deserialize::<RpcMessage>(&data) {
-                            rpc.notify_message(addr, msg, Some(Arc::clone(&peer))).await;
+            match t2_clone.accept().await {
+                Ok((addr, peer)) => {
+                    let rpc = Arc::clone(&rpc2_clone);
+                    let peer = Arc::new(peer);
+                    tokio::spawn(async move {
+                        while let Ok(Some(data)) = peer.recv().await {
+                            if let Ok(msg) = deserialize::<RpcMessage>(&data) {
+                                rpc.notify_message(addr, msg, Some(Arc::clone(&peer))).await;
+                            }
                         }
-                    }
-                });
+                    });
+                }
+                Err(_) => break, // Endpoint closed
             }
         }
     });
 
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    // Allow server acceptor to start
+    tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
 
     // Send one-way message
     let result = rpc1
