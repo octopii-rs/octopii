@@ -29,6 +29,9 @@ pub struct Config {
     /// Whether this node should bootstrap as the initial Raft leader
     /// Only one node in a fresh cluster should have this set to true
     pub is_initial_leader: bool,
+
+    /// Number of log entries a follower can lag before leader triggers a snapshot (0 disables)
+    pub snapshot_lag_threshold: u64,
 }
 
 impl Default for Config {
@@ -42,6 +45,7 @@ impl Default for Config {
             wal_batch_size: 100,
             wal_flush_interval_ms: 100,
             is_initial_leader: false,
+            snapshot_lag_threshold: 500,
         }
     }
 }
