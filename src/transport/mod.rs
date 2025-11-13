@@ -49,7 +49,10 @@ impl QuicTransport {
             let peers = self.peers.read().await;
             if let Some(peer) = peers.get(&addr) {
                 if !peer.is_closed() {
+                    tracing::debug!("Reusing existing connection to {}", addr);
                     return Ok(Arc::clone(peer));
+                } else {
+                    tracing::debug!("Existing connection to {} is closed, reconnecting", addr);
                 }
             }
         }
@@ -60,9 +63,12 @@ impl QuicTransport {
         // Double-check after acquiring write lock
         if let Some(peer) = peers.get(&addr) {
             if !peer.is_closed() {
+                tracing::debug!("Reusing existing connection to {} (after lock)", addr);
                 return Ok(Arc::clone(peer));
             }
         }
+
+        tracing::debug!("Creating new QUIC connection to {}", addr);
 
         // Configure client with permissive TLS (accept any cert for simplicity)
         let client_config = tls::create_client_config()?;
@@ -70,8 +76,15 @@ impl QuicTransport {
         let connection = self
             .endpoint
             .connect_with(client_config, addr, "localhost")
-            .map_err(|e| OctopiiError::Transport(format!("Connect error: {}", e)))?
-            .await?;
+            .map_err(|e| {
+                tracing::error!("Failed to initiate connection to {}: {}", addr, e);
+                OctopiiError::Transport(format!("Connect error: {}", e))
+            })?
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to complete connection to {}: {}", addr, e);
+                OctopiiError::Transport(format!("Connection failed: {}", e))
+            })?;
 
         let peer = Arc::new(PeerConnection::new(connection));
         peers.insert(addr, Arc::clone(&peer));

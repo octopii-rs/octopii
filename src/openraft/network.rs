@@ -42,7 +42,14 @@ impl QuinnNetwork {
 
     async fn peer_addr(&self) -> Option<SocketAddr> {
         let g = self.peer_addrs.read().await;
-        g.get(&self.target).copied()
+        let result = g.get(&self.target).copied();
+        if result.is_none() {
+            tracing::warn!(
+                "QuinnNetwork: peer_addr lookup failed for target {} (self={}), available peers: {:?}",
+                self.target, self.self_id, g.keys().collect::<Vec<_>>()
+            );
+        }
+        result
     }
 
     async fn send_openraft(&self, kind: &str, data: Vec<u8>) -> Result<ResponsePayload, anyhow::Error> {
@@ -125,20 +132,36 @@ impl openraft::network::v2::RaftNetworkV2<AppTypeConfig> for QuinnNetwork {
         req: VoteRequest<AppTypeConfig>,
         _option: openraft::network::RPCOption,
     ) -> Result<VoteResponse<AppTypeConfig>, RPCError<AppTypeConfig>> {
+        tracing::info!("QuinnNetwork::vote() called: self_id={} target={} vote={:?}", self.self_id, self.target, req.vote);
+
         let data = bincode::serialize(&req)
-            .map_err(|e| RPCError::Network(openraft::error::NetworkError::new(&e)))?;
-        
+            .map_err(|e| {
+                tracing::error!("Failed to serialize vote request {}->{}: {}", self.self_id, self.target, e);
+                RPCError::Network(openraft::error::NetworkError::new(&e))
+            })?;
+
+        tracing::debug!("Sending vote RPC {}->{}", self.self_id, self.target);
         let resp_payload = self.send_openraft("vote", data).await
-            .map_err(|e| RPCError::Unreachable(openraft::error::Unreachable::new(&io::Error::new(io::ErrorKind::Other, e))))?;
-        
+            .map_err(|e| {
+                tracing::error!("Vote RPC {}->{} failed: {}", self.self_id, self.target, e);
+                RPCError::Unreachable(openraft::error::Unreachable::new(&io::Error::new(io::ErrorKind::Other, e)))
+            })?;
+
+        tracing::debug!("Received vote response {}->{}", self.self_id, self.target);
         match resp_payload {
             ResponsePayload::OpenRaft { kind, data } if kind == "vote" => {
                 bincode::deserialize(&data)
-                    .map_err(|e| RPCError::Network(openraft::error::NetworkError::new(&e)))
+                    .map_err(|e| {
+                        tracing::error!("Failed to deserialize vote response {}->{}: {}", self.self_id, self.target, e);
+                        RPCError::Network(openraft::error::NetworkError::new(&e))
+                    })
             }
-            other => Err(RPCError::Unreachable(openraft::error::Unreachable::new(
-                &io::Error::new(io::ErrorKind::Other, format!("unexpected response: {:?}", other))
-            ))),
+            other => {
+                tracing::error!("Unexpected vote response {}->{}: {:?}", self.self_id, self.target, other);
+                Err(RPCError::Unreachable(openraft::error::Unreachable::new(
+                    &io::Error::new(io::ErrorKind::Other, format!("unexpected response: {:?}", other))
+                )))
+            }
         }
     }
 }
