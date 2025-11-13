@@ -3,7 +3,7 @@ use std::time::Duration;
 use tokio::time::sleep;
 
 fn cleanup_wal_files() {
-    let _ = std::fs::remove_dir_all("wal_files");
+    let _ = std::fs::remove_dir_all("_octopii_wal_files");
 }
 
 #[test]
@@ -19,7 +19,7 @@ fn test_three_node_cluster_basic() {
         node_id: 1,
         bind_addr: node1_addr,
         peers: vec![node2_addr, node3_addr],
-        wal_dir: std::path::PathBuf::from("wal_files"),
+        wal_dir: std::path::PathBuf::from("_octopii_wal_files"),
         worker_threads: 2,
         wal_batch_size: 10,
         wal_flush_interval_ms: 100,
@@ -31,7 +31,7 @@ fn test_three_node_cluster_basic() {
         node_id: 2,
         bind_addr: node2_addr,
         peers: vec![node1_addr, node3_addr],
-        wal_dir: std::path::PathBuf::from("wal_files"),
+        wal_dir: std::path::PathBuf::from("_octopii_wal_files"),
         worker_threads: 2,
         wal_batch_size: 10,
         wal_flush_interval_ms: 100,
@@ -43,7 +43,7 @@ fn test_three_node_cluster_basic() {
         node_id: 3,
         bind_addr: node3_addr,
         peers: vec![node1_addr, node2_addr],
-        wal_dir: std::path::PathBuf::from("wal_files"),
+        wal_dir: std::path::PathBuf::from("_octopii_wal_files"),
         worker_threads: 2,
         wal_batch_size: 10,
         wal_flush_interval_ms: 100,
@@ -127,7 +127,7 @@ fn test_leader_election() {
         node_id: 1,
         bind_addr: "127.0.0.1:15010".parse().unwrap(),
         peers: vec![],
-        wal_dir: std::path::PathBuf::from("wal_files"),
+        wal_dir: std::path::PathBuf::from("_octopii_wal_files"),
         worker_threads: 2,
         wal_batch_size: 10,
         wal_flush_interval_ms: 100,
