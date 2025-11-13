@@ -4,13 +4,6 @@ use crate::openraft::types::{AppEntry, AppResponse, AppSnapshot};
 use crate::wal::WriteAheadLog;
 use std::sync::Arc;
 use bytes::Bytes;
-#[cfg(feature = "openraft")]
-use openraft::{
-	storage::{LogState, RaftLogReader, Snapshot, SnapshotMeta, SnapshotSegmentId, StorageError},
-	vote::Vote,
-	membership::StoredMembership,
-	TypeConfig,
-};
 
 /// Minimal, in-memory storage to get OpenRaft running for tests.
 ///
@@ -148,46 +141,4 @@ impl WalStorageAdapter {
 		Ok(entries)
 	}
 }
-
-// -------- OpenRaft trait skeletons (bind to WAL adapter) --------
-#[cfg(feature = "openraft")]
-pub struct AppTC;
-
-#[cfg(feature = "openraft")]
-impl TypeConfig for AppTC {
-	type D = AppEntry;
-	type R = AppResponse;
-	type NodeId = u64;
-	type Node = ();
-	type Entry = AppEntry;
-	type SnapshotData = Vec<u8>;
-}
-
-#[cfg(feature = "openraft")]
-pub struct WalLogReader {
-	inner: Arc<WriteAheadLog>,
-}
-
-#[cfg(feature = "openraft")]
-impl RaftLogReader<AppTC> for WalLogReader {
-	async fn get_log_state(&mut self) -> Result<LogState<AppTC>, StorageError<<AppTC as TypeConfig>::NodeId>> {
-		// Minimal: return last index based on number of records prefixed with "log:"
-		let all = self.inner.read_all().await.map_err(|e| StorageError::from(e.to_string()))?;
-		let mut last = 0u64;
-		for rec in all {
-			if rec.len() >= 4 && &rec[..4] == b"log:" {
-				last += 1;
-			}
-		}
-		Ok(LogState { last_purged_log_id: None, last_log_id: if last > 0 { Some((0, last).into()) } else { None } })
-	}
-
-	async fn try_get_log_entries<R: std::ops::RangeBounds<u64> + Clone + Send>(
-		&mut self,
-		_range: R,
-	) -> Result<Vec<AppEntry>, StorageError<<AppTC as TypeConfig>::NodeId>> {
-		let entries = self
-			.inner
-			.read_all()
-			}
 
