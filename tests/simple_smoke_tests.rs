@@ -334,7 +334,7 @@ fn test_add_learner_under_load_and_promote() {
         let config4 = Config {
             node_id: 4,
             bind_addr: addr4,
-            // IMPORTANT: start with empty peers so it joins via ConfChange as a learner
+            // Start with empty peers to avoid Raft bootstrap; we'll inject peer addrs below.
             peers: vec![],
             wal_dir: base.join("n4"),
             worker_threads: 2,
@@ -344,6 +344,10 @@ fn test_add_learner_under_load_and_promote() {
             snapshot_lag_threshold: 50,
         };
         let n4 = OctopiiNode::new(config4, runtime.clone()).await.expect("create n4");
+        // Inject peer address map so learner can respond to leader without Raft bootstrap
+        n4.update_peer_addr(1, addr1).await;
+        n4.update_peer_addr(2, addr2).await;
+        n4.update_peer_addr(3, addr3).await;
         n4.start().await.expect("start n4");
 
         // Keep issuing proposals while learner catches up
@@ -358,6 +362,10 @@ fn test_add_learner_under_load_and_promote() {
         loop {
             if start.elapsed() > timeout {
                 panic!("Learner 4 did not catch up in time");
+            }
+            // Emit progress to aid diagnosis while waiting
+            if let Some((matched, last)) = n1.raft.peer_progress(4).await {
+                tracing::info!("Learner4 progress: matched={}, leader_last={}, lag={}", matched, last, last.saturating_sub(matched));
             }
             if n1.is_learner_caught_up(4).await.unwrap_or(false) {
                 break;
