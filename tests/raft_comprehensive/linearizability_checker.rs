@@ -1,3 +1,4 @@
+#![cfg(feature = "raft-rs-impl")]
 // Linearizability Checker - Jepsen-style formal safety verification
 //
 // This module implements a linearizability checker inspired by Jepsen's Knossos

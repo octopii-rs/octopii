@@ -1,3 +1,4 @@
+#![cfg(feature = "raft-rs-impl")]
 /// Comprehensive cluster scenario tests for Raft
 mod common;
 

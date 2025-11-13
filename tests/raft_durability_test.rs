@@ -1,3 +1,4 @@
+#![cfg(feature = "raft-rs-impl")]
 //! Comprehensive tests for Raft durability with Walrus
 //!
 //! These tests verify that all Raft state components survive crashes

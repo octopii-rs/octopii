@@ -1,3 +1,4 @@
+#![cfg(feature = "raft-rs-impl")]
 /// Integration tests for custom state machine replication
 ///
 /// These tests verify that:

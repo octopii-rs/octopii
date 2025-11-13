@@ -1,3 +1,4 @@
+#![cfg(feature = "raft-rs-impl")]
 // Investigation into rapid restart hanging issue
 //
 // This test file is dedicated to understanding why multiple rapid crash/restart

@@ -1,3 +1,4 @@
+#![cfg(feature = "raft-rs-impl")]
 use crate::common::*;
 use crate::test_infrastructure::alloc_port;
 use std::time::Duration;

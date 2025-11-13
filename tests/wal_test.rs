@@ -1,3 +1,4 @@
+#![cfg(feature = "raft-rs-impl")]
 use bytes::Bytes;
 use octopii::wal::WriteAheadLog;
 use protobuf::Message;

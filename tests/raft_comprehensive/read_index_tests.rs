@@ -1,3 +1,4 @@
+#![cfg(feature = "raft-rs-impl")]
 // Read Index integration tests - TiKV test parity
 //
 // Read Index enables linearizable reads without going through the Raft log.

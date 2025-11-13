@@ -1,3 +1,4 @@
+#![cfg(feature = "raft-rs-impl")]
 /// Core Raft test suite
 ///
 /// This test suite covers fundamental Raft functionality including:

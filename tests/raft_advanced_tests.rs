@@ -1,3 +1,4 @@
+#![cfg(feature = "raft-rs-impl")]
 /// Raft advanced features test suite
 ///
 /// This test suite covers advanced Raft features including:
