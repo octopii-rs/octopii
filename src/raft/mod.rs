@@ -392,6 +392,7 @@ impl RaftNode {
         }
 
         // Transition lagging peers to Snapshot state at commit_index
+        let mut any_changed = false;
         for pid in lagging_peers {
             if let Some(pr) = node.raft.mut_prs().get_mut(pid) {
                 pr.become_snapshot(commit_index);
@@ -402,16 +403,16 @@ impl RaftNode {
                     commit_index,
                     leader_last_index
                 );
+                any_changed = true;
             }
         }
 
-        // Ensure the ready loop is notified so snapshot messages are emitted promptly
-        if node.has_ready() {
-            self.ready_notify.notify_one();
-        } else {
-            // Even if has_ready() was false, changes to progress may cause outgoing messages
-            self.ready_notify.notify_one();
+        // Force immediate send so followers receive snapshot/appends without waiting for next tick
+        if any_changed {
+            node.raft.bcast_append();
         }
+        // Ensure the ready loop is notified so snapshot/append messages are emitted promptly
+        self.ready_notify.notify_one();
     }
 
     /// Expose raw_node for advanced operations
