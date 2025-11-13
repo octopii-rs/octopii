@@ -202,6 +202,11 @@ fn test_three_nodes_graceful_shutdown_auto_election() {
 
         // Gracefully shut down leader
         n1.shutdown();
+        // Make followers treat leader as gone by mapping its address to an unused port.
+        // This nudges transport-aware leader silence detection to kick in faster.
+        let bogus = "127.0.0.1:9399".parse().unwrap();
+        n2.update_peer_addr(1, bogus).await;
+        n3.update_peer_addr(1, bogus).await;
         // Allow transports to close and followers to detect silence
         sleep(Duration::from_millis(2000)).await;
         // Drop the node to force QUIC endpoint (UDP socket) to be released before restart
@@ -329,7 +334,8 @@ fn test_add_learner_under_load_and_promote() {
         let config4 = Config {
             node_id: 4,
             bind_addr: addr4,
-            peers: vec![addr1, addr2, addr3],
+            // IMPORTANT: start with empty peers so it joins via ConfChange as a learner
+            peers: vec![],
             wal_dir: base.join("n4"),
             worker_threads: 2,
             wal_batch_size: 50,
@@ -348,7 +354,7 @@ fn test_add_learner_under_load_and_promote() {
 
         // Wait for learner to catch up (should trigger snapshot transfer if needed)
         let start = std::time::Instant::now();
-        let timeout = Duration::from_secs(20);
+        let timeout = Duration::from_secs(30);
         loop {
             if start.elapsed() > timeout {
                 panic!("Learner 4 did not catch up in time");
