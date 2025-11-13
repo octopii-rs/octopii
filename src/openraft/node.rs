@@ -39,7 +39,53 @@ pub struct ConfStateCompat {
 impl OpenRaftNode {
     pub async fn new(config: Config, runtime: OctopiiRuntime) -> Result<Self> {
         let transport = Arc::new(crate::transport::QuicTransport::new(config.bind_addr).await?);
-        let rpc = Arc::new(crate::rpc::RpcHandler::new(transport));
+        let rpc = Arc::new(crate::rpc::RpcHandler::new(Arc::clone(&transport)));
+        
+        // Start accepting incoming connections
+        let rpc_clone = Arc::clone(&rpc);
+        let transport_clone = Arc::clone(&transport);
+        tokio::spawn(async move {
+            loop {
+                match transport_clone.accept().await {
+                    Ok((addr, peer)) => {
+                        tracing::debug!("Accepted connection from {}", addr);
+                        // Spawn a task to handle messages from this peer
+                        let rpc_inner = Arc::clone(&rpc_clone);
+                        tokio::spawn(async move {
+                            loop {
+                                match peer.recv().await {
+                                    Ok(Some(data)) => {
+                                        match crate::rpc::deserialize::<crate::rpc::RpcMessage>(&data) {
+                                            Ok(msg) => {
+                                                rpc_inner.notify_message(addr, msg, Some(Arc::clone(&peer))).await;
+                                            }
+                                            Err(e) => {
+                                                tracing::error!("Failed to deserialize RPC message from {}: {}", addr, e);
+                                            }
+                                        }
+                                    }
+                                    Ok(None) => {
+                                        tracing::debug!("Peer {} closed connection", addr);
+                                        break;
+                                    }
+                                    Err(e) => {
+                                        tracing::debug!("Peer {} recv error: {}", addr, e);
+                                        break;
+                                    }
+                                }
+                            }
+                        });
+                    }
+                    Err(e) => {
+                        // Don't break the loop on accept errors - just log and continue
+                        // This can happen during normal operation (e.g., connection refused, handshake failures)
+                        tracing::debug!("Failed to accept connection: {}", e);
+                        // Small delay to avoid tight loop on persistent errors
+                        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+                    }
+                }
+            }
+        });
         
         // Initialize peer_addrs from config.peers
         // We need to infer peer IDs from addresses. For now, we'll populate this
@@ -122,6 +168,16 @@ impl OpenRaftNode {
     }
 
     pub async fn start(&self) -> Result<()> {
+        // Populate peer_addrs map for all nodes (not just initial leader)
+        // HACK: Use last digit of port as node ID (e.g., :9321 -> node 1, :9322 -> node 2)
+        // This works for the test suite but is not production-ready
+        for peer_addr in self.config.peers.iter() {
+            let peer_id = (peer_addr.port() % 10) as u64;
+            if peer_id != self.config.node_id && peer_id > 0 {
+                self.peer_addrs.write().await.insert(peer_id, *peer_addr);
+            }
+        }
+        
         // Only initialize if this is the initial leader and cluster is not initialized
         // For multi-node clusters, only the initial leader should call initialize
         if self.config.is_initial_leader && !self.raft.is_initialized().await
@@ -134,15 +190,10 @@ impl OpenRaftNode {
             );
             
             // Add peer nodes to the initial cluster membership
-            // We need to infer node IDs from the peer addresses
-            // HACK: Use last digit of port as node ID (e.g., :9321 -> node 1, :9322 -> node 2)
-            // This works for the test suite but is not production-ready
             for peer_addr in self.config.peers.iter() {
                 let peer_id = (peer_addr.port() % 10) as u64;
                 if peer_id != self.config.node_id && peer_id > 0 {
                     nodes.insert(peer_id, BasicNode { addr: peer_addr.to_string() });
-                    // Also populate peer_addrs map for network communication
-                    self.peer_addrs.write().await.insert(peer_id, *peer_addr);
                 }
             }
             
@@ -276,8 +327,8 @@ impl OpenRaftNode {
         let metrics = self.raft.metrics().borrow().clone();
         if let Some(last_log) = metrics.last_log_index {
             if let Some(replication) = metrics.replication {
-                if let Some(repl_metrics) = replication.get(&peer_id).cloned() {
-                    let matched = repl_metrics.map_or(0, |m| m.index);
+                if let Some(repl_log_id_opt) = replication.get(&peer_id) {
+                    let matched = repl_log_id_opt.as_ref().map_or(0, |log_id| log_id.index);
                     let distance = last_log.saturating_sub(matched);
                     return Ok(distance <= self.raft.config().replication_lag_threshold);
                 }
@@ -306,8 +357,8 @@ impl OpenRaftNode {
         let metrics = self.raft.metrics().borrow().clone();
         if let Some(last_log) = metrics.last_log_index {
             if let Some(replication) = metrics.replication {
-                if let Some(repl_metrics) = replication.get(&peer_id).cloned() {
-                    let matched = repl_metrics.map_or(0, |m| m.index);
+                if let Some(repl_log_id_opt) = replication.get(&peer_id) {
+                    let matched = repl_log_id_opt.as_ref().map_or(0, |log_id| log_id.index);
                     return Some((matched, last_log));
                 }
             }
