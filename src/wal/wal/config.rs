@@ -81,7 +81,7 @@ pub(crate) fn checksum64(data: &[u8]) -> u64 {
 pub(crate) fn wal_data_dir() -> PathBuf {
     std::env::var_os("WALRUS_DATA_DIR")
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("wal_files"))
+        .unwrap_or_else(|| PathBuf::from("_octopii_wal_files"))
 }
 
 pub(crate) fn sanitize_namespace(key: &str) -> String {
