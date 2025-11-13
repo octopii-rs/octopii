@@ -1582,6 +1582,12 @@ impl OctopiiNode {
         self.peer_addrs.write().await.insert(peer_id, addr);
         tracing::info!("Updated address for peer {} -> {}", peer_id, addr);
     }
+
+    /// Get replication progress for a specific peer from the leader's perspective.
+    /// Returns (matched_index, leader_last_index) if known.
+    pub async fn peer_progress(&self, peer_id: u64) -> Option<(u64, u64)> {
+        self.raft.peer_progress(peer_id).await
+    }
 }
 
 impl Drop for OctopiiNode {
