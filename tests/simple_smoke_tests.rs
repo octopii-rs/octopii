@@ -364,7 +364,7 @@ fn test_add_learner_under_load_and_promote() {
                 panic!("Learner 4 did not catch up in time");
             }
             // Emit progress to aid diagnosis while waiting
-            if let Some((matched, last)) = n1.raft.peer_progress(4).await {
+            if let Some((matched, last)) = n1.peer_progress(4).await {
                 tracing::info!("Learner4 progress: matched={}, leader_last={}, lag={}", matched, last, last.saturating_sub(matched));
             }
             if n1.is_learner_caught_up(4).await.unwrap_or(false) {
