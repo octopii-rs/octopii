@@ -206,10 +206,35 @@ fn test_three_nodes_graceful_shutdown_auto_election() {
         n2.start().await.expect("start n2");
         n3.start().await.expect("start n3");
 
-        // Elect node1
+        // Step 1: Initialize node 1 as a single-node cluster
         n1.campaign().await.expect("n1 campaign");
-        sleep(Duration::from_secs(2)).await;
+        sleep(Duration::from_secs(1)).await;
         assert!(n1.is_leader().await, "n1 should be leader");
+
+        // Step 2: Add nodes 2 and 3 as learners
+        println!("[test] Adding node 2 as learner");
+        n1.add_learner(2, addr2).await.expect("add node 2 as learner");
+        sleep(Duration::from_millis(500)).await;
+
+        println!("[test] Adding node 3 as learner");
+        n1.add_learner(3, addr3).await.expect("add node 3 as learner");
+        sleep(Duration::from_millis(500)).await;
+
+        // TODO: Implement automatic peer address distribution in add_learner/promote_learner
+        // Currently, nodes only learn addresses from their initial peer list or manual updates.
+        // For follower-to-follower communication (e.g., elections), we must manually sync addresses.
+        println!("[test] Syncing peer addresses between followers");
+        n2.update_peer_addr(3, addr3).await;
+        n3.update_peer_addr(2, addr2).await;
+
+        // Step 3: Promote learners to voters (this makes them eligible for elections)
+        println!("[test] Promoting learners to voters");
+        n1.promote_learner(2).await.expect("promote node 2");
+        sleep(Duration::from_secs(1)).await;
+        n1.promote_learner(3).await.expect("promote node 3");
+        // Wait longer to ensure membership change is fully committed and replicated
+        sleep(Duration::from_secs(3)).await;
+        println!("[test] All nodes are now voters");
 
         // Make a couple of proposals to advance term/log slightly
         let _ = n1.propose(b"SET k v".to_vec()).await;
@@ -219,14 +244,9 @@ fn test_three_nodes_graceful_shutdown_auto_election() {
 
         // Gracefully shut down leader
         n1.shutdown();
-        // Make followers treat leader as gone by mapping its address to an unused port.
-        // This nudges transport-aware leader silence detection to kick in faster.
-        let bogus = "127.0.0.1:9399".parse().unwrap();
-        n2.update_peer_addr(1, bogus).await;
-        n3.update_peer_addr(1, bogus).await;
-        // Allow transports to close and followers to detect silence
-        sleep(Duration::from_millis(2000)).await;
-        // Drop the node to force QUIC endpoint (UDP socket) to be released before restart
+        // Allow followers to detect leader silence via heartbeat timeout
+        sleep(Duration::from_millis(3000)).await;
+        // Drop the node to force QUIC endpoint (UDP socket) to be released
         drop(n1);
 
         // Wait for automatic leader election (no manual campaign here)
@@ -234,16 +254,20 @@ fn test_three_nodes_graceful_shutdown_auto_election() {
         let timeout = Duration::from_secs(12);
         let mut new_leader: Option<u64> = None;
         while start.elapsed() < timeout {
-            if n2.is_leader().await {
+            let n2_leader = n2.is_leader().await;
+            let n3_leader = n3.is_leader().await;
+            println!("[test] Checking: n2.is_leader()={}, n3.is_leader()={}", n2_leader, n3_leader);
+            if n2_leader {
                 new_leader = Some(2);
                 break;
             }
-            if n3.is_leader().await {
+            if n3_leader {
                 new_leader = Some(3);
                 break;
             }
             sleep(Duration::from_millis(200)).await;
         }
+        println!("[test] After auto-election wait: new_leader={:?}", new_leader);
 
         // If no auto-election yet, nudge by having one follower campaign (diagnostic step closer)
         if new_leader.is_none() {
