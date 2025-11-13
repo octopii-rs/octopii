@@ -247,6 +247,135 @@ fn test_three_nodes_graceful_shutdown_auto_election() {
 }
 
 #[test]
+fn test_add_learner_under_load_and_promote() {
+    // Step closer to the comprehensive learner test:
+    // 3-node cluster under load, add a learner (node 4), wait for catch-up (snapshot or append),
+    // and then promote it to a voter.
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(4)
+        .enable_all()
+        .build()
+        .unwrap();
+
+    rt.block_on(async {
+        let base = PathBuf::from(std::env::temp_dir()).join("octopii_simple_smoke_learner");
+        let _ = std::fs::remove_dir_all(&base);
+
+        // Use fixed ports
+        let addr1 = "127.0.0.1:9351".parse().unwrap();
+        let addr2 = "127.0.0.1:9352".parse().unwrap();
+        let addr3 = "127.0.0.1:9353".parse().unwrap();
+        let addr4 = "127.0.0.1:9354".parse().unwrap();
+
+        let config1 = Config {
+            node_id: 1,
+            bind_addr: addr1,
+            peers: vec![addr2, addr3],
+            wal_dir: base.join("n1"),
+            worker_threads: 2,
+            wal_batch_size: 50,
+            wal_flush_interval_ms: 100,
+            is_initial_leader: true,
+            snapshot_lag_threshold: 50, // ensure snapshot triggers for lagging learner
+        };
+        let config2 = Config {
+            node_id: 2,
+            bind_addr: addr2,
+            peers: vec![addr1, addr3],
+            wal_dir: base.join("n2"),
+            worker_threads: 2,
+            wal_batch_size: 50,
+            wal_flush_interval_ms: 100,
+            is_initial_leader: false,
+            snapshot_lag_threshold: 50,
+        };
+        let config3 = Config {
+            node_id: 3,
+            bind_addr: addr3,
+            peers: vec![addr1, addr2],
+            wal_dir: base.join("n3"),
+            worker_threads: 2,
+            wal_batch_size: 50,
+            wal_flush_interval_ms: 100,
+            is_initial_leader: false,
+            snapshot_lag_threshold: 50,
+        };
+
+        let runtime = OctopiiRuntime::from_handle(tokio::runtime::Handle::current());
+        let n1 = OctopiiNode::new(config1.clone(), runtime.clone()).await.expect("create n1");
+        let n2 = OctopiiNode::new(config2.clone(), runtime.clone()).await.expect("create n2");
+        let n3 = OctopiiNode::new(config3.clone(), runtime.clone()).await.expect("create n3");
+
+        n1.start().await.expect("start n1");
+        n2.start().await.expect("start n2");
+        n3.start().await.expect("start n3");
+
+        // Elect node1 as leader
+        n1.campaign().await.expect("n1 campaign");
+        sleep(Duration::from_secs(2)).await;
+        assert!(n1.is_leader().await, "n1 should be leader");
+
+        // Generate some history before adding the learner
+        for i in 0..200usize {
+            let _ = n1.propose(format!("SET pre{} v{}", i, i).into_bytes()).await;
+            sleep(Duration::from_millis(5)).await;
+        }
+        sleep(Duration::from_millis(500)).await;
+
+        // Add learner node 4 via leader
+        n1.add_learner(4, addr4).await.expect("add learner");
+
+        // Create the learner node with peers pointing to the existing cluster
+        let config4 = Config {
+            node_id: 4,
+            bind_addr: addr4,
+            peers: vec![addr1, addr2, addr3],
+            wal_dir: base.join("n4"),
+            worker_threads: 2,
+            wal_batch_size: 50,
+            wal_flush_interval_ms: 100,
+            is_initial_leader: false,
+            snapshot_lag_threshold: 50,
+        };
+        let n4 = OctopiiNode::new(config4, runtime.clone()).await.expect("create n4");
+        n4.start().await.expect("start n4");
+
+        // Keep issuing proposals while learner catches up
+        for i in 200..400usize {
+            let _ = n1.propose(format!("SET mid{} v{}", i, i).into_bytes()).await;
+            sleep(Duration::from_millis(5)).await;
+        }
+
+        // Wait for learner to catch up (should trigger snapshot transfer if needed)
+        let start = std::time::Instant::now();
+        let timeout = Duration::from_secs(20);
+        loop {
+            if start.elapsed() > timeout {
+                panic!("Learner 4 did not catch up in time");
+            }
+            if n1.is_learner_caught_up(4).await.unwrap_or(false) {
+                break;
+            }
+            sleep(Duration::from_millis(200)).await;
+        }
+
+        // Promote learner 4 to voter
+        n1.promote_learner(4).await.expect("promote learner");
+        sleep(Duration::from_secs(1)).await;
+
+        // Sanity: cluster should still have a leader; propose a few entries
+        assert!(n1.has_leader().await, "cluster should have a leader");
+        for i in 400..420usize {
+            let _ = n1.propose(format!("SET post{} v{}", i, i).into_bytes()).await;
+            sleep(Duration::from_millis(5)).await;
+        }
+
+        // Cleanup
+        let _ = tokio::fs::remove_dir_all(&base).await;
+    });
+}
+
+#[test]
 fn test_three_nodes_crash_leader_with_load_and_restart_auto_election() {
     // Step even closer: run load, kill the leader, expect auto-election,
     // then restart the old leader and ensure the cluster remains stable.
