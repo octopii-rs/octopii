@@ -27,6 +27,8 @@ pub struct RpcRequest {
 pub enum RequestPayload {
     /// Generic Raft message serialized via protobuf
     RaftMessage { message: Bytes },
+    /// OpenRaft generic message (serde) - kind indicates RPC type
+    OpenRaft { kind: String, data: Bytes },
     /// Custom application-level request
     Custom { operation: String, data: Bytes },
 }

@@ -1,3 +1,4 @@
+#![cfg(feature = "raft-rs-impl")]
 /// Comprehensive Raft test suite
 ///
 /// This test suite provides extensive coverage of Raft implementation including:

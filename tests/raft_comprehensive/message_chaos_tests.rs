@@ -1,3 +1,4 @@
+#![cfg(feature = "raft-rs-impl")]
 /// Message chaos tests: Testing Raft under adverse network conditions
 ///
 /// These tests verify that Raft correctly handles:

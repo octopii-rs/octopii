@@ -1,3 +1,4 @@
+#![cfg(feature = "raft-rs-impl")]
 /// Batch operation tests
 mod common;
 

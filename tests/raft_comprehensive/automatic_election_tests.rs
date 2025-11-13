@@ -1,3 +1,4 @@
+#![cfg(feature = "raft-rs-impl")]
 /// Automatic leader election tests
 mod common;
 

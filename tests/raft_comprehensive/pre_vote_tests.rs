@@ -1,3 +1,4 @@
+#![cfg(feature = "raft-rs-impl")]
 /// Pre-vote protocol tests
 mod common;
 

@@ -1,3 +1,4 @@
+#![cfg(feature = "raft-rs-impl")]
 /// Consistency verification tests: linearizability, convergence, state machine correctness
 mod common;
 

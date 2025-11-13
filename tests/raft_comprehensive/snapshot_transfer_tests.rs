@@ -1,3 +1,4 @@
+#![cfg(feature = "raft-rs-impl")]
 /// Snapshot transfer tests
 mod common;
 
