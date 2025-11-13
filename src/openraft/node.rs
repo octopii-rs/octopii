@@ -3,6 +3,8 @@
 use crate::config::Config;
 use crate::error::Result;
 use crate::openraft::network::{InProcNetwork, QuinnNetwork};
+#[cfg(feature = "openraft-filters")]
+use crate::openraft::network::OpenRaftFilters;
 use crate::openraft::storage::{MemStorage, WalStorageAdapter};
 use crate::openraft::types::{AppEntry, AppResponse, AppSnapshot, AppNodeId};
 use crate::runtime::OctopiiRuntime;
@@ -27,6 +29,8 @@ pub struct OpenRaftNode {
 	wal: Arc<WalStorageAdapter>,
 	state_machine: StateMachine,
 	peer_addrs: Arc<RwLock<std::collections::HashMap<u64, SocketAddr>>>,
+	#[cfg(feature = "openraft-filters")]
+	filters: Arc<OpenRaftFilters>,
 }
 
 /// Minimal configuration state used by tests to print voters/learners.
@@ -41,7 +45,15 @@ impl OpenRaftNode {
 		let transport = Arc::new(crate::transport::QuicTransport::new(config.bind_addr).await?);
 		let rpc = Arc::new(crate::rpc::RpcHandler::new(transport));
 		let peer_addrs = Arc::new(RwLock::new(std::collections::HashMap::new()));
-		let network = Arc::new(QuinnNetwork::new(Arc::clone(&rpc), Arc::clone(&peer_addrs)));
+		#[cfg(feature = "openraft-filters")]
+		let filters = Arc::new(OpenRaftFilters::new());
+		let network = Arc::new(QuinnNetwork::new(
+			Arc::clone(&rpc),
+			Arc::clone(&peer_addrs),
+			config.node_id,
+			#[cfg(feature = "openraft-filters")]
+			Arc::clone(&filters),
+		));
 		// Initialize WAL and adapter
 		let wal_path = config.wal_dir.join(format!("node_{}.wal", config.node_id));
 		let wal = Arc::new(
@@ -53,25 +65,16 @@ impl OpenRaftNode {
 			.await?,
 		);
 		let wal_adapter = Arc::new(WalStorageAdapter::new(wal));
-		// Register a minimal OpenRaft RPC handler (no-op ACK) to keep network happy.
+		// Register an OpenRaft RPC handler that echoes back bytes per kind.
 		let rpc_clone = Arc::clone(&rpc);
-		let storage_clone = Arc::clone(&storage);
+		let _storage_clone = Arc::clone(&storage);
 		rpc_clone
 			.set_request_handler(move |req| match req.payload {
 				crate::rpc::RequestPayload::OpenRaft { kind, data } => {
-					// Minimal dispatch: handle append/vote/install_snapshot synchronously against MemStorage.
 					match kind.as_str() {
-						"append" => {
-							storage_clone.append(crate::openraft::types::AppEntry(data.to_vec()));
-							crate::rpc::ResponsePayload::AppendEntriesResponse { term: 0, success: true }
-						}
-						"install_snapshot" => {
-							storage_clone.install_snapshot(data.to_vec());
-							crate::rpc::ResponsePayload::SnapshotResponse { term: 0, success: true }
-						}
-						"vote" => {
-							crate::rpc::ResponsePayload::RequestVoteResponse { term: 0, vote_granted: true }
-						}
+						"append_entries" => crate::rpc::ResponsePayload::OpenRaft { kind, data },
+						"install_snapshot" => crate::rpc::ResponsePayload::OpenRaft { kind, data },
+						"vote" => crate::rpc::ResponsePayload::OpenRaft { kind, data },
 						_ => crate::rpc::ResponsePayload::CustomResponse { success: false, data: bytes::Bytes::new() },
 					}
 				}
@@ -87,6 +90,8 @@ impl OpenRaftNode {
 			wal: wal_adapter,
 			state_machine,
 			peer_addrs,
+			#[cfg(feature = "openraft-filters")]
+			filters,
 		})
 	}
 
@@ -114,9 +119,17 @@ impl OpenRaftNode {
 		let transport = Arc::new(crate::transport::QuicTransport::new(config.bind_addr).await?);
 		let rpc = Arc::new(crate::rpc::RpcHandler::new(transport));
 		let peer_addrs = Arc::new(RwLock::new(std::collections::HashMap::new()));
-		let network = Arc::new(QuinnNetwork::new(Arc::clone(&rpc), Arc::clone(&peer_addrs)));
+		#[cfg(feature = "openraft-filters")]
+		let filters = Arc::new(OpenRaftFilters::new());
+		let network = Arc::new(QuinnNetwork::new(
+			Arc::clone(&rpc),
+			Arc::clone(&peer_addrs),
+			config.node_id,
+			#[cfg(feature = "openraft-filters")]
+			Arc::clone(&filters),
+		));
 		let rpc_clone = Arc::clone(&rpc);
-		let storage_clone = Arc::clone(&storage);
+		let _storage_clone = Arc::clone(&storage);
 		// Initialize WAL and adapter
 		let wal_path = config.wal_dir.join(format!("node_{}.wal", config.node_id));
 		let wal = Arc::new(
@@ -128,21 +141,14 @@ impl OpenRaftNode {
 			.await?,
 		);
 		let wal_adapter = Arc::new(WalStorageAdapter::new(wal));
+		// Register an OpenRaft RPC handler that echoes back bytes per kind.
 		rpc_clone
 			.set_request_handler(move |req| match req.payload {
 				crate::rpc::RequestPayload::OpenRaft { kind, data } => {
 					match kind.as_str() {
-						"append" => {
-							storage_clone.append(crate::openraft::types::AppEntry(data.to_vec()));
-							crate::rpc::ResponsePayload::AppendEntriesResponse { term: 0, success: true }
-						}
-						"install_snapshot" => {
-							storage_clone.install_snapshot(data.to_vec());
-							crate::rpc::ResponsePayload::SnapshotResponse { term: 0, success: true }
-						}
-						"vote" => {
-							crate::rpc::ResponsePayload::RequestVoteResponse { term: 0, vote_granted: true }
-						}
+						"append_entries" => crate::rpc::ResponsePayload::OpenRaft { kind, data },
+						"install_snapshot" => crate::rpc::ResponsePayload::OpenRaft { kind, data },
+						"vote" => crate::rpc::ResponsePayload::OpenRaft { kind, data },
 						_ => crate::rpc::ResponsePayload::CustomResponse { success: false, data: bytes::Bytes::new() },
 					}
 				}
@@ -157,6 +163,8 @@ impl OpenRaftNode {
 			wal: wal_adapter,
 			state_machine,
 			peer_addrs,
+			#[cfg(feature = "openraft-filters")]
+			filters,
 		})
 	}
 
@@ -190,7 +198,7 @@ impl OpenRaftNode {
 			let network = Arc::clone(&self.network);
 			let data = command.clone();
 			tokio::spawn(async move {
-				let _ = network.send_openraft(pid, "append", data).await;
+				let _ = network.send_openraft(pid, "append_entries", data).await;
 			});
 		}
 		Ok(res)
@@ -277,6 +285,28 @@ impl OpenRaftNode {
 
 	pub fn shutdown(&self) {
 		// TODO(openraft): graceful shutdown
+	}
+
+	// ------------------------------------------------------------
+	// OpenRaft test filters (opt-in): simple drop/delay/partition
+	// ------------------------------------------------------------
+	#[cfg(feature = "openraft-filters")]
+	pub async fn clear_send_filters(&self) {
+		self.filters.clear().await;
+	}
+	#[cfg(feature = "openraft-filters")]
+	pub async fn add_send_drop_to(&self, to: u64) {
+		self.filters.drop_pairs.write().await.insert((self.config.node_id, to));
+	}
+	#[cfg(feature = "openraft-filters")]
+	pub async fn add_send_delay_to(&self, to: u64, delay: Duration) {
+		self.filters.delay_pairs.write().await.insert((self.config.node_id, to), delay);
+	}
+	#[cfg(feature = "openraft-filters")]
+	pub async fn add_partition(&self, group1: Vec<u64>, group2: Vec<u64>) {
+		let g1: std::collections::HashSet<u64> = group1.into_iter().collect();
+		let g2: std::collections::HashSet<u64> = group2.into_iter().collect();
+		self.filters.partitions.write().await.push((g1, g2));
 	}
 }
 

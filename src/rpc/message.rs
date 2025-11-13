@@ -49,6 +49,8 @@ pub enum ResponsePayload {
     RequestVoteResponse { term: u64, vote_granted: bool },
     /// Snapshot response
     SnapshotResponse { term: u64, success: bool },
+    /// OpenRaft generic response (serde) - kind indicates RPC type
+    OpenRaft { kind: String, data: Bytes },
     /// Custom application response
     CustomResponse { success: bool, data: Bytes },
     /// Error response
