@@ -1121,8 +1121,8 @@ impl OctopiiNode {
                                 );
                                 // Debounce manual campaign
                                 if last_manual_campaign.elapsed() > Duration::from_millis(750) {
-                                    if let Err(e) = raft.campaign().await {
-                                        tracing::error!("Failed to start election campaign: {}", e);
+                                if let Err(e) = raft.campaign().await {
+                                    tracing::error!("Failed to start election campaign: {}", e);
                                     } else {
                                         tracing::info!("Started manual election campaign due to leader silence");
                                         last_manual_campaign = Instant::now();
@@ -1396,12 +1396,12 @@ impl OctopiiNode {
                         tracing::debug!("Sending Raft message to peer {}: {:?} -> {}", to, msg_type, peer_addr);
                         println!(
                             "[send] to={} type={:?} addr={} index={} commit={}",
-                            to,
-                            msg_type,
+                        to,
+                        msg_type,
                             peer_addr,
                             msg.index,
                             msg.commit
-                        );
+                    );
                     }
 
                     let rpc_clone = Arc::clone(rpc);

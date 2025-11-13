@@ -1,11 +1,18 @@
 #![cfg(feature = "openraft")]
 
 use serde::{Deserialize, Serialize};
+use std::io::Cursor;
 
 /// Application entry payload for OpenRaft.
 /// Keep it simple: raw bytes of a command.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AppEntry(pub Vec<u8>);
+
+impl std::fmt::Display for AppEntry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "AppEntry({} bytes)", self.0.len())
+    }
+}
 
 /// Application response for writes.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -18,10 +25,12 @@ pub type AppSnapshot = Vec<u8>;
 pub type AppNodeId = u64;
 
 /// OpenRaft type configuration for Octopii.
-///
-/// NOTE: This mirrors OpenRaft's TypeConfig associated types without binding
-/// too tightly to details here. Actual trait impls live in storage/network.
-pub struct AppTypeConfig;
+openraft::declare_raft_types!(
+    pub AppTypeConfig:
+        D = AppEntry,
+        R = AppResponse,
+        NodeId = AppNodeId,
+);
 
 
 

@@ -24,7 +24,7 @@ rand = "0.8"
 rkyv = "0.7"
 memmap2 = "0.9"
 libc = "0.2"
-openraft = { version = "0.9", default-features = false, optional = true, features = ["serde"] }
+openraft = { path = "openraft/openraft", default-features = false, optional = true, features = ["serde", "type-alias", "tokio-rt"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 io-uring = "0.6"
