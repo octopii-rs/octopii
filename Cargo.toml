@@ -40,5 +40,4 @@ unused = "allow"
 # Default to OpenRaft implementation
 default = ["openraft"]
 openraft = ["dep:openraft"]
-raft-rs-impl = []
 openraft-filters = []
