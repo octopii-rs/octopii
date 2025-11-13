@@ -1,6 +1,11 @@
-#![cfg(feature = "raft-rs-impl")]
-use crate::common::*;
-use crate::test_infrastructure::alloc_port;
+#[path = "../test_infrastructure/mod.rs"]
+#[macro_use]
+mod test_infrastructure;
+#[path = "common.rs"]
+mod common;
+
+use common::*;
+use test_infrastructure::alloc_port;
 use std::time::Duration;
 
 /// Basic 3-node cluster test - like TiKV's test_put
