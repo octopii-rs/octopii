@@ -1,144 +1,365 @@
 #![cfg(feature = "openraft")]
 
-use crate::openraft::types::{AppEntry, AppResponse, AppSnapshot};
-use crate::wal::WriteAheadLog;
+use crate::openraft::types::{AppEntry, AppResponse, AppNodeId, AppTypeConfig};
+use crate::state_machine::StateMachine;
 use std::sync::Arc;
-use bytes::Bytes;
+use std::collections::BTreeMap;
+use std::ops::RangeBounds;
+use std::fmt::Debug;
+use openraft::{
+    Entry, LogId, RaftTypeConfig, StoredMembership,
+    storage::{Snapshot, SnapshotMeta, RaftLogStorage, RaftStateMachine, RaftSnapshotBuilder, LogState, IOFlushed, EntryResponder},
+    alias::SnapshotDataOf,
+    StorageError, EntryPayload, RaftLogReader, OptionalSend,
+};
+use std::io::{self, Cursor};
+use futures::{Stream, TryStreamExt};
+use std::sync::atomic::{AtomicU64, Ordering};
 
-/// Minimal, in-memory storage to get OpenRaft running for tests.
-///
-/// TODO(wal): Replace with a WAL-backed adapter that persists logs, votes,
-/// membership and snapshots via existing Walrus APIs.
-#[derive(Clone, Default)]
-pub struct MemStorage {
-	entries: Arc<tokio::sync::RwLock<Vec<AppEntry>>>,
-	snapshot: Arc<tokio::sync::RwLock<AppSnapshot>>,
+// --- Log Store ---
+#[derive(Clone, Debug, Default)]
+pub struct MemLogStore {
+    inner: Arc<tokio::sync::Mutex<MemLogStoreInner>>,
 }
 
-impl MemStorage {
-	pub fn new() -> Self {
-		Self::default()
-	}
-
-	pub fn append(&self, e: AppEntry) {
-		let mut g = self.entries.blocking_write();
-		g.push(e);
-	}
-
-	pub fn snapshot(&self) -> AppSnapshot {
-		self.snapshot.blocking_read().clone()
-	}
-
-	pub fn install_snapshot(&self, snap: AppSnapshot) {
-		*self.snapshot.blocking_write() = snap;
-	}
+#[derive(Debug)]
+struct MemLogStoreInner {
+    last_purged_log_id: Option<LogId<AppTypeConfig>>,
+    log: BTreeMap<u64, Entry<AppTypeConfig>>,
+    committed: Option<LogId<AppTypeConfig>>,
+    vote: Option<openraft::Vote<AppTypeConfig>>,
 }
 
-/// WAL-backed storage adapter skeleton.
-///
-/// TODO(wal): Implement OpenRaft RaftStorage over Walrus. Keep this type here
-/// to outline the integration path; not used until we flip from MemStorage.
-#[allow(dead_code)]
-pub struct WalStorageAdapter {
-	_wal: Arc<WriteAheadLog>,
+impl Default for MemLogStoreInner {
+    fn default() -> Self {
+        Self {
+            last_purged_log_id: None,
+            log: BTreeMap::new(),
+            committed: None,
+            vote: None,
+        }
+    }
 }
 
-#[allow(dead_code)]
-impl WalStorageAdapter {
-	pub fn new(wal: Arc<WriteAheadLog>) -> Self {
-		Self { _wal: wal }
-	}
+impl MemLogStoreInner {
+    async fn try_get_log_entries<RB: RangeBounds<u64> + Clone + Debug>(
+        &mut self,
+        range: RB,
+    ) -> Result<Vec<Entry<AppTypeConfig>>, io::Error> {
+        let response = self.log.range(range.clone()).map(|(_, val)| val.clone()).collect::<Vec<_>>();
+        Ok(response)
+    }
 
-	/// Append a serialized log entry to WAL.
-	pub async fn append(&self, data: Vec<u8>) -> crate::error::Result<()> {
-		// Prefix with "log:" to distinguish from metadata records
-		let mut rec = Vec::with_capacity(4 + data.len());
-		rec.extend_from_slice(b"log:");
-		rec.extend_from_slice(&data);
-		self._wal.append(Bytes::from(rec)).await?;
-		Ok(())
-	}
+    async fn get_log_state(&mut self) -> Result<LogState<AppTypeConfig>, io::Error> {
+        let last = self.log.iter().next_back().map(|(_, ent)| ent.log_id);
 
-	/// Flush pending WAL writes.
-	pub async fn flush(&self) -> crate::error::Result<()> {
-		self._wal.flush().await?;
-		Ok(())
-	}
+        let last_purged = self.last_purged_log_id.clone();
 
-	/// Read back all WAL entries (testing helper).
-	pub async fn read_all(&self) -> crate::error::Result<Vec<bytes::Bytes>> {
-		self._wal.read_all().await
-	}
+        let last = match last {
+            None => last_purged.clone(),
+            Some(x) => Some(x),
+        };
 
-	/// Persist vote/membership metadata snapshots by writing a small record.
-	pub async fn persist_metadata(&self, key: &str, data: Vec<u8>) -> crate::error::Result<()> {
-		// Prefix the record to distinguish metadata logically.
-		let mut rec = Vec::with_capacity(8 + data.len());
-		rec.extend_from_slice(key.as_bytes());
-		rec.extend_from_slice(&data);
-		self._wal.append(Bytes::from(rec)).await?;
-		self._wal.flush().await?;
-		Ok(())
-	}
+        Ok(LogState {
+            last_purged_log_id: last_purged,
+            last_log_id: last,
+        })
+    }
 
-	/// Persist a snapshot image into WAL snapshot topic through state machine serializer.
-	pub async fn install_snapshot(&self, snapshot: AppSnapshot) -> crate::error::Result<()> {
-		// Leverage existing WalStorage snapshot application path by writing a record;
-		// actual OpenRaft path will stream chunks; this is a minimal placeholder.
-		self._wal.append(Bytes::from(snapshot)).await?;
-		self._wal.flush().await?;
-		Ok(())
-	}
+    async fn save_committed(&mut self, committed: Option<LogId<AppTypeConfig>>) -> Result<(), io::Error> {
+        self.committed = committed;
+        Ok(())
+    }
 
-	/// Read last persisted vote (term, voted_for) if any.
-	pub async fn read_vote(&self) -> crate::error::Result<Option<(u64, u64)>> {
-		let all = self._wal.read_all().await?;
-		let mut last: Option<(u64, u64)> = None;
-		for rec in all {
-			if rec.len() >= 5 && &rec[..5] == b"vote:" {
-				// decode two u64 via bincode
-				if let Ok((t, v)) = bincode::deserialize::<(u64, u64)>(&rec[5..]) {
-					last = Some((t, v));
-				}
-			}
-		}
-		Ok(last)
-	}
+    async fn read_committed(&mut self) -> Result<Option<LogId<AppTypeConfig>>, io::Error> {
+        Ok(self.committed.clone())
+    }
 
-	/// Save vote (term, voted_for).
-	pub async fn save_vote(&self, term: u64, voted_for: u64) -> crate::error::Result<()> {
-		let bytes = bincode::serialize(&(term, voted_for))
-			.map_err(|e| crate::error::OctopiiError::Wal(format!("vote encode: {e}")))?;
-		self.persist_metadata("vote:", bytes).await
-	}
+    async fn save_vote(&mut self, vote: &openraft::Vote<AppTypeConfig>) -> Result<(), io::Error> {
+        self.vote = Some(vote.clone());
+        Ok(())
+    }
 
-	/// Read last persisted membership (raw bytes) if any.
-	pub async fn read_membership(&self) -> crate::error::Result<Option<Vec<u8>>> {
-		let all = self._wal.read_all().await?;
-		let mut last: Option<Vec<u8>> = None;
-		for rec in all {
-			if rec.len() >= 11 && &rec[..11] == b"membership:" {
-				last = Some(rec[11..].to_vec());
-			}
-		}
-		Ok(last)
-	}
+    async fn read_vote(&mut self) -> Result<Option<openraft::Vote<AppTypeConfig>>, io::Error> {
+        Ok(self.vote.clone())
+    }
 
-	/// Save membership (raw bytes).
-	pub async fn save_membership(&self, membership_bytes: Vec<u8>) -> crate::error::Result<()> {
-		self.persist_metadata("membership:", membership_bytes).await
-	}
+    async fn append<I>(&mut self, entries: I, callback: IOFlushed<AppTypeConfig>) -> Result<(), io::Error>
+    where I: IntoIterator<Item = Entry<AppTypeConfig>> {
+        for entry in entries {
+            self.log.insert(entry.log_id.index, entry);
+        }
+        callback.io_completed(Ok(())).await;
+        Ok(())
+    }
 
-	/// Read back all log entries (raw payloads) in order.
-	pub async fn read_log_entries(&self) -> crate::error::Result<Vec<Vec<u8>>> {
-		let all = self._wal.read_all().await?;
-		let mut entries = Vec::new();
-		for rec in all {
-			if rec.len() >= 4 && &rec[..4] == b"log:" {
-				entries.push(rec[4..].to_vec());
-			}
-		}
-		Ok(entries)
-	}
+    async fn truncate(&mut self, log_id: LogId<AppTypeConfig>) -> Result<(), io::Error> {
+        let keys = self.log.range(log_id.index..).map(|(k, _v)| *k).collect::<Vec<_>>();
+        for key in keys {
+            self.log.remove(&key);
+        }
+        Ok(())
+    }
+
+    async fn purge(&mut self, log_id: LogId<AppTypeConfig>) -> Result<(), io::Error> {
+        {
+            let ld = &mut self.last_purged_log_id;
+            assert!(ld.as_ref() <= Some(&log_id));
+            *ld = Some(log_id.clone());
+        }
+
+        {
+            let keys = self.log.range(..=log_id.index).map(|(k, _v)| *k).collect::<Vec<_>>();
+            for key in keys {
+                self.log.remove(&key);
+            }
+        }
+
+        Ok(())
+    }
 }
 
+impl MemLogStore {
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+impl RaftLogReader<AppTypeConfig> for MemLogStore {
+    async fn try_get_log_entries<RB: RangeBounds<u64> + Clone + Debug + Send>(
+        &mut self,
+        range: RB,
+    ) -> Result<Vec<Entry<AppTypeConfig>>, io::Error> {
+        let mut inner = self.inner.lock().await;
+        inner.try_get_log_entries(range).await
+    }
+
+    async fn read_vote(&mut self) -> Result<Option<openraft::Vote<AppTypeConfig>>, io::Error> {
+        let mut inner = self.inner.lock().await;
+        inner.read_vote().await
+    }
+}
+
+impl RaftLogStorage<AppTypeConfig> for MemLogStore {
+    type LogReader = Self;
+
+    async fn get_log_state(&mut self) -> Result<LogState<AppTypeConfig>, io::Error> {
+        let mut inner = self.inner.lock().await;
+        inner.get_log_state().await
+    }
+
+    async fn save_committed(&mut self, committed: Option<LogId<AppTypeConfig>>) -> Result<(), io::Error> {
+        let mut inner = self.inner.lock().await;
+        inner.save_committed(committed).await
+    }
+
+    async fn read_committed(&mut self) -> Result<Option<LogId<AppTypeConfig>>, io::Error> {
+        let mut inner = self.inner.lock().await;
+        inner.read_committed().await
+    }
+
+    async fn save_vote(&mut self, vote: &openraft::Vote<AppTypeConfig>) -> Result<(), io::Error> {
+        let mut inner = self.inner.lock().await;
+        inner.save_vote(vote).await
+    }
+
+    async fn append<I>(&mut self, entries: I, callback: IOFlushed<AppTypeConfig>) -> Result<(), io::Error>
+    where
+        I: IntoIterator<Item = Entry<AppTypeConfig>> + OptionalSend,
+        I::IntoIter: OptionalSend,
+    {
+        let mut inner = self.inner.lock().await;
+        inner.append(entries, callback).await
+    }
+
+    async fn truncate(&mut self, log_id: LogId<AppTypeConfig>) -> Result<(), io::Error> {
+        let mut inner = self.inner.lock().await;
+        inner.truncate(log_id).await
+    }
+
+    async fn purge(&mut self, log_id: LogId<AppTypeConfig>) -> Result<(), io::Error> {
+        let mut inner = self.inner.lock().await;
+        inner.purge(log_id).await
+    }
+
+    async fn get_log_reader(&mut self) -> Self::LogReader {
+        self.clone()
+    }
+}
+
+// --- State Machine Store ---
+#[derive(Debug, Clone)]
+pub struct StoredSnapshot {
+    pub meta: SnapshotMeta<AppTypeConfig>,
+    pub data: Vec<u8>,
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct StateMachineData {
+    pub last_applied_log: Option<LogId<AppTypeConfig>>,
+    pub last_membership: StoredMembership<AppTypeConfig>,
+    pub data: BTreeMap<String, String>,
+}
+
+pub struct MemStateMachine {
+    sm: StateMachine,
+    state_machine: tokio::sync::RwLock<StateMachineData>,
+    snapshot_idx: AtomicU64,
+    current_snapshot: tokio::sync::RwLock<Option<StoredSnapshot>>,
+}
+
+impl MemStateMachine {
+    pub fn new(sm: StateMachine) -> Arc<Self> {
+        Arc::new(Self {
+            sm,
+            state_machine: tokio::sync::RwLock::new(StateMachineData::default()),
+            snapshot_idx: AtomicU64::new(0),
+            current_snapshot: tokio::sync::RwLock::new(None),
+        })
+    }
+}
+
+impl RaftSnapshotBuilder<AppTypeConfig> for Arc<MemStateMachine> {
+    async fn build_snapshot(&mut self) -> Result<Snapshot<AppTypeConfig>, io::Error> {
+        let state_machine = self.state_machine.read().await;
+        let data = bincode::serialize(&state_machine.data)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+
+        let last_applied_log = state_machine.last_applied_log;
+        let last_membership = state_machine.last_membership.clone();
+
+        let mut current_snapshot = self.current_snapshot.write().await;
+        drop(state_machine);
+
+        let snapshot_idx = self.snapshot_idx.fetch_add(1, Ordering::Relaxed) + 1;
+        let snapshot_id = if let Some(last) = last_applied_log {
+            format!("{}-{}-{}", last.leader_id.node_id, last.index, snapshot_idx)
+        } else {
+            format!("--{}", snapshot_idx)
+        };
+
+        let meta = SnapshotMeta {
+            last_log_id: last_applied_log,
+            last_membership,
+            snapshot_id,
+        };
+
+        let snapshot = StoredSnapshot {
+            meta: meta.clone(),
+            data: data.clone(),
+        };
+
+        *current_snapshot = Some(snapshot);
+
+        Ok(Snapshot {
+            meta,
+            snapshot: Cursor::new(data),
+        })
+    }
+}
+
+impl RaftStateMachine<AppTypeConfig> for Arc<MemStateMachine> {
+    type SnapshotBuilder = Self;
+
+    async fn applied_state(
+        &mut self,
+    ) -> Result<(Option<LogId<AppTypeConfig>>, StoredMembership<AppTypeConfig>), io::Error> {
+        let state_machine = self.state_machine.read().await;
+        Ok((state_machine.last_applied_log, state_machine.last_membership.clone()))
+    }
+
+    async fn apply<Strm>(&mut self, mut entries: Strm) -> Result<(), io::Error>
+    where
+        Strm: Stream<Item = Result<EntryResponder<AppTypeConfig>, io::Error>> + Unpin + OptionalSend,
+    {
+        let mut sm = self.state_machine.write().await;
+
+        while let Some((entry, responder)) = entries.try_next().await? {
+            sm.last_applied_log = Some(entry.log_id);
+
+            let response = match entry.payload {
+                EntryPayload::Blank => AppResponse(Vec::new()),
+                EntryPayload::Normal(ref data) => {
+                    let result = self.sm.apply(&data.0)
+                        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+                    AppResponse(result.to_vec())
+                }
+                EntryPayload::Membership(ref mem) => {
+                    sm.last_membership = StoredMembership::new(Some(entry.log_id), mem.clone());
+                    AppResponse(Vec::new())
+                }
+            };
+
+            if let Some(responder) = responder {
+                responder.send(response);
+            }
+        }
+        Ok(())
+    }
+
+    async fn begin_receiving_snapshot(&mut self) -> Result<SnapshotDataOf<AppTypeConfig>, io::Error> {
+        Ok(Cursor::new(Vec::new()))
+    }
+
+    async fn install_snapshot(
+        &mut self,
+        meta: &SnapshotMeta<AppTypeConfig>,
+        snapshot: SnapshotDataOf<AppTypeConfig>,
+    ) -> Result<(), io::Error> {
+        let new_snapshot = StoredSnapshot {
+            meta: meta.clone(),
+            data: snapshot.into_inner(),
+        };
+
+        let updated_state_machine_data: BTreeMap<String, String> = bincode::deserialize(&new_snapshot.data)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        
+        let updated_state_machine = StateMachineData {
+            last_applied_log: meta.last_log_id,
+            last_membership: meta.last_membership.clone(),
+            data: updated_state_machine_data.clone(),
+        };
+        
+        let mut state_machine = self.state_machine.write().await;
+        *state_machine = updated_state_machine;
+
+        let mut current_snapshot = self.current_snapshot.write().await;
+        drop(state_machine);
+
+        // Also restore into the state machine
+        let snapshot_bytes = bincode::serialize(&updated_state_machine_data)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        self.sm.restore(&snapshot_bytes)
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+
+        *current_snapshot = Some(new_snapshot);
+        Ok(())
+    }
+
+    async fn get_current_snapshot(&mut self) -> Result<Option<Snapshot<AppTypeConfig>>, io::Error> {
+        match &*self.current_snapshot.read().await {
+            Some(snapshot) => {
+                let data = snapshot.data.clone();
+                Ok(Some(Snapshot {
+                    meta: snapshot.meta.clone(),
+                    snapshot: Cursor::new(data),
+                }))
+            }
+            None => Ok(None),
+        }
+    }
+
+    async fn get_snapshot_builder(&mut self) -> Self::SnapshotBuilder {
+        self.clone()
+    }
+}
+
+/// Helper to create a new memory log store
+pub fn new_mem_log_store() -> MemLogStore {
+    MemLogStore::new()
+}
+
+/// Helper to create a new memory state machine
+pub fn new_mem_state_machine(sm: StateMachine) -> Arc<MemStateMachine> {
+    MemStateMachine::new(sm)
+}
