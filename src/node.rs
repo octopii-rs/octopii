@@ -1204,7 +1204,7 @@ impl OctopiiNode {
             // CRITICAL: Send ready.messages() FIRST, before any persistence operations.
             // These are immediate messages (votes, heartbeats, etc.) that must go out immediately.
             // This is the TiKV/raft-rs pattern - see raft-rs/examples/five_mem_node/main.rs:264-267
-            Self::send_raft_messages(ready.take_messages(), rpc, peer_addrs, send_filters).await;
+            Self::send_raft_messages(&raft, ready.take_messages(), rpc, peer_addrs, send_filters).await;
 
             // Apply snapshot if present (must happen before persisting entries)
             if !ready.snapshot().is_empty() {
@@ -1291,6 +1291,7 @@ impl OctopiiNode {
             // These messages (like MsgAppend with newly persisted entries) depend on persistence.
             // This unblocks log replication - followers won't hear about new entries until these go out.
             Self::send_raft_messages(
+                &raft,
                 ready.take_persisted_messages(),
                 rpc,
                 peer_addrs,
@@ -1307,7 +1308,7 @@ impl OctopiiNode {
             );
 
             // Send LightReady messages first (raft-rs pattern: line 341 before 343)
-            Self::send_raft_messages(light_rd.take_messages(), rpc, peer_addrs, send_filters).await;
+            Self::send_raft_messages(&raft, light_rd.take_messages(), rpc, peer_addrs, send_filters).await;
 
             // Then apply LightReady committed entries
             let light_committed = light_rd.take_committed_entries();
@@ -1351,6 +1352,7 @@ impl OctopiiNode {
     }
 
     async fn send_raft_messages(
+        raft: &Arc<RaftNode>,
         mut messages: Vec<Message>,
         rpc: &Arc<RpcHandler>,
         peer_addrs: &Arc<RwLock<HashMap<u64, SocketAddr>>>,
@@ -1395,6 +1397,7 @@ impl OctopiiNode {
                     }
 
                     let rpc_clone = Arc::clone(rpc);
+                    let raft_clone = Arc::clone(raft);
                     // Longer timeout for snapshots; they can be large and take time
                     let timeout_secs = if matches!(msg_type, raft::prelude::MessageType::MsgSnapshot) {
                         30
@@ -1402,10 +1405,29 @@ impl OctopiiNode {
                         5
                     };
                     tokio::spawn(async move {
-                        if let Err(e) = rpc_clone
+                        let result = rpc_clone
                             .request(peer_addr, payload, Duration::from_secs(timeout_secs))
-                            .await
-                        {
+                            .await;
+                        // For snapshots, report status back to raft-rs (TiKV pattern).
+                        if matches!(msg_type, raft::prelude::MessageType::MsgSnapshot) {
+                            match result {
+                                Ok(_) => {
+                                    raft_clone
+                                        .report_snapshot(to, raft::SnapshotStatus::Finish)
+                                        .await;
+                                }
+                                Err(e) => {
+                                    tracing::warn!(
+                                        "Failed to send Raft snapshot to {}: {}",
+                                        peer_addr,
+                                        e
+                                    );
+                                    raft_clone
+                                        .report_snapshot(to, raft::SnapshotStatus::Failure)
+                                        .await;
+                                }
+                            }
+                        } else if let Err(e) = result {
                             tracing::warn!("Failed to send Raft message to {}: {}", peer_addr, e);
                         }
                     });

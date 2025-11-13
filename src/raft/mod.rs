@@ -518,4 +518,15 @@ impl RaftNode {
         );
         Ok(())
     }
+
+    /// Report snapshot sending status back to raft-rs (TiKV pattern).
+    /// Must be called after finishing or failing snapshot transfer so raft
+    /// can move the peer out of Snapshot state and continue replication.
+    pub async fn report_snapshot(&self, to_peer_id: u64, status: raft::SnapshotStatus) {
+        let mut node = self.raw_node.lock().await;
+        node.report_snapshot(to_peer_id, status);
+        if node.has_ready() {
+            self.ready_notify.notify_one();
+        }
+    }
 }
