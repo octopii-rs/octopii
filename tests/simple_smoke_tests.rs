@@ -365,13 +365,18 @@ fn test_three_nodes_crash_leader_with_load_and_restart_auto_election() {
         }
         sleep(Duration::from_millis(300)).await;
 
-        // Restart the old leader with the same WAL (simulate node restart)
-        // Wait for the OS to fully release the port; retry on AddrInUse with backoff.
-        sleep(Duration::from_millis(3000)).await;
+        // Restart the old leader with the same WAL (simulate node restart) on a NEW port,
+        // then update follower address books so they can reach it.
+        let new_addr1 = "127.0.0.1:9344".parse().unwrap();
+        let mut config1_new = config1.clone();
+        config1_new.bind_addr = new_addr1;
+        n2.update_peer_addr(1, new_addr1).await;
+        n3.update_peer_addr(1, new_addr1).await;
+        sleep(Duration::from_millis(300)).await;
         let mut n1r_opt = None;
         let mut last_err = String::new();
         for attempt in 0..60 {
-            match OctopiiNode::new(config1.clone(), runtime.clone()).await {
+            match OctopiiNode::new(config1_new.clone(), runtime.clone()).await {
                 Ok(n) => {
                     n1r_opt = Some(n);
                     break;
