@@ -3,11 +3,7 @@ pub mod runtime;
 pub mod chunk;
 pub mod config;
 pub mod error;
-#[cfg(feature = "raft-rs-impl")]
-pub mod node;
 pub mod state_machine;
-#[cfg(feature = "raft-rs-impl")]
-pub mod raft;
 #[cfg(feature = "openraft")]
 pub mod openraft;
 pub mod rpc;
@@ -18,8 +14,6 @@ pub mod wal;
 pub use chunk::{ChunkSource, TransferResult};
 pub use config::Config;
 pub use error::{OctopiiError, Result};
-#[cfg(not(feature = "openraft"))]
-pub use node::OctopiiNode;
 #[cfg(feature = "openraft")]
 pub use openraft::node::OpenRaftNode as OctopiiNode;
 pub use state_machine::{KvStateMachine, StateMachine, StateMachineTrait};

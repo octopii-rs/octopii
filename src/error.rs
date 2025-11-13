@@ -17,10 +17,6 @@ pub enum OctopiiError {
     #[error("QUIC read error: {0}")]
     QuicRead(#[from] quinn::ReadError),
 
-    #[cfg(feature = "raft-rs-impl")]
-    #[error("Raft error: {0}")]
-    Raft(#[from] raft::Error),
-
     #[error("WAL error: {0}")]
     Wal(String),
 
