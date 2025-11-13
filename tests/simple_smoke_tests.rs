@@ -347,6 +347,9 @@ fn test_add_learner_under_load_and_promote() {
 
         // Add learner node 4 via leader
         n1.add_learner(4, addr4).await.expect("add learner");
+        // Print conf state to verify learner 4 is in config
+        let cs = n1.conf_state().await;
+        println!("[conf] voters={:?} learners={:?}", cs.voters, cs.learners);
 
         // Create the learner node with peers pointing to the existing cluster
         let config4 = Config {
