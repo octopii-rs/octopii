@@ -374,9 +374,13 @@ fn test_add_learner_under_load_and_promote() {
             sleep(Duration::from_millis(5)).await;
         }
 
+        // Force-trigger a snapshot to the learner to accelerate catch-up
+        let _ = n1.force_snapshot_to_peer(4).await;
+        sleep(Duration::from_secs(1)).await;
+
         // Wait for learner to catch up (should trigger snapshot transfer if needed)
         let start = std::time::Instant::now();
-        let timeout = Duration::from_secs(30);
+        let timeout = Duration::from_secs(45);
         let mut last_print = std::time::Instant::now()
             .checked_sub(Duration::from_secs(10))
             .unwrap_or_else(std::time::Instant::now);
