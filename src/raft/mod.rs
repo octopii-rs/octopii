@@ -408,6 +408,10 @@ impl RaftNode {
             leader_last_index,
             top_samples
         );
+        println!(
+            "[snapshot-trigger] leader={} lagging_peers={:?} threshold={} leader_last={}",
+            self.node_id, lagging_peers, lag_threshold, leader_last_index
+        );
 
         // Transition lagging peers to Snapshot state at commit_index
         let mut any_changed = false;
@@ -421,6 +425,10 @@ impl RaftNode {
                     commit_index,
                     leader_last_index
                 );
+                println!(
+                    "[snapshot-trigger] become_snapshot peer={} at_commit={} (leader_last={})",
+                    pid, commit_index, leader_last_index
+                );
                 any_changed = true;
             }
         }
@@ -428,6 +436,7 @@ impl RaftNode {
         // Force immediate send so followers receive snapshot/appends without waiting for next tick
         if any_changed {
             node.raft.bcast_append();
+            println!("[snapshot-trigger] bcast_append after become_snapshot");
         }
         // Ensure the ready loop is notified so snapshot/append messages are emitted promptly
         self.ready_notify.notify_one();
