@@ -1564,6 +1564,13 @@ impl OctopiiNode {
     pub async fn clear_send_filters(&self) {
         self.send_filters.write().await.clear();
     }
+
+    /// Update the known address for a peer without changing cluster membership.
+    /// This only updates the in-memory mapping used to route outbound Raft messages.
+    pub async fn update_peer_addr(&self, peer_id: u64, addr: SocketAddr) {
+        self.peer_addrs.write().await.insert(peer_id, addr);
+        tracing::info!("Updated address for peer {} -> {}", peer_id, addr);
+    }
 }
 
 impl Drop for OctopiiNode {
