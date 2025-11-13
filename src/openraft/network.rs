@@ -49,11 +49,25 @@ impl InProcNetwork {
 pub struct QuinnNetwork {
 	rpc: Arc<RpcHandler>,
 	peer_addrs: Arc<tokio::sync::RwLock<std::collections::HashMap<AppNodeId, SocketAddr>>>,
+	self_id: AppNodeId,
+	#[cfg(feature = "openraft-filters")]
+	pub(crate) filters: Arc<OpenRaftFilters>,
 }
 
 impl QuinnNetwork {
-	pub fn new(rpc: Arc<RpcHandler>, peer_addrs: Arc<tokio::sync::RwLock<std::collections::HashMap<AppNodeId, SocketAddr>>>) -> Self {
-		Self { rpc, peer_addrs }
+	pub fn new(
+		rpc: Arc<RpcHandler>,
+		peer_addrs: Arc<tokio::sync::RwLock<std::collections::HashMap<AppNodeId, SocketAddr>>>,
+		self_id: AppNodeId,
+		#[cfg(feature = "openraft-filters")] filters: Arc<OpenRaftFilters>,
+	) -> Self {
+		Self {
+			rpc,
+			peer_addrs,
+			self_id,
+			#[cfg(feature = "openraft-filters")]
+			filters,
+		}
 	}
 
 	async fn peer_addr(&self, target: AppNodeId) -> Option<SocketAddr> {
@@ -61,19 +75,56 @@ impl QuinnNetwork {
 		g.get(&target).copied()
 	}
 
-	pub async fn send_openraft(&self, target: AppNodeId, kind: &str, data: Vec<u8>) -> anyhow::Result<()> {
+	pub async fn send_openraft(&self, target: AppNodeId, kind: &str, data: Vec<u8>) -> anyhow::Result<ResponsePayload> {
+		#[cfg(feature = "openraft-filters")]
+		{
+			// Partition check
+			for (g1, g2) in self.filters.partitions.read().await.iter() {
+				if (g1.contains(&self.self_id) && g2.contains(&target))
+					|| (g2.contains(&self.self_id) && g1.contains(&target))
+				{
+					anyhow::bail!("openraft-filters: partition drop {}->{target}", self.self_id);
+				}
+			}
+			// Pair-specific drop
+			if self.filters.drop_pairs.read().await.contains(&(self.self_id, target)) {
+				anyhow::bail!("openraft-filters: drop pair {}->{target}", self.self_id);
+			}
+			// Delay if configured
+			if let Some(d) = self.filters.delay_pairs.read().await.get(&(self.self_id, target)).copied() {
+				tokio::time::sleep(d).await;
+			}
+		}
+
 		let Some(addr) = self.peer_addr(target).await else {
 			anyhow::bail!("no address for peer {}", target);
 		};
 		let payload = RequestPayload::OpenRaft { kind: kind.to_string(), data: bytes::Bytes::from(data) };
 		let resp = self.rpc.request(addr, payload, tokio::time::Duration::from_secs(5)).await?;
-		match resp.payload {
-			ResponsePayload::CustomResponse { success, .. } if success => Ok(()),
-			ResponsePayload::AppendEntriesResponse { .. } => Ok(()),
-			ResponsePayload::RequestVoteResponse { .. } => Ok(()),
-			ResponsePayload::SnapshotResponse { .. } => Ok(()),
-			other => anyhow::bail!("unexpected response: {:?}", other),
+		Ok(resp.payload)
+	}
+}
+
+#[cfg(feature = "openraft-filters")]
+pub struct OpenRaftFilters {
+	pub(crate) drop_pairs: tokio::sync::RwLock<std::collections::HashSet<(AppNodeId, AppNodeId)>>,
+	pub(crate) delay_pairs: tokio::sync::RwLock<std::collections::HashMap<(AppNodeId, AppNodeId), Duration>>,
+	pub(crate) partitions: tokio::sync::RwLock<Vec<(std::collections::HashSet<AppNodeId>, std::collections::HashSet<AppNodeId>)>>,
+}
+
+#[cfg(feature = "openraft-filters")]
+impl OpenRaftFilters {
+	pub fn new() -> Self {
+		Self {
+			drop_pairs: tokio::sync::RwLock::new(Default::default()),
+			delay_pairs: tokio::sync::RwLock::new(Default::default()),
+			partitions: tokio::sync::RwLock::new(vec![]),
 		}
+	}
+	pub async fn clear(&self) {
+		self.drop_pairs.write().await.clear();
+		self.delay_pairs.write().await.clear();
+		self.partitions.write().await.clear();
 	}
 }
 

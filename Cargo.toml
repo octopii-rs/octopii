@@ -41,3 +41,4 @@ unused = "allow"
 default = ["openraft"]
 openraft = ["dep:openraft"]
 raft-rs-impl = []
+openraft-filters = []
