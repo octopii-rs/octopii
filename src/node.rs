@@ -1385,8 +1385,23 @@ impl OctopiiNode {
                     // Keep logs quiet; elevate snapshot sends to WARN so they show in tests
                     if matches!(msg_type, raft::prelude::MessageType::MsgSnapshot) {
                         tracing::warn!("Sending SNAPSHOT to peer {} at {}", to, peer_addr);
+                        println!(
+                            "[send] to={} type=MsgSnapshot addr={} index={} commit={}",
+                            to,
+                            peer_addr,
+                            msg.index,
+                            msg.commit
+                        );
                     } else {
                         tracing::debug!("Sending Raft message to peer {}: {:?} -> {}", to, msg_type, peer_addr);
+                        println!(
+                            "[send] to={} type={:?} addr={} index={} commit={}",
+                            to,
+                            msg_type,
+                            peer_addr,
+                            msg.index,
+                            msg.commit
+                        );
                     }
 
                     let rpc_clone = Arc::clone(rpc);
@@ -1415,6 +1430,12 @@ impl OctopiiNode {
                                         peer_addr,
                                         e
                                     );
+                                    println!(
+                                        "[send-fail] to={} type=MsgSnapshot addr={} err={}",
+                                        to,
+                                        peer_addr,
+                                        e
+                                    );
                                     raft_clone
                                         .report_snapshot(to, raft::SnapshotStatus::Failure)
                                         .await;
@@ -1424,6 +1445,13 @@ impl OctopiiNode {
                             }
                         } else if let Err(e) = result {
                             tracing::warn!("Failed to send Raft message to {}: {}", peer_addr, e);
+                            println!(
+                                "[send-fail] to={} type={:?} addr={} err={}",
+                                to,
+                                msg_type,
+                                peer_addr,
+                                e
+                            );
                             // Inform raft this peer was unreachable so it can backoff/probe
                             raft_clone.report_unreachable(to).await;
                         }
@@ -1433,6 +1461,7 @@ impl OctopiiNode {
                 tracing::warn!("No address found for peer {}", to);
                 // Mirror TiKV: if we can't resolve peer address, report unreachable so raft adjusts
                 raft.report_unreachable(to).await;
+                println!("[send-skip] to={} type={:?} reason=no-address", to, msg_type);
             }
         }
     }
@@ -1501,6 +1530,10 @@ impl OctopiiNode {
                                     let raft_clone = Arc::clone(raft);
                                     // state_machine is Arc<...>, so we can clone cheaply
                                     let sm_clone = Arc::clone(state_machine);
+                            println!(
+                                "[add-learner] committed learner={} — preparing snapshot and forcing transfer",
+                                node_id
+                            );
                                     tokio::spawn(async move {
                                         // Prepare snapshot at current commit and immediately trigger
                                         let snapshot_bytes = sm_clone.snapshot();
@@ -1508,6 +1541,9 @@ impl OctopiiNode {
                                             .prepare_serving_snapshot(snapshot_bytes)
                                             .await;
                                         // Use very small threshold to force snapshot path right away
+                                println!(
+                                    "[add-learner] forcing snapshot catch-up evaluation (threshold=1)"
+                                );
                                         raft_clone.check_and_trigger_snapshot(1).await;
                                     });
                                 }
