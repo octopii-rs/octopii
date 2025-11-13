@@ -1,3 +1,4 @@
+#![cfg(feature = "raft-rs-impl")]
 /// Short-duration stress tests (60-120 seconds)
 mod common;
 

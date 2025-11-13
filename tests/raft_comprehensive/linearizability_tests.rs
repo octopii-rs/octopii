@@ -1,3 +1,4 @@
+#![cfg(feature = "raft-rs-impl")]
 // Linearizability integration tests - Jepsen-style safety verification
 //
 // These tests use the LinearizabilityChecker to formally verify that concurrent

@@ -1,3 +1,4 @@
+#![cfg(feature = "raft-rs-impl")]
 // Network simulation filters ported from TiKV
 // Source: tikv/components/test_raftstore/src/transport_simulate.rs
 // Licensed under Apache-2.0

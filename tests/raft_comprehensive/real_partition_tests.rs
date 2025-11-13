@@ -1,3 +1,4 @@
+#![cfg(feature = "raft-rs-impl")]
 /// Real partition behavior tests - verify Raft handles network partitions correctly
 ///
 /// These tests validate that:

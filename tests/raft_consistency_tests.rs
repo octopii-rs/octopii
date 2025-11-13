@@ -1,3 +1,4 @@
+#![cfg(feature = "raft-rs-impl")]
 /// Raft consistency and streaming test suite
 ///
 /// This test suite covers consistency guarantees and log streaming including:

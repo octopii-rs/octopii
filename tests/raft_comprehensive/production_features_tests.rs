@@ -1,3 +1,4 @@
+#![cfg(feature = "raft-rs-impl")]
 /// Production readiness tests: Features required for TiKV production parity
 ///
 /// These tests verify critical features for production deployment:

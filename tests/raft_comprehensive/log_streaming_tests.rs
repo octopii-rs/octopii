@@ -1,3 +1,4 @@
+#![cfg(feature = "raft-rs-impl")]
 // Log Streaming integration tests - TiKV test parity
 //
 // Log streaming tests verify efficient catch-up mechanisms for slow followers.

@@ -1,3 +1,4 @@
+#![cfg(feature = "raft-rs-impl")]
 /// Advanced durability tests: crashes during specific Raft operations
 mod common;
 

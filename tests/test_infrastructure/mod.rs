@@ -10,10 +10,12 @@
 
 #[macro_use]
 pub mod macros;
+#[cfg(feature = "raft-rs-impl")]
 pub mod filter;
 pub mod util;
 
 // Re-export commonly used items
+#[cfg(feature = "raft-rs-impl")]
 pub use filter::{
     ConditionalFilter, CountFilter, DelayFilter, Direction, DropPacketFilter, Filter, FilterError,
     FilterFactory, IsolationFilterFactory, MessageDuplicationFilter, MessageReorderFilter,

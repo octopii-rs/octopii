@@ -1,3 +1,4 @@
+#![cfg(feature = "raft-rs-impl")]
 /// Common utilities for comprehensive Raft testing
 use octopii::{Config, OctopiiNode, OctopiiRuntime};
 use std::net::SocketAddr;

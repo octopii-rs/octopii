@@ -1,3 +1,4 @@
+#![cfg(feature = "raft-rs-impl")]
 /// Learner node workflow tests
 mod common;
 

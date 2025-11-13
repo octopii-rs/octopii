@@ -1,3 +1,4 @@
+#![cfg(feature = "raft-rs-impl")]
 /// Chaos tests: random crashes, failures, and edge cases
 mod common;
 
