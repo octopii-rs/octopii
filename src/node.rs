@@ -1388,9 +1388,15 @@ impl OctopiiNode {
                     );
 
                     let rpc_clone = Arc::clone(rpc);
+                    // Longer timeout for snapshots; they can be large and take time
+                    let timeout_secs = if matches!(msg_type, raft::prelude::MessageType::MsgSnapshot) {
+                        30
+                    } else {
+                        5
+                    };
                     tokio::spawn(async move {
                         if let Err(e) = rpc_clone
-                            .request(peer_addr, payload, Duration::from_secs(5))
+                            .request(peer_addr, payload, Duration::from_secs(timeout_secs))
                             .await
                         {
                             tracing::warn!("Failed to send Raft message to {}: {}", peer_addr, e);
