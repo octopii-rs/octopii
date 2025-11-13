@@ -174,41 +174,27 @@ impl OpenRaftNode {
         for peer_addr in self.config.peers.iter() {
             let peer_id = (peer_addr.port() % 10) as u64;
             if peer_id != self.config.node_id && peer_id > 0 {
+                tracing::info!("Node {}: Adding peer {} at address {}", self.config.node_id, peer_id, peer_addr);
                 self.peer_addrs.write().await.insert(peer_id, *peer_addr);
             }
         }
-        
-        // Only initialize if this is the initial leader and cluster is not initialized
-        // For multi-node clusters, only the initial leader should call initialize
-        if self.config.is_initial_leader && !self.raft.is_initialized().await
-            .map_err(|e| crate::error::OctopiiError::Rpc(format!("is_initialized: {e}")))? 
-        {
-            let mut nodes = BTreeMap::new();
-            nodes.insert(
-                self.config.node_id,
-                BasicNode { addr: self.config.bind_addr.to_string() }
-            );
-            
-            // Add peer nodes to the initial cluster membership
-            for peer_addr in self.config.peers.iter() {
-                let peer_id = (peer_addr.port() % 10) as u64;
-                if peer_id != self.config.node_id && peer_id > 0 {
-                    nodes.insert(peer_id, BasicNode { addr: peer_addr.to_string() });
-                }
-            }
-            
-            self.raft.initialize(nodes).await
-                .map_err(|e| crate::error::OctopiiError::Rpc(format!("initialize: {e}")))?;
-        }
-        
-        // Register RPC handler for OpenRaft messages
+
+        // Log final peer_addrs state
+        let peers = self.peer_addrs.read().await;
+        tracing::info!("Node {}: Initialized with peers: {:?}", self.config.node_id,
+            peers.iter().map(|(id, addr)| format!("{}@{}", id, addr)).collect::<Vec<_>>());
+        drop(peers);
+
+        // Register RPC handler for OpenRaft messages BEFORE initialization
+        // This is critical: nodes 2 and 3 need to be able to receive RPCs when node 1 initializes
         let raft_clone = self.raft.clone();
+        let node_id = self.config.node_id;
         self.rpc.set_request_handler(move |req| {
             let raft = raft_clone.clone();
-            
+
             match req.payload {
                 crate::rpc::RequestPayload::OpenRaft { kind, data } => {
-                    tracing::debug!("OpenRaft RPC handler received: kind={}", kind);
+                    tracing::info!("Node {}: OpenRaft RPC handler received: kind={}", node_id, kind);
                     let response_data = tokio::task::block_in_place(|| {
                         tokio::runtime::Handle::current().block_on(async {
                         match kind.as_str() {
@@ -249,19 +235,46 @@ impl OpenRaftNode {
                         }
                         })
                     });
-                    
-                    crate::rpc::ResponsePayload::OpenRaft { 
-                        kind, 
-                        data: bytes::Bytes::from(response_data) 
+
+                    crate::rpc::ResponsePayload::OpenRaft {
+                        kind,
+                        data: bytes::Bytes::from(response_data)
                     }
                 }
-                _ => crate::rpc::ResponsePayload::CustomResponse { 
-                    success: false, 
-                    data: bytes::Bytes::new() 
+                _ => crate::rpc::ResponsePayload::CustomResponse {
+                    success: false,
+                    data: bytes::Bytes::new()
                 },
             }
         }).await;
-        
+
+        // NOW initialize the cluster after all RPC handlers are set up
+        // Only initialize if this is the initial leader and cluster is not initialized
+        // For multi-node clusters, only the initial leader should call initialize
+        if self.config.is_initial_leader && !self.raft.is_initialized().await
+            .map_err(|e| crate::error::OctopiiError::Rpc(format!("is_initialized: {e}")))?
+        {
+            tracing::info!("Node {}: Initializing cluster as initial leader", self.config.node_id);
+            let mut nodes = BTreeMap::new();
+            nodes.insert(
+                self.config.node_id,
+                BasicNode { addr: self.config.bind_addr.to_string() }
+            );
+
+            // Add peer nodes to the initial cluster membership
+            for peer_addr in self.config.peers.iter() {
+                let peer_id = (peer_addr.port() % 10) as u64;
+                if peer_id != self.config.node_id && peer_id > 0 {
+                    tracing::info!("Node {}: Adding peer {} to initial membership", self.config.node_id, peer_id);
+                    nodes.insert(peer_id, BasicNode { addr: peer_addr.to_string() });
+                }
+            }
+
+            self.raft.initialize(nodes).await
+                .map_err(|e| crate::error::OctopiiError::Rpc(format!("initialize: {e}")))?;
+            tracing::info!("Node {}: Cluster initialization complete", self.config.node_id);
+        }
+
         Ok(())
     }
 
@@ -278,6 +291,8 @@ impl OpenRaftNode {
 
     pub async fn is_leader(&self) -> bool {
         let metrics = self.raft.metrics().borrow().clone();
+        tracing::debug!("Node {}: is_leader check - current_leader={:?}, server_state={:?}, membership={:?}",
+            self.config.node_id, metrics.current_leader, metrics.state, metrics.membership_config.membership());
         metrics.current_leader == Some(self.config.node_id)
     }
 
@@ -316,8 +331,22 @@ impl OpenRaftNode {
     }
 
     pub async fn promote_learner(&self, peer_id: u64) -> Result<()> {
+        // Get current membership and add the new voter to it
+        let metrics = self.raft.metrics().borrow().clone();
+        let current_membership = metrics.membership_config.membership();
+
+        // Get all current voter IDs
         let mut members = BTreeSet::new();
+        for config in current_membership.get_joint_config() {
+            members.extend(config.iter().copied());
+        }
+
+        // Add the new voter
         members.insert(peer_id);
+
+        tracing::info!("Node {}: Promoting learner {} to voter, new membership: {:?}",
+            self.config.node_id, peer_id, members);
+
         self.raft.change_membership(members, true).await
             .map_err(|e| crate::error::OctopiiError::Rpc(format!("change_membership: {e}")))?;
         Ok(())

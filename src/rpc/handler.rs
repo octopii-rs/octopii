@@ -51,7 +51,13 @@ impl RpcHandler {
         timeout_duration: Duration,
     ) -> Result<RpcResponse> {
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
-        let request = RpcMessage::new_request(id, payload);
+        let request = RpcMessage::new_request(id, payload.clone());
+
+        tracing::debug!("RPC request {} to {}: {:?}", id, addr,
+            match &payload {
+                super::RequestPayload::OpenRaft { kind, .. } => format!("OpenRaft({})", kind),
+                _ => "Other".to_string(),
+            });
 
         let (tx, rx) = oneshot::channel();
 
@@ -63,20 +69,47 @@ impl RpcHandler {
 
         // Serialize and send (ensure receive loop for this peer)
         let data = serialize(&request)?;
-        let peer = self.transport.connect(addr).await?;
+
+        tracing::debug!("RPC request {}: connecting to {}", id, addr);
+        let peer = match self.transport.connect(addr).await {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::error!("RPC request {}: failed to connect to {}: {}", id, addr, e);
+                let mut pending = self.pending_requests.write().await;
+                pending.remove(&id);
+                return Err(e);
+            }
+        };
+
+        tracing::debug!("RPC request {}: ensuring peer receiver for {}", id, addr);
         self.ensure_peer_receiver(addr, Arc::clone(&peer)).await;
 
+        tracing::debug!("RPC request {}: sending data to {}", id, addr);
         timeout(timeout_duration, peer.send(data))
             .await
-            .map_err(|_| OctopiiError::Rpc("Request send timeout".to_string()))?
-            .map_err(|e| OctopiiError::Rpc(format!("Transport send failed: {}", e)))?;
+            .map_err(|_| {
+                tracing::error!("RPC request {}: send timeout to {}", id, addr);
+                OctopiiError::Rpc("Request send timeout".to_string())
+            })?
+            .map_err(|e| {
+                tracing::error!("RPC request {}: transport send failed to {}: {}", id, addr, e);
+                OctopiiError::Rpc(format!("Transport send failed: {}", e))
+            })?;
 
+        tracing::debug!("RPC request {}: waiting for response from {}", id, addr);
         // Wait for response with timeout
         match timeout(timeout_duration, rx).await {
-            Ok(Ok(response)) => Ok(response),
-            Ok(Err(_)) => Err(OctopiiError::Rpc("Response channel closed".to_string())),
+            Ok(Ok(response)) => {
+                tracing::debug!("RPC request {}: received response from {}", id, addr);
+                Ok(response)
+            }
+            Ok(Err(_)) => {
+                tracing::error!("RPC request {}: response channel closed for {}", id, addr);
+                Err(OctopiiError::Rpc("Response channel closed".to_string()))
+            }
             Err(_) => {
                 // Timeout - clean up pending request
+                tracing::error!("RPC request {}: timeout waiting for response from {}", id, addr);
                 let mut pending = self.pending_requests.write().await;
                 pending.remove(&id);
                 Err(OctopiiError::Rpc("Request timeout".to_string()))
