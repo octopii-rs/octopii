@@ -375,6 +375,7 @@ impl RaftNode {
 
         // Detect lagging peers
         let mut lagging_peers: Vec<u64> = Vec::new();
+        let mut lag_samples: Vec<(u64, u64)> = Vec::new();
         for peer_id in peer_ids {
             if peer_id == self.node_id {
                 continue;
@@ -384,12 +385,29 @@ impl RaftNode {
                 if lag > lag_threshold {
                     lagging_peers.push(peer_id);
                 }
+                lag_samples.push((peer_id, lag));
             }
         }
 
         if lagging_peers.is_empty() {
             return;
         }
+
+        // Log a concise summary of peer lags
+        lag_samples.sort_by_key(|&(_, lag)| std::cmp::Reverse(lag));
+        let top_samples: Vec<String> = lag_samples
+            .into_iter()
+            .take(3)
+            .map(|(pid, lag)| format!("{}:{}e", pid, lag))
+            .collect();
+        tracing::info!(
+            "[Node {}] {} lagging peers over threshold {} (leader_last={}): top={:?}",
+            self.node_id,
+            lagging_peers.len(),
+            lag_threshold,
+            leader_last_index,
+            top_samples
+        );
 
         // Transition lagging peers to Snapshot state at commit_index
         let mut any_changed = false;
@@ -434,6 +452,10 @@ impl RaftNode {
 
         // Only meaningful on leader
         if node.raft.state != raft::StateRole::Leader {
+            tracing::debug!(
+                "[Node {}] Skipping prepare_serving_snapshot (not leader)",
+                self.node_id
+            );
             return Ok(());
         }
 
@@ -441,12 +463,22 @@ impl RaftNode {
         let commit_index = node.raft.hard_state().commit;
         if commit_index == 0 {
             // Nothing committed yet; no snapshot to prepare
+            tracing::debug!(
+                "[Node {}] Skipping prepare_serving_snapshot (commit_index=0)",
+                self.node_id
+            );
             return Ok(());
         }
 
         // If current storage snapshot is already at/after commit_index, nothing to do
         let current_snap_index = node.store().snapshot(0, 0).map(|s| s.get_metadata().index).unwrap_or(0);
         if current_snap_index >= commit_index {
+            tracing::debug!(
+                "[Node {}] Storage snapshot already up-to-date (have {}, need {})",
+                self.node_id,
+                current_snap_index,
+                commit_index
+            );
             return Ok(());
         }
 
@@ -455,6 +487,14 @@ impl RaftNode {
             Ok(t) => t,
             Err(_) => node.raft.hard_state().term,
         };
+
+        tracing::info!(
+            "[Node {}] Preparing serving snapshot at index {} (term {}, prev_snap={})",
+            self.node_id,
+            commit_index,
+            term_at_commit,
+            current_snap_index
+        );
 
         // Build snapshot metadata using current conf state
         let mut snapshot = Snapshot::default();
@@ -471,6 +511,11 @@ impl RaftNode {
 
         // Wake ready loop (followers may immediately request the snapshot)
         self.ready_notify.notify_one();
+        tracing::info!(
+            "[Node {}] Prepared serving snapshot at index {}",
+            self.node_id,
+            commit_index
+        );
         Ok(())
     }
 }
