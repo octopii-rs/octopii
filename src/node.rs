@@ -1425,15 +1425,21 @@ impl OctopiiNode {
                                     raft_clone
                                         .report_snapshot(to, raft::SnapshotStatus::Failure)
                                         .await;
+                                    // Also mark as unreachable to adjust replication strategy
+                                    raft_clone.report_unreachable(to).await;
                                 }
                             }
                         } else if let Err(e) = result {
                             tracing::warn!("Failed to send Raft message to {}: {}", peer_addr, e);
+                            // Inform raft this peer was unreachable so it can backoff/probe
+                            raft_clone.report_unreachable(to).await;
                         }
                     });
                 }
             } else {
                 tracing::warn!("No address found for peer {}", to);
+                // Mirror TiKV: if we can't resolve peer address, report unreachable so raft adjusts
+                raft.report_unreachable(to).await;
             }
         }
     }
