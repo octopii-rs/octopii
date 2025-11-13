@@ -1075,7 +1075,12 @@ impl OctopiiNode {
                         // Proactively trigger snapshot for lagging peers if we are leader
                         if raft.is_leader().await && snapshot_lag_threshold > 0 {
                             let raft_clone = Arc::clone(&raft);
+                            let sm_clone = Arc::clone(&state_machine);
                             tokio::spawn(async move {
+                                // Prepare a fresh snapshot at commit for serving to lagging peers
+                                let snapshot_data = sm_clone.snapshot();
+                                let _ = raft_clone.prepare_serving_snapshot(snapshot_data).await;
+                                // Then flip lagging peers to Snapshot to force transfer
                                 raft_clone.check_and_trigger_snapshot(snapshot_lag_threshold).await;
                             });
                         }
