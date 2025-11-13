@@ -529,4 +529,14 @@ impl RaftNode {
             self.ready_notify.notify_one();
         }
     }
+
+    /// Report a peer as unreachable (TiKV pattern).
+    /// This informs raft-rs to adjust its sending behavior (e.g., pause, probe).
+    pub async fn report_unreachable(&self, to_peer_id: u64) {
+        let mut node = self.raw_node.lock().await;
+        node.report_unreachable(to_peer_id);
+        if node.has_ready() {
+            self.ready_notify.notify_one();
+        }
+    }
 }
