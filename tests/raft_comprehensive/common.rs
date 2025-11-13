@@ -1,28 +1,36 @@
-#![cfg(feature = "raft-rs-impl")]
 /// Common utilities for comprehensive Raft testing
 use octopii::{Config, OctopiiNode, OctopiiRuntime};
 use std::net::SocketAddr;
 use std::time::Duration;
 use tempfile::TempDir;
 
-// Import test infrastructure for network simulation
+// Import test infrastructure for network simulation helpers
+// Only filters are raft-rs specific; util helpers are always available when included by the test crate.
+#[allow(unused_imports)]
+use crate::test_infrastructure::{alloc_port, assert_eq_debug, eventually, temp_dir};
+use std::sync::{Arc, RwLock};
+
+#[cfg(feature = "raft-rs-impl")]
 use crate::test_infrastructure::{
     Filter, FilterFactory, IsolationFilterFactory, PartitionFilterFactory,
 };
+#[cfg(feature = "raft-rs-impl")]
 use raft::prelude::Message;
-use std::sync::{Arc, RwLock};
 
 /// Adapter to bridge test infrastructure Filter trait with OctopiiNode's MessageFilter trait
+#[cfg(feature = "raft-rs-impl")]
 struct FilterAdapter {
     filter: Box<dyn Filter>,
 }
 
+#[cfg(feature = "raft-rs-impl")]
 impl FilterAdapter {
     fn new(filter: Box<dyn Filter>) -> Self {
         Self { filter }
     }
 }
 
+#[cfg(feature = "raft-rs-impl")]
 impl octopii::node::MessageFilter for FilterAdapter {
     fn before(&self, msgs: &mut Vec<Message>) -> std::result::Result<(), String> {
         self.filter.before(msgs).map_err(|e| e.to_string())
@@ -36,10 +44,11 @@ pub struct TestNode {
     pub node_id: u64,
     pub addr: SocketAddr,
     pub _wal_dir: TempDir,
-    /// Network filters applied to this node's outgoing messages
-    /// TODO: Integrate with OctopiiNode transport layer
+    /// Network filters applied to this node's outgoing messages (only in raft-rs mode)
+    #[cfg(feature = "raft-rs-impl")]
     pub send_filters: Arc<RwLock<Vec<Box<dyn Filter>>>>,
-    /// Network filters applied to this node's incoming messages
+    /// Network filters applied to this node's incoming messages (only in raft-rs mode)
+    #[cfg(feature = "raft-rs-impl")]
     pub recv_filters: Arc<RwLock<Vec<Box<dyn Filter>>>>,
 }
 
@@ -82,7 +91,9 @@ impl TestNode {
             node_id,
             addr,
             _wal_dir: temp_dir,
+            #[cfg(feature = "raft-rs-impl")]
             send_filters: Arc::new(RwLock::new(Vec::new())),
+            #[cfg(feature = "raft-rs-impl")]
             recv_filters: Arc::new(RwLock::new(Vec::new())),
         }
     }
@@ -122,8 +133,6 @@ impl TestNode {
         );
 
         // CRITICAL: Wait for the old node's QUIC endpoint to fully release the port
-        // Without this delay, the new node will hang trying to bind to the same port
-        // Use longer delay (2s) to ensure cleanup completes, especially after heavy write load
         tokio::time::sleep(std::time::Duration::from_millis(2000)).await;
 
         tracing::info!(
@@ -178,7 +187,8 @@ impl TestNode {
         }
     }
 
-    /// Add a peer to the cluster
+    /// Add a peer to the cluster (only available in raft-rs mode)
+    #[cfg(feature = "raft-rs-impl")]
     pub async fn add_peer(
         &self,
         peer_id: u64,
@@ -326,9 +336,6 @@ impl TestCluster {
 
         for node in &self.nodes {
             if let Some(_n) = node.get_node() {
-                // Use query to check a few known keys
-                // Since we can't get full snapshots easily, we'll just verify
-                // that queries work and return consistent results
                 snapshots.push(node.node_id);
             }
         }
@@ -505,8 +512,6 @@ impl TestCluster {
         // This is approximate - we'll use the leader's count
         for node in &self.nodes {
             if node.is_leader().await {
-                // For now, return a placeholder
-                // In a real impl, we'd query the actual commit index
                 return 0;
             }
         }
@@ -525,8 +530,7 @@ impl TestCluster {
     // ============================================================================
 
     /// Add a send filter to a specific node.
-    ///
-    /// Messages sent by this node will be filtered according to the filter logic.
+    #[cfg(feature = "raft-rs-impl")]
     pub async fn add_send_filter(&mut self, node_id: u64, filter: Box<dyn Filter>) {
         if let Some(test_node) = self.nodes.iter_mut().find(|n| n.node_id == node_id) {
             // Apply filter directly to OctopiiNode via adapter
@@ -543,9 +547,7 @@ impl TestCluster {
     }
 
     /// Add a receive filter to a specific node.
-    ///
-    /// Messages received by this node will be filtered according to the filter logic.
-    /// NOTE: Currently stores filters for future integration with transport layer.
+    #[cfg(feature = "raft-rs-impl")]
     pub fn add_recv_filter(&mut self, node_id: u64, filter: Box<dyn Filter>) {
         if let Some(node) = self.nodes.iter_mut().find(|n| n.node_id == node_id) {
             node.recv_filters.write().unwrap().push(filter);
@@ -554,6 +556,7 @@ impl TestCluster {
     }
 
     /// Clear all send filters from a node.
+    #[cfg(feature = "raft-rs-impl")]
     pub async fn clear_send_filters(&mut self, node_id: u64) {
         if let Some(test_node) = self.nodes.iter_mut().find(|n| n.node_id == node_id) {
             test_node.send_filters.write().unwrap().clear();
@@ -568,6 +571,7 @@ impl TestCluster {
     }
 
     /// Clear all receive filters from a node.
+    #[cfg(feature = "raft-rs-impl")]
     pub fn clear_recv_filters(&mut self, node_id: u64) {
         if let Some(node) = self.nodes.iter_mut().find(|n| n.node_id == node_id) {
             node.recv_filters.write().unwrap().clear();
@@ -576,17 +580,7 @@ impl TestCluster {
     }
 
     /// Create a network partition between two groups of nodes.
-    ///
-    /// After calling this, nodes in group1 cannot communicate with nodes in group2
-    /// and vice versa.
-    ///
-    /// # Example
-    /// ```
-    /// cluster.partition(vec![1], vec![2, 3]); // Isolate node 1 from 2 & 3
-    /// ```
-    ///
-    /// NOTE: Filter application is pending transport layer integration.
-    /// Currently logs partition for testing infrastructure validation.
+    #[cfg(feature = "raft-rs-impl")]
     pub async fn partition(&mut self, group1: Vec<u64>, group2: Vec<u64>) {
         tracing::info!("Creating partition: {:?} <-> {:?}", group1, group2);
 
@@ -601,8 +595,7 @@ impl TestCluster {
     }
 
     /// Isolate a single node from all communication.
-    ///
-    /// The isolated node cannot send or receive any messages.
+    #[cfg(feature = "raft-rs-impl")]
     pub async fn isolate_node(&mut self, node_id: u64) {
         tracing::info!("Isolating node {}", node_id);
 
@@ -618,6 +611,7 @@ impl TestCluster {
     }
 
     /// Remove all network filters from all nodes (heal all partitions).
+    #[cfg(feature = "raft-rs-impl")]
     pub async fn clear_all_filters(&mut self) {
         tracing::info!("Clearing all network filters");
         for test_node in &mut self.nodes {
