@@ -422,4 +422,54 @@ impl RaftNode {
     pub fn ready_notifier(&self) -> Arc<Notify> {
         Arc::clone(&self.ready_notify)
     }
+
+    /// Prepare a fresh snapshot in storage at the current commit index so the leader
+    /// can serve it to lagging peers. This does NOT compact logs; it only updates
+    /// the storage snapshot image so `Storage::snapshot()` returns a valid snapshot.
+    ///
+    /// The provided `snapshot_data` should be the serialized state machine image.
+    pub async fn prepare_serving_snapshot(&self, snapshot_data: Vec<u8>) -> Result<()> {
+        let mut node = self.raw_node.lock().await;
+
+        // Only meaningful on leader
+        if node.raft.state != raft::StateRole::Leader {
+            return Ok(());
+        }
+
+        // Determine target index/term for snapshot
+        let commit_index = node.raft.hard_state().commit;
+        if commit_index == 0 {
+            // Nothing committed yet; no snapshot to prepare
+            return Ok(());
+        }
+
+        // If current storage snapshot is already at/after commit_index, nothing to do
+        let current_snap_index = node.store().snapshot(0, 0).map(|s| s.get_metadata().index).unwrap_or(0);
+        if current_snap_index >= commit_index {
+            return Ok(());
+        }
+
+        // Determine term at commit index (fall back to hard_state.term if unavailable)
+        let term_at_commit = match node.raft.raft_log.term(commit_index) {
+            Ok(t) => t,
+            Err(_) => node.raft.hard_state().term,
+        };
+
+        // Build snapshot metadata using current conf state
+        let mut snapshot = Snapshot::default();
+        snapshot.data = bytes::Bytes::from(snapshot_data);
+        {
+            let meta = snapshot.mut_metadata();
+            meta.index = commit_index;
+            meta.term = term_at_commit;
+            *meta.mut_conf_state() = node.raft.prs().conf().to_conf_state();
+        }
+
+        // Apply snapshot to storage (does not trim logs)
+        node.store().apply_snapshot(snapshot)?;
+
+        // Wake ready loop (followers may immediately request the snapshot)
+        self.ready_notify.notify_one();
+        Ok(())
+    }
 }
