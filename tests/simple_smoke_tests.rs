@@ -204,6 +204,8 @@ fn test_three_nodes_graceful_shutdown_auto_election() {
         n1.shutdown();
         // Allow transports to close and followers to detect silence
         sleep(Duration::from_millis(2000)).await;
+        // Drop the node to force QUIC endpoint (UDP socket) to be released before restart
+        drop(n1);
 
         // Wait for automatic leader election (no manual campaign here)
         let start = std::time::Instant::now();
