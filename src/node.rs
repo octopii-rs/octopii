@@ -1382,18 +1382,11 @@ impl OctopiiNode {
 
             if let Some(peer_addr) = peer_addr {
                 if let Some(payload) = raft_message_to_rpc(&msg) {
-                    tracing::info!(
-                        "Sending Raft message to peer {}: {:?} -> {}",
-                        to,
-                        msg_type,
-                        peer_addr
-                    );
+                    // Keep logs quiet; elevate snapshot sends to WARN so they show in tests
                     if matches!(msg_type, raft::prelude::MessageType::MsgSnapshot) {
-                        tracing::info!(
-                            "Initiating snapshot transfer to peer {} at addr {}",
-                            to,
-                            peer_addr
-                        );
+                        tracing::warn!("Sending SNAPSHOT to peer {} at {}", to, peer_addr);
+                    } else {
+                        tracing::debug!("Sending Raft message to peer {}: {:?} -> {}", to, msg_type, peer_addr);
                     }
 
                     let rpc_clone = Arc::clone(rpc);
@@ -1499,6 +1492,24 @@ impl OctopiiNode {
                                             node_id
                                         );
                                     }
+                                }
+                                // If we are leader and just added a learner, proactively serve a snapshot
+                                if is_leader
+                                    && cc.get_change_type()
+                                        == raft::prelude::ConfChangeType::AddLearnerNode
+                                {
+                                    let raft_clone = Arc::clone(raft);
+                                    // state_machine is Arc<...>, so we can clone cheaply
+                                    let sm_clone = Arc::clone(state_machine);
+                                    tokio::spawn(async move {
+                                        // Prepare snapshot at current commit and immediately trigger
+                                        let snapshot_bytes = sm_clone.snapshot();
+                                        let _ = raft_clone
+                                            .prepare_serving_snapshot(snapshot_bytes)
+                                            .await;
+                                        // Use very small threshold to force snapshot path right away
+                                        raft_clone.check_and_trigger_snapshot(1).await;
+                                    });
                                 }
                             }
                             Err(e) => {
