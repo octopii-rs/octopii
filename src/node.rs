@@ -1596,6 +1596,12 @@ impl OctopiiNode {
         self.raft.peer_progress(peer_id).await
     }
 
+    /// Get current configuration state from the leader's perspective
+    pub async fn conf_state(&self) -> raft::prelude::ConfState {
+        let rn = self.raft.raw_node().lock().await;
+        rn.raft.prs().conf().to_conf_state()
+    }
+
     /// Force-send a snapshot to a specific peer immediately.
     /// Prepares a serving snapshot at the current commit index and flips the peer into
     /// Snapshot state, then broadcasts to trigger the transfer.
