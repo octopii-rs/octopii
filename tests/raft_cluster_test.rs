@@ -24,6 +24,7 @@ fn test_three_node_cluster_basic() {
         wal_batch_size: 10,
         wal_flush_interval_ms: 100,
         is_initial_leader: true, // Node 1 starts as leader
+        snapshot_lag_threshold: 50,
     };
 
     let config2 = Config {
@@ -35,6 +36,7 @@ fn test_three_node_cluster_basic() {
         wal_batch_size: 10,
         wal_flush_interval_ms: 100,
         is_initial_leader: false,
+        snapshot_lag_threshold: 50,
     };
 
     let config3 = Config {
@@ -46,6 +48,7 @@ fn test_three_node_cluster_basic() {
         wal_batch_size: 10,
         wal_flush_interval_ms: 100,
         is_initial_leader: false,
+        snapshot_lag_threshold: 50,
     };
 
     // Create nodes using blocking API (backward compatible)
@@ -129,6 +132,7 @@ fn test_leader_election() {
         wal_batch_size: 10,
         wal_flush_interval_ms: 100,
         is_initial_leader: true,
+        snapshot_lag_threshold: 50,
     };
 
     let node = OctopiiNode::new_blocking(config).expect("Failed to create node");

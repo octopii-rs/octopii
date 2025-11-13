@@ -19,6 +19,7 @@ fn test_single_node_startup() {
         wal_batch_size: 10,
         wal_flush_interval_ms: 100,
         is_initial_leader: false,
+        snapshot_lag_threshold: 50,
     };
 
     // Create node OUTSIDE of async context to avoid nested runtime issue
@@ -55,6 +56,7 @@ fn test_node_state_machine_query() {
         wal_batch_size: 10,
         wal_flush_interval_ms: 100,
         is_initial_leader: false,
+        snapshot_lag_threshold: 50,
     };
 
     // Create node OUTSIDE of async context to avoid nested runtime issue
@@ -98,6 +100,7 @@ fn test_multiple_nodes_communication() {
         wal_batch_size: 10,
         wal_flush_interval_ms: 100,
         is_initial_leader: false,
+        snapshot_lag_threshold: 50,
     };
 
     let config2 = Config {
@@ -109,6 +112,7 @@ fn test_multiple_nodes_communication() {
         wal_batch_size: 10,
         wal_flush_interval_ms: 100,
         is_initial_leader: false,
+        snapshot_lag_threshold: 50,
     };
 
     // Create nodes OUTSIDE of async context to avoid nested runtime issue

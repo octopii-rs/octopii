@@ -343,6 +343,77 @@ impl RaftNode {
         }
     }
 
+    /// Proactively trigger snapshot catch-up for lagging peers
+    /// If a peer lags the leader by more than `lag_threshold` log entries, transition its
+    /// Progress state to Snapshot at the leader's committed index to initiate snapshot transfer.
+    pub async fn check_and_trigger_snapshot(&self, lag_threshold: u64) {
+        if lag_threshold == 0 {
+            return;
+        }
+        let mut node = self.raw_node.lock().await;
+
+        // Only the leader should evaluate and trigger snapshot catch-up
+        if node.raft.state != raft::StateRole::Leader {
+            return;
+        }
+
+        let leader_last_index = node.raft.raft_log.last_index();
+        let commit_index = node.raft.hard_state().commit;
+
+        // Gather peer IDs from current configuration (voters + learners, including joint)
+        let mut peer_ids: Vec<u64> = Vec::new();
+        let status = node.status();
+        if let Some(progress) = status.progress {
+            let cs = progress.conf().to_conf_state();
+            peer_ids.extend(cs.voters);
+            peer_ids.extend(cs.voters_outgoing);
+            peer_ids.extend(cs.learners);
+            peer_ids.extend(cs.learners_next);
+            peer_ids.sort_unstable();
+            peer_ids.dedup();
+        }
+
+        // Detect lagging peers
+        let mut lagging_peers: Vec<u64> = Vec::new();
+        for peer_id in peer_ids {
+            if peer_id == self.node_id {
+                continue;
+            }
+            if let Some(pr) = node.raft.prs().get(peer_id) {
+                let lag = leader_last_index.saturating_sub(pr.matched);
+                if lag > lag_threshold {
+                    lagging_peers.push(peer_id);
+                }
+            }
+        }
+
+        if lagging_peers.is_empty() {
+            return;
+        }
+
+        // Transition lagging peers to Snapshot state at commit_index
+        for pid in lagging_peers {
+            if let Some(pr) = node.raft.mut_prs().get_mut(pid) {
+                pr.become_snapshot(commit_index);
+                tracing::info!(
+                    "[Node {}] Triggering snapshot catch-up for peer {} at commit {} (leader last={})",
+                    self.node_id,
+                    pid,
+                    commit_index,
+                    leader_last_index
+                );
+            }
+        }
+
+        // Ensure the ready loop is notified so snapshot messages are emitted promptly
+        if node.has_ready() {
+            self.ready_notify.notify_one();
+        } else {
+            // Even if has_ready() was false, changes to progress may cause outgoing messages
+            self.ready_notify.notify_one();
+        }
+    }
+
     /// Expose raw_node for advanced operations
     pub fn raw_node(&self) -> &Arc<Mutex<RawNode<WalStorage>>> {
         &self.raw_node

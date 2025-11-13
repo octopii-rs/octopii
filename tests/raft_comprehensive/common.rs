@@ -68,6 +68,7 @@ impl TestNode {
             wal_batch_size: 100,
             wal_flush_interval_ms: 100,
             is_initial_leader,
+            snapshot_lag_threshold: 50,
         };
 
         // Use shared runtime from current context
