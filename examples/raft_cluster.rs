@@ -29,6 +29,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         wal_batch_size: 100,
         wal_flush_interval_ms: 100,
         is_initial_leader: true,
+        snapshot_lag_threshold: 200,
     };
 
     // Node 2 configuration (follower)
@@ -41,6 +42,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         wal_batch_size: 100,
         wal_flush_interval_ms: 100,
         is_initial_leader: false,
+        snapshot_lag_threshold: 200,
     };
 
     // Node 3 configuration (follower)
@@ -53,6 +55,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         wal_batch_size: 100,
         wal_flush_interval_ms: 100,
         is_initial_leader: false,
+        snapshot_lag_threshold: 200,
     };
 
     // Create nodes (must be done outside of tokio runtime to avoid nested runtime panic)

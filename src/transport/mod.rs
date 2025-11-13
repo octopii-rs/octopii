@@ -120,6 +120,16 @@ impl QuicTransport {
     pub fn close(&self) {
         self.endpoint.close(0u32.into(), b"shutdown");
     }
+
+    /// Check if we have an active connection to a peer
+    pub async fn has_active_peer(&self, addr: SocketAddr) -> bool {
+        let peers = self.peers.read().await;
+        if let Some(peer) = peers.get(&addr) {
+            !peer.is_closed()
+        } else {
+            false
+        }
+    }
 }
 
 #[cfg(test)]

@@ -144,6 +144,7 @@ impl TestNodeWithCustomStateMachine {
             wal_batch_size: 10,        // Reduced from 100 to lower memory usage
             wal_flush_interval_ms: 50, // Increased to reduce fsync frequency
             is_initial_leader,
+            snapshot_lag_threshold: 50,
         };
 
         let runtime = OctopiiRuntime::from_handle(tokio::runtime::Handle::current());

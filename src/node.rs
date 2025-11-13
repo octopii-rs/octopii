@@ -1012,6 +1012,14 @@ impl OctopiiNode {
         let mut shutdown_rx = self.shutdown_tx.subscribe();
         let ready_notify = self.raft.ready_notifier();
         let send_filters = Arc::clone(&self.send_filters);
+        let snapshot_lag_threshold = self.config.snapshot_lag_threshold;
+        let transport = Arc::clone(&self.transport);
+        // Track last observed evidence of a live leader (heartbeats/append)
+        let mut last_leader_activity = Instant::now();
+        // Debounce manual campaigns to avoid spamming in noisy networks
+        let mut last_manual_campaign = Instant::now()
+            .checked_sub(Duration::from_secs(60))
+            .unwrap_or_else(Instant::now);
 
         tracing::info!("Spawning consolidated Raft event loop");
 
@@ -1039,6 +1047,10 @@ impl OctopiiNode {
                                 let msg_to = msg.to;
                                 let msg_index = msg.index;
                                 let msg_commit = msg.commit;
+                                // Consider heartbeats and appends as leader activity hints
+                                if matches!(msg_type, raft::prelude::MessageType::MsgHeartbeat | raft::prelude::MessageType::MsgAppend) {
+                                    last_leader_activity = Instant::now();
+                                }
                                 if let Err(e) = raft.step(msg).await {
                                     tracing::error!("Failed to step Raft message {:?}: {}", msg_type, e);
                                 } else {
@@ -1060,16 +1072,56 @@ impl OctopiiNode {
                         tracing::trace!("Raft ticked");
                         process_ready = true;
 
-                        if !raft.has_leader().await {
+                        // Proactively trigger snapshot for lagging peers if we are leader
+                        if raft.is_leader().await && snapshot_lag_threshold > 0 {
+                            let raft_clone = Arc::clone(&raft);
+                            tokio::spawn(async move {
+                                raft_clone.check_and_trigger_snapshot(snapshot_lag_threshold).await;
+                            });
+                        }
+
+                        // Trigger leader election more aggressively when the known leader appears silent.
+                        // We do this even if a leader_id is present to recover faster after abrupt exits.
+                        let no_leader_known = !raft.has_leader().await;
+                        // If we still "think" there is a leader, verify we have an active transport to it.
+                        let mut transport_disconnected_from_leader = false;
+                        if !no_leader_known && !raft.is_leader().await {
+                            // Look up leader address from mapping
+                            let leader_id = {
+                                let rn = raft.raw_node().lock().await;
+                                rn.raft.leader_id
+                            };
+                            if leader_id != raft::INVALID_ID {
+                                let leader_addr = { peer_addrs.read().await.get(&leader_id).copied() };
+                                if let Some(addr) = leader_addr {
+                                    // If no active connection to leader, treat as silence
+                                    if !transport.has_active_peer(addr).await {
+                                        transport_disconnected_from_leader = true;
+                                    }
+                                }
+                            }
+                        }
+                        let leader_silent = !raft.is_leader().await
+                            && (last_leader_activity.elapsed() > Duration::from_millis(800)
+                                || transport_disconnected_from_leader);
+                        if no_leader_known || leader_silent {
                             ticks_without_leader += 1;
-                            if ticks_without_leader >= max_ticks_without_leader {
+                            // If leader is silent, don't wait for random backoff; trigger quickly.
+                            let threshold = if leader_silent { 5 } else { max_ticks_without_leader };
+                            if ticks_without_leader >= threshold {
                                 tracing::warn!(
-                                    "No leader detected for {} ticks ({}ms), triggering election",
+                                    "No leader detected or silent leader for {} ticks ({}ms), triggering election",
                                     ticks_without_leader,
                                     ticks_without_leader * 100
                                 );
-                                if let Err(e) = raft.campaign().await {
-                                    tracing::error!("Failed to start election campaign: {}", e);
+                                // Debounce manual campaign
+                                if last_manual_campaign.elapsed() > Duration::from_millis(750) {
+                                    if let Err(e) = raft.campaign().await {
+                                        tracing::error!("Failed to start election campaign: {}", e);
+                                    } else {
+                                        tracing::info!("Started manual election campaign due to leader silence");
+                                        last_manual_campaign = Instant::now();
+                                    }
                                 }
                                 ticks_without_leader = 0;
                             }
@@ -1536,6 +1588,7 @@ mod tests {
             wal_batch_size: 10,
             wal_flush_interval_ms: 100,
             is_initial_leader: false,
+            snapshot_lag_threshold: 500,
         };
 
         assert_eq!(config.node_id, 1);
