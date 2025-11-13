@@ -10,7 +10,7 @@ fn init_test_tracing() {
         let _ = tracing_subscriber::fmt()
             .with_env_filter(
                 tracing_subscriber::EnvFilter::try_from_default_env()
-                    .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+                    .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn")),
             )
             .with_target(true)
             .without_time()
@@ -377,13 +377,26 @@ fn test_add_learner_under_load_and_promote() {
         // Wait for learner to catch up (should trigger snapshot transfer if needed)
         let start = std::time::Instant::now();
         let timeout = Duration::from_secs(30);
+        let mut last_print = std::time::Instant::now()
+            .checked_sub(Duration::from_secs(10))
+            .unwrap_or_else(std::time::Instant::now);
         loop {
             if start.elapsed() > timeout {
                 panic!("Learner 4 did not catch up in time");
             }
-            // Emit progress to aid diagnosis while waiting
-            if let Some((matched, last)) = n1.peer_progress(4).await {
-                tracing::info!("Learner4 progress: matched={}, leader_last={}, lag={}", matched, last, last.saturating_sub(matched));
+            // Emit a compact progress line at most once per second
+            if last_print.elapsed() >= Duration::from_secs(1) {
+                if let Some((matched, last)) = n1.peer_progress(4).await {
+                    println!(
+                        "[learner4] matched={} leader_last={} lag={}",
+                        matched,
+                        last,
+                        last.saturating_sub(matched)
+                    );
+                } else {
+                    println!("[learner4] no progress info yet");
+                }
+                last_print = std::time::Instant::now();
             }
             if n1.is_learner_caught_up(4).await.unwrap_or(false) {
                 break;
