@@ -723,7 +723,7 @@ impl OctopiiNode {
         if let Some((matched, leader_last_index)) = self.raft.peer_progress(learner_id).await {
             let lag = leader_last_index.saturating_sub(matched);
 
-            tracing::debug!(
+            tracing::info!(
                 "Learner {} progress: matched={}, leader_last={}, lag={}",
                 learner_id,
                 matched,
@@ -1386,6 +1386,13 @@ impl OctopiiNode {
                         msg_type,
                         peer_addr
                     );
+                    if matches!(msg_type, raft::prelude::MessageType::MsgSnapshot) {
+                        tracing::info!(
+                            "Initiating snapshot transfer to peer {} at addr {}",
+                            to,
+                            peer_addr
+                        );
+                    }
 
                     let rpc_clone = Arc::clone(rpc);
                     // Longer timeout for snapshots; they can be large and take time
