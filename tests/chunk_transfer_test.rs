@@ -122,3 +122,41 @@ async fn test_chunk_transfer_checksum_verification() {
     transport1.close();
     transport2.close();
 }
+
+#[tokio::test]
+async fn test_chunk_transfer_stream_to_disk() {
+    let addr1: SocketAddr = "127.0.0.1:0".parse().unwrap();
+    let addr2: SocketAddr = "127.0.0.1:0".parse().unwrap();
+
+    let transport1 = Arc::new(QuicTransport::new(addr1).await.unwrap());
+    let transport2 = Arc::new(QuicTransport::new(addr2).await.unwrap());
+
+    let actual_addr2 = transport2.local_addr().unwrap();
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let dest_path = temp_dir.path().join("streamed.bin");
+
+    let t2_clone = Arc::clone(&transport2);
+    let dest_clone = dest_path.clone();
+    let receiver = tokio::spawn(async move {
+        let (_, peer) = t2_clone.accept().await.unwrap();
+        peer.recv_chunk_to_path(dest_clone).await.unwrap()
+    });
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let payload = Bytes::from(vec![5u8; 8 * 1024]);
+    let chunk = ChunkSource::Memory(payload.clone());
+    let sender = transport1.connect(actual_addr2).await.unwrap();
+    let bytes_sent = sender.send_chunk_verified(&chunk).await.unwrap();
+    assert_eq!(bytes_sent, payload.len() as u64);
+
+    let written = receiver.await.unwrap().unwrap();
+    assert_eq!(written, payload.len() as u64);
+
+    let on_disk = tokio::fs::read(&dest_path).await.unwrap();
+    assert_eq!(on_disk, payload.as_ref());
+
+    transport1.close();
+    transport2.close();
+}

@@ -1,3 +1,4 @@
+use crate::wal::WriteAheadLog;
 use bytes::Bytes;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex as StdMutex};
@@ -69,4 +70,59 @@ impl StateMachineTrait for KvStateMachine {
 	}
 }
 
+/// WAL-backed wrapper that replays commands on startup and durably appends writes.
+pub struct WalBackedStateMachine {
+	inner: StateMachine,
+	wal: Arc<WriteAheadLog>,
+}
 
+impl WalBackedStateMachine {
+	pub fn with_inner(inner: StateMachine, wal: Arc<WriteAheadLog>) -> Arc<Self> {
+		let sm = Arc::new(Self { inner, wal });
+		Self::replay_wal(&sm);
+		sm
+	}
+
+	fn replay_wal(this: &Arc<Self>) {
+		let wal = Arc::clone(&this.wal);
+		let inner = Arc::clone(&this.inner);
+		tokio::task::block_in_place(|| {
+			tokio::runtime::Handle::current().block_on(async move {
+				if let Ok(entries) = wal.read_all().await {
+					for entry in entries {
+						let _ = inner.apply(&entry);
+					}
+				}
+			})
+		});
+	}
+
+	fn append_entry(&self, command: &[u8]) -> std::result::Result<(), String> {
+		let data = Bytes::copy_from_slice(command);
+		let wal = Arc::clone(&self.wal);
+		tokio::task::block_in_place(|| {
+			tokio::runtime::Handle::current().block_on(async move {
+				wal.append(data).await.map(|_| ()).map_err(|e| e.to_string())
+			})
+		})
+	}
+}
+
+impl StateMachineTrait for WalBackedStateMachine {
+	fn apply(&self, command: &[u8]) -> std::result::Result<Bytes, String> {
+		self.append_entry(command)?;
+		self.inner.apply(command)
+	}
+
+	fn snapshot(&self) -> Vec<u8> {
+		self.inner.snapshot()
+	}
+
+	fn restore(&self, data: &[u8]) -> std::result::Result<(), String> {
+		self.inner.restore(data)
+	}
+
+	fn compact(&self) -> std::result::Result<(), String> {
+		self.inner.compact()
+	}
+}

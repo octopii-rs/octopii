@@ -3,8 +3,9 @@ use crate::error::{OctopiiError, Result};
 use bytes::{Bytes, BytesMut};
 use quinn::Connection;
 use sha2::{Digest, Sha256};
+use std::path::Path;
 use tokio::fs::File;
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 /// A connection to a peer
 pub struct PeerConnection {
@@ -258,5 +259,89 @@ impl PeerConnection {
             .map_err(|e| OctopiiError::Transport(format!("Stream closed: {}", e)))?;
 
         Ok(Some(data.freeze()))
+    }
+
+    /// Receive a chunk and stream it directly to disk, acknowledging checksum.
+    pub async fn recv_chunk_to_path<P: AsRef<Path>>(&self, path: P) -> Result<Option<u64>> {
+        const BUFFER_SIZE: usize = 64 * 1024;
+
+        let (mut send_stream, mut recv_stream) = match self.connection.accept_bi().await {
+            Ok(stream) => stream,
+            Err(quinn::ConnectionError::ApplicationClosed(_)) => return Ok(None),
+            Err(e) => return Err(e.into()),
+        };
+
+        let mut size_buf = [0u8; 8];
+        if let Err(e) = recv_stream.read_exact(&mut size_buf).await {
+            let _ = send_stream.write_all(&[2u8]).await;
+            return Err(OctopiiError::Transport(format!(
+                "Failed to read size: {}",
+                e
+            )));
+        }
+        let total_size = u64::from_le_bytes(size_buf);
+
+        let mut file = match File::create(path).await {
+            Ok(f) => f,
+            Err(e) => {
+                let _ = send_stream.write_all(&[2u8]).await;
+                return Err(OctopiiError::Transport(format!(
+                    "Failed to create file: {}",
+                    e
+                )));
+            }
+        };
+
+        let mut hasher = Sha256::new();
+        let mut received = 0u64;
+        let mut buffer = vec![0u8; BUFFER_SIZE];
+        while received < total_size {
+            let to_read = std::cmp::min(BUFFER_SIZE, (total_size - received) as usize);
+            match recv_stream.read(&mut buffer[..to_read]).await {
+                Ok(Some(n)) => {
+                    hasher.update(&buffer[..n]);
+                    file.write_all(&buffer[..n])
+                        .await
+                        .map_err(|e| OctopiiError::Transport(format!("File write failed: {}", e)))?;
+                    received += n as u64;
+                }
+                Ok(None) => {
+                    let _ = send_stream.write_all(&[2u8]).await;
+                    return Err(OctopiiError::Transport("Unexpected EOF".to_string()));
+                }
+                Err(e) => {
+                    let _ = send_stream.write_all(&[2u8]).await;
+                    return Err(OctopiiError::Transport(format!("Read error: {}", e)));
+                }
+            }
+        }
+
+        let mut received_checksum = [0u8; 32];
+        if let Err(e) = recv_stream.read_exact(&mut received_checksum).await {
+            let _ = send_stream.write_all(&[2u8]).await;
+            return Err(OctopiiError::Transport(format!(
+                "Failed to read checksum: {}",
+                e
+            )));
+        }
+
+        let computed_checksum = hasher.finalize();
+        if &computed_checksum[..] != &received_checksum {
+            let _ = send_stream.write_all(&[1u8]).await;
+            return Err(OctopiiError::Transport(
+                "Checksum verification failed".to_string(),
+            ));
+        }
+
+        file.flush()
+            .await
+            .map_err(|e| OctopiiError::Transport(format!("Flush failed: {}", e)))?;
+
+        send_stream
+            .write_all(&[0u8])
+            .await
+            .map_err(|e| OctopiiError::Transport(format!("Failed to send ACK: {}", e)))?;
+
+        Ok(Some(received))
     }
 }

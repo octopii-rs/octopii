@@ -10,19 +10,34 @@ use crate::openraft::types::{AppEntry, AppResponse, AppNodeId, AppTypeConfig};
 use crate::runtime::OctopiiRuntime;
 use crate::state_machine::{KvStateMachine, StateMachine};
 use bytes::Bytes;
-use std::collections::{BTreeMap, BTreeSet};
+use openraft::metrics::RaftMetrics;
+use once_cell::sync::Lazy;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock as StdRwLock};
 use tokio::sync::RwLock;
 use tokio::time::Duration;
 use openraft::{Raft, Config as RaftConfig};
 use openraft::impls::BasicNode;
+
+pub(crate) static GLOBAL_PEER_ADDRS: Lazy<StdRwLock<HashMap<u64, SocketAddr>>> =
+    Lazy::new(|| StdRwLock::new(HashMap::new()));
+
+pub(crate) fn register_global_peer_addr(node_id: u64, addr: SocketAddr) {
+    let mut map = GLOBAL_PEER_ADDRS.write().unwrap();
+    map.insert(node_id, addr);
+}
+
+pub(crate) fn global_peer_addr(peer_id: u64) -> Option<SocketAddr> {
+    GLOBAL_PEER_ADDRS.read().unwrap().get(&peer_id).copied()
+}
 
 /// OpenRaft-based node
 pub struct OpenRaftNode {
     runtime: OctopiiRuntime,
     config: Config,
     rpc: Arc<crate::rpc::RpcHandler>,
+    transport: Arc<crate::transport::QuicTransport>,
     raft: Arc<Raft<AppTypeConfig>>,
     state_machine: StateMachine,
     peer_addrs: Arc<RwLock<std::collections::HashMap<u64, SocketAddr>>>,
@@ -40,6 +55,8 @@ impl OpenRaftNode {
     pub async fn new(config: Config, runtime: OctopiiRuntime) -> Result<Self> {
         let transport = Arc::new(crate::transport::QuicTransport::new(config.bind_addr).await?);
         let rpc = Arc::new(crate::rpc::RpcHandler::new(Arc::clone(&transport)));
+
+        register_global_peer_addr(config.node_id, config.bind_addr);
         
         // Start accepting incoming connections
         let rpc_clone = Arc::clone(&rpc);
@@ -136,6 +153,7 @@ impl OpenRaftNode {
             runtime,
             config,
             rpc,
+            transport,
             raft: Arc::new(raft),
             state_machine,
             peer_addrs,
@@ -324,6 +342,7 @@ impl OpenRaftNode {
 
     pub async fn add_learner(&self, peer_id: u64, addr: SocketAddr) -> Result<()> {
         self.peer_addrs.write().await.insert(peer_id, addr);
+        register_global_peer_addr(peer_id, addr);
         let node = BasicNode { addr: addr.to_string() };
         self.raft.add_learner(peer_id, node, true).await
             .map_err(|e| crate::error::OctopiiError::Rpc(format!("add_learner: {e}")))?;
@@ -397,6 +416,19 @@ impl OpenRaftNode {
 
     pub async fn update_peer_addr(&self, peer_id: u64, addr: SocketAddr) {
         self.peer_addrs.write().await.insert(peer_id, addr);
+        register_global_peer_addr(peer_id, addr);
+    }
+
+    pub async fn peer_addr_for(&self, peer_id: u64) -> Option<SocketAddr> {
+        if let Some(addr) = self.peer_addrs.read().await.get(&peer_id).copied() {
+            Some(addr)
+        } else {
+            global_peer_addr(peer_id)
+        }
+    }
+
+    pub fn raft_metrics(&self) -> RaftMetrics<AppTypeConfig> {
+        self.raft.metrics().borrow().clone()
     }
 
     pub fn id(&self) -> u64 {
@@ -405,6 +437,10 @@ impl OpenRaftNode {
 
     pub fn shutdown(&self) {
         let _ = self.raft.shutdown();
+    }
+
+    pub fn shipping_lane(&self) -> crate::shipping_lane::ShippingLane {
+        crate::shipping_lane::ShippingLane::new(Arc::clone(&self.transport))
     }
 
     #[cfg(feature = "openraft-filters")]

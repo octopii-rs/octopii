@@ -1,8 +1,9 @@
+use bytes::Bytes;
 use octopii::{Config, OctopiiNode, OctopiiRuntime};
-use std::time::Duration;
-use tokio::time::sleep;
 use std::path::PathBuf;
 use std::sync::Once;
+use std::time::Duration;
+use tokio::time::sleep;
 
 fn init_test_tracing() {
     static INIT: Once = Once::new();
@@ -46,7 +47,9 @@ fn test_smoke_single_node_leader() {
 
         // Avoid nested runtime: construct via async API using current handle
         let runtime = OctopiiRuntime::from_handle(tokio::runtime::Handle::current());
-        let node = OctopiiNode::new(config, runtime).await.expect("create node");
+        let node = OctopiiNode::new(config, runtime)
+            .await
+            .expect("create node");
         node.start().await.expect("start node");
 
         // Single node should be able to become leader
@@ -117,8 +120,12 @@ fn test_smoke_three_nodes_manual_election_after_shutdown() {
 
         // Avoid nested runtime: construct via async API using current handle
         let runtime = OctopiiRuntime::from_handle(tokio::runtime::Handle::current());
-        let n1 = OctopiiNode::new(config1, runtime.clone()).await.expect("create n1");
-        let n2 = OctopiiNode::new(config2, runtime.clone()).await.expect("create n2");
+        let n1 = OctopiiNode::new(config1, runtime.clone())
+            .await
+            .expect("create n1");
+        let n2 = OctopiiNode::new(config2, runtime.clone())
+            .await
+            .expect("create n2");
         let n3 = OctopiiNode::new(config3, runtime).await.expect("create n3");
 
         n1.start().await.expect("start n1");
@@ -137,7 +144,10 @@ fn test_smoke_three_nodes_manual_election_after_shutdown() {
         // Manually trigger election on node2 for deterministic re-election
         n2.campaign().await.expect("n2 campaign");
         sleep(Duration::from_secs(3)).await;
-        assert!(n2.is_leader().await, "n2 should take leadership after n1 shutdown");
+        assert!(
+            n2.is_leader().await,
+            "n2 should take leadership after n1 shutdown"
+        );
 
         // Cleanup
         let _ = tokio::fs::remove_dir_all(&base).await;
@@ -198,8 +208,12 @@ fn test_three_nodes_graceful_shutdown_auto_election() {
         };
 
         let runtime = OctopiiRuntime::from_handle(tokio::runtime::Handle::current());
-        let n1 = OctopiiNode::new(config1, runtime.clone()).await.expect("create n1");
-        let n2 = OctopiiNode::new(config2, runtime.clone()).await.expect("create n2");
+        let n1 = OctopiiNode::new(config1, runtime.clone())
+            .await
+            .expect("create n1");
+        let n2 = OctopiiNode::new(config2, runtime.clone())
+            .await
+            .expect("create n2");
         let n3 = OctopiiNode::new(config3, runtime).await.expect("create n3");
 
         n1.start().await.expect("start n1");
@@ -213,19 +227,16 @@ fn test_three_nodes_graceful_shutdown_auto_election() {
 
         // Step 2: Add nodes 2 and 3 as learners
         println!("[test] Adding node 2 as learner");
-        n1.add_learner(2, addr2).await.expect("add node 2 as learner");
+        n1.add_learner(2, addr2)
+            .await
+            .expect("add node 2 as learner");
         sleep(Duration::from_millis(500)).await;
 
         println!("[test] Adding node 3 as learner");
-        n1.add_learner(3, addr3).await.expect("add node 3 as learner");
+        n1.add_learner(3, addr3)
+            .await
+            .expect("add node 3 as learner");
         sleep(Duration::from_millis(500)).await;
-
-        // TODO: Implement automatic peer address distribution in add_learner/promote_learner
-        // Currently, nodes only learn addresses from their initial peer list or manual updates.
-        // For follower-to-follower communication (e.g., elections), we must manually sync addresses.
-        println!("[test] Syncing peer addresses between followers");
-        n2.update_peer_addr(3, addr3).await;
-        n3.update_peer_addr(2, addr2).await;
 
         // Step 3: Promote learners to voters (this makes them eligible for elections)
         println!("[test] Promoting learners to voters");
@@ -256,7 +267,10 @@ fn test_three_nodes_graceful_shutdown_auto_election() {
         while start.elapsed() < timeout {
             let n2_leader = n2.is_leader().await;
             let n3_leader = n3.is_leader().await;
-            println!("[test] Checking: n2.is_leader()={}, n3.is_leader()={}", n2_leader, n3_leader);
+            println!(
+                "[test] Checking: n2.is_leader()={}, n3.is_leader()={}",
+                n2_leader, n3_leader
+            );
             if n2_leader {
                 new_leader = Some(2);
                 break;
@@ -267,7 +281,10 @@ fn test_three_nodes_graceful_shutdown_auto_election() {
             }
             sleep(Duration::from_millis(200)).await;
         }
-        println!("[test] After auto-election wait: new_leader={:?}", new_leader);
+        println!(
+            "[test] After auto-election wait: new_leader={:?}",
+            new_leader
+        );
 
         // If no auto-election yet, nudge by having one follower campaign (diagnostic step closer)
         if new_leader.is_none() {
@@ -284,7 +301,10 @@ fn test_three_nodes_graceful_shutdown_auto_election() {
                 new_leader = Some(3);
             }
         }
-        assert!(new_leader.is_some(), "A leader should exist after shutdown (auto or nudged)");
+        assert!(
+            new_leader.is_some(),
+            "A leader should exist after shutdown (auto or nudged)"
+        );
         assert_ne!(new_leader.unwrap(), 1, "New leader must not be node 1");
 
         // Cleanup
@@ -349,9 +369,15 @@ fn test_add_learner_under_load_and_promote() {
         };
 
         let runtime = OctopiiRuntime::from_handle(tokio::runtime::Handle::current());
-        let n1 = OctopiiNode::new(config1.clone(), runtime.clone()).await.expect("create n1");
-        let n2 = OctopiiNode::new(config2.clone(), runtime.clone()).await.expect("create n2");
-        let n3 = OctopiiNode::new(config3.clone(), runtime.clone()).await.expect("create n3");
+        let n1 = OctopiiNode::new(config1.clone(), runtime.clone())
+            .await
+            .expect("create n1");
+        let n2 = OctopiiNode::new(config2.clone(), runtime.clone())
+            .await
+            .expect("create n2");
+        let n3 = OctopiiNode::new(config3.clone(), runtime.clone())
+            .await
+            .expect("create n3");
 
         n1.start().await.expect("start n1");
         n2.start().await.expect("start n2");
@@ -364,18 +390,15 @@ fn test_add_learner_under_load_and_promote() {
 
         // Generate some history before adding the learner
         for i in 0..200usize {
-            let _ = n1.propose(format!("SET pre{} v{}", i, i).into_bytes()).await;
+            let _ = n1
+                .propose(format!("SET pre{} v{}", i, i).into_bytes())
+                .await;
             sleep(Duration::from_millis(5)).await;
         }
         sleep(Duration::from_millis(500)).await;
 
-        // Add learner node 4 via leader
-        n1.add_learner(4, addr4).await.expect("add learner");
-        // Print conf state to verify learner 4 is in config
-        let cs = n1.conf_state().await;
-        println!("[conf] voters={:?} learners={:?}", cs.voters, cs.learners);
-
-        // Create the learner node with peers pointing to the existing cluster
+        // Create the learner node with peers pointing to the existing cluster,
+        // but do not add it to the membership yet.
         let config4 = Config {
             node_id: 4,
             bind_addr: addr4,
@@ -388,16 +411,40 @@ fn test_add_learner_under_load_and_promote() {
             is_initial_leader: false,
             snapshot_lag_threshold: 50,
         };
-        let n4 = OctopiiNode::new(config4, runtime.clone()).await.expect("create n4");
+        let n4 = OctopiiNode::new(config4, runtime.clone())
+            .await
+            .expect("create n4");
         // Inject peer address map so learner can respond to leader without Raft bootstrap
         n4.update_peer_addr(1, addr1).await;
         n4.update_peer_addr(2, addr2).await;
         n4.update_peer_addr(3, addr3).await;
         n4.start().await.expect("start n4");
 
+        // Now add learner node 4 via leader
+        n1.add_learner(4, addr4).await.expect("add learner");
+        // Print conf state to verify learner 4 is in config
+        let cs = n1.conf_state().await;
+        println!("[conf] voters={:?} learners={:?}", cs.voters, cs.learners);
+
+        // Wait until leader reports replication info for the learner so progress checks work.
+        let mut progress_initialized = false;
+        let start_progress = std::time::Instant::now();
+        while start_progress.elapsed() < Duration::from_secs(10) {
+            if n1.peer_progress(4).await.is_some() {
+                progress_initialized = true;
+                break;
+            }
+            sleep(Duration::from_millis(200)).await;
+        }
+        if !progress_initialized {
+            panic!("Leader never initialized replication state for learner 4");
+        }
+
         // Keep issuing proposals while learner catches up
         for i in 200..400usize {
-            let _ = n1.propose(format!("SET mid{} v{}", i, i).into_bytes()).await;
+            let _ = n1
+                .propose(format!("SET mid{} v{}", i, i).into_bytes())
+                .await;
             sleep(Duration::from_millis(5)).await;
         }
 
@@ -442,11 +489,102 @@ fn test_add_learner_under_load_and_promote() {
         // Sanity: cluster should still have a leader; propose a few entries
         assert!(n1.has_leader().await, "cluster should have a leader");
         for i in 400..420usize {
-            let _ = n1.propose(format!("SET post{} v{}", i, i).into_bytes()).await;
+            let _ = n1
+                .propose(format!("SET post{} v{}", i, i).into_bytes())
+                .await;
             sleep(Duration::from_millis(5)).await;
         }
 
         // Cleanup
+        let _ = tokio::fs::remove_dir_all(&base).await;
+    });
+}
+
+#[test]
+fn test_snapshot_during_heavy_load_keeps_followers_caught_up() {
+    init_test_tracing();
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(4)
+        .enable_all()
+        .build()
+        .unwrap();
+
+    rt.block_on(async {
+        let base = PathBuf::from(std::env::temp_dir()).join("octopii_snapshot_heavy_load");
+        let _ = std::fs::remove_dir_all(&base);
+
+        let addr1 = "127.0.0.1:9361".parse().unwrap();
+        let addr2 = "127.0.0.1:9362".parse().unwrap();
+
+        let config1 = Config {
+            node_id: 1,
+            bind_addr: addr1,
+            peers: vec![addr2],
+            wal_dir: base.join("n1"),
+            worker_threads: 2,
+            wal_batch_size: 32,
+            wal_flush_interval_ms: 50,
+            is_initial_leader: true,
+            snapshot_lag_threshold: 25,
+        };
+        let config2 = Config {
+            node_id: 2,
+            bind_addr: addr2,
+            peers: vec![addr1],
+            wal_dir: base.join("n2"),
+            worker_threads: 2,
+            wal_batch_size: 32,
+            wal_flush_interval_ms: 50,
+            is_initial_leader: false,
+            snapshot_lag_threshold: 25,
+        };
+
+        let runtime = OctopiiRuntime::from_handle(tokio::runtime::Handle::current());
+        let n1 = OctopiiNode::new(config1, runtime.clone())
+            .await
+            .expect("create leader");
+        let n2 = OctopiiNode::new(config2, runtime.clone())
+            .await
+            .expect("create follower");
+
+        n1.start().await.expect("start n1");
+        n2.start().await.expect("start n2");
+        n1.campaign().await.expect("campaign n1");
+        sleep(Duration::from_secs(1)).await;
+        assert!(n1.is_leader().await, "leader should be elected");
+
+        n1.add_learner(2, addr2).await.expect("add learner 2");
+        sleep(Duration::from_secs(1)).await;
+        n1.promote_learner(2).await.expect("promote learner 2");
+        sleep(Duration::from_secs(1)).await;
+
+        for i in 0..400usize {
+            let _ = n1
+                .propose(format!("SET snap{} {}", i, i).into_bytes())
+                .await;
+            if i == 150 {
+                let _ = n1.force_snapshot_to_peer(2).await;
+            }
+            sleep(Duration::from_millis(5)).await;
+        }
+
+        let start = std::time::Instant::now();
+        while start.elapsed() < Duration::from_secs(20) {
+            if n1.is_learner_caught_up(2).await.unwrap_or(false) {
+                break;
+            }
+            sleep(Duration::from_millis(200)).await;
+        }
+        assert!(
+            n1.is_learner_caught_up(2).await.unwrap_or(false),
+            "follower should catch up even while snapshotting"
+        );
+
+        let val = n2.query(b"GET snap399").await.unwrap();
+        assert_eq!(val, Bytes::from("399"));
+
+        n1.shutdown();
+        n2.shutdown();
         let _ = tokio::fs::remove_dir_all(&base).await;
     });
 }
@@ -505,9 +643,15 @@ fn test_three_nodes_crash_leader_with_load_and_restart_auto_election() {
         };
 
         let runtime = OctopiiRuntime::from_handle(tokio::runtime::Handle::current());
-        let n1 = OctopiiNode::new(config1.clone(), runtime.clone()).await.expect("create n1");
-        let n2 = OctopiiNode::new(config2.clone(), runtime.clone()).await.expect("create n2");
-        let n3 = OctopiiNode::new(config3.clone(), runtime.clone()).await.expect("create n3");
+        let n1 = OctopiiNode::new(config1.clone(), runtime.clone())
+            .await
+            .expect("create n1");
+        let n2 = OctopiiNode::new(config2.clone(), runtime.clone())
+            .await
+            .expect("create n2");
+        let n3 = OctopiiNode::new(config3.clone(), runtime.clone())
+            .await
+            .expect("create n3");
 
         n1.start().await.expect("start n1");
         n2.start().await.expect("start n2");
@@ -560,13 +704,18 @@ fn test_three_nodes_crash_leader_with_load_and_restart_auto_election() {
                 new_leader_id = Some(3);
             }
         }
-        assert!(new_leader_id.is_some(), "A leader should exist after crash (auto or nudged)");
+        assert!(
+            new_leader_id.is_some(),
+            "A leader should exist after crash (auto or nudged)"
+        );
         let new_leader_id = new_leader_id.unwrap();
 
         // Send a few more proposals via the new leader
         let leader = if new_leader_id == 2 { &n2 } else { &n3 };
         for i in 100..120usize {
-            let _ = leader.propose(format!("SET b{} v{}", i, i).into_bytes()).await;
+            let _ = leader
+                .propose(format!("SET b{} v{}", i, i).into_bytes())
+                .await;
             sleep(Duration::from_millis(10)).await;
         }
         sleep(Duration::from_millis(300)).await;
@@ -614,7 +763,13 @@ fn test_three_nodes_crash_leader_with_load_and_restart_auto_election() {
         );
 
         // Final small proposal through the current leader to ensure liveness
-        let current_leader = if n2.is_leader().await { &n2 } else if n3.is_leader().await { &n3 } else { &n1r };
+        let current_leader = if n2.is_leader().await {
+            &n2
+        } else if n3.is_leader().await {
+            &n3
+        } else {
+            &n1r
+        };
         let _ = current_leader.propose(b"SET final x".to_vec()).await;
         sleep(Duration::from_millis(300)).await;
 
@@ -623,4 +778,85 @@ fn test_three_nodes_crash_leader_with_load_and_restart_auto_election() {
     });
 }
 
+#[test]
+fn test_transfer_leader_noop_is_safe() {
+    init_test_tracing();
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(4)
+        .enable_all()
+        .build()
+        .unwrap();
 
+    rt.block_on(async {
+        let base = PathBuf::from(std::env::temp_dir()).join("octopii_transfer_leader_noop");
+        let _ = std::fs::remove_dir_all(&base);
+
+        let addr1 = "127.0.0.1:9371".parse().unwrap();
+        let addr2 = "127.0.0.1:9372".parse().unwrap();
+
+        let config1 = Config {
+            node_id: 1,
+            bind_addr: addr1,
+            peers: vec![addr2],
+            wal_dir: base.join("n1"),
+            worker_threads: 2,
+            wal_batch_size: 32,
+            wal_flush_interval_ms: 100,
+            is_initial_leader: true,
+            snapshot_lag_threshold: 50,
+        };
+        let config2 = Config {
+            node_id: 2,
+            bind_addr: addr2,
+            peers: vec![addr1],
+            wal_dir: base.join("n2"),
+            worker_threads: 2,
+            wal_batch_size: 32,
+            wal_flush_interval_ms: 100,
+            is_initial_leader: false,
+            snapshot_lag_threshold: 50,
+        };
+
+        let runtime = OctopiiRuntime::from_handle(tokio::runtime::Handle::current());
+        let n1 = OctopiiNode::new(config1, runtime.clone())
+            .await
+            .expect("create n1");
+        let n2 = OctopiiNode::new(config2, runtime.clone())
+            .await
+            .expect("create n2");
+
+        n1.start().await.expect("start n1");
+        n2.start().await.expect("start n2");
+
+        n1.campaign().await.expect("n1 campaign");
+        sleep(Duration::from_secs(2)).await;
+        assert!(n1.is_leader().await, "n1 should be leader before transfer");
+
+        // Calling transfer_leader is currently a no-op; verify it returns Ok and leadership stays stable.
+        n1.transfer_leader(2).await.expect("transfer_leader on leader");
+        n2.transfer_leader(1).await.expect("transfer_leader on follower");
+        sleep(Duration::from_secs(2)).await;
+
+        assert!(
+            n1.is_leader().await,
+            "transfer_leader no-op should not disrupt leadership"
+        );
+        assert!(
+            !n2.is_leader().await,
+            "follower should remain follower after transfer_leader no-op"
+        );
+
+        for i in 0..10usize {
+            let _ = n1
+                .propose(format!("SET noop{} {}", i, i).into_bytes())
+                .await;
+        }
+        sleep(Duration::from_secs(1)).await;
+        let val = n2.query(b"GET noop9").await.unwrap();
+        assert_eq!(val, Bytes::from("9"));
+
+        n1.shutdown();
+        n2.shutdown();
+        let _ = tokio::fs::remove_dir_all(&base).await;
+    });
+}

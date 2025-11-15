@@ -3,6 +3,7 @@ pub mod runtime;
 pub mod chunk;
 pub mod config;
 pub mod error;
+pub mod shipping_lane;
 pub mod state_machine;
 #[cfg(feature = "openraft")]
 pub mod openraft;
@@ -16,8 +17,9 @@ pub use config::Config;
 pub use error::{OctopiiError, Result};
 #[cfg(feature = "openraft")]
 pub use openraft::node::OpenRaftNode as OctopiiNode;
-pub use state_machine::{KvStateMachine, StateMachine, StateMachineTrait};
 pub use runtime::OctopiiRuntime;
+pub use shipping_lane::ShippingLane;
+pub use state_machine::{KvStateMachine, StateMachine, StateMachineTrait, WalBackedStateMachine};
 
 #[cfg(test)]
 mod tests {
