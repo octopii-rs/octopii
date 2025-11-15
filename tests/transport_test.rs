@@ -1,7 +1,9 @@
 use bytes::Bytes;
 use octopii::transport::QuicTransport;
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use tokio::time::{sleep, Duration};
 
 #[tokio::test]
 async fn test_transport_basic_connection() {
@@ -85,5 +87,68 @@ async fn test_transport_multiple_connections() {
     }
 
     transport1.close();
+    transport2.close();
+}
+
+#[tokio::test]
+async fn test_transport_connection_reuse_and_has_active_peer() {
+    let addr1: SocketAddr = "127.0.0.1:0".parse().unwrap();
+    let addr2: SocketAddr = "127.0.0.1:0".parse().unwrap();
+
+    let transport1 = Arc::new(QuicTransport::new(addr1).await.unwrap());
+    let transport2 = Arc::new(QuicTransport::new(addr2).await.unwrap());
+    let actual_addr2 = transport2.local_addr().unwrap();
+
+    let accepts = Arc::new(AtomicUsize::new(0));
+    let server = Arc::clone(&transport2);
+    let accepts_clone = Arc::clone(&accepts);
+    let server_handle = tokio::spawn(async move {
+        let (_, peer) = server.accept().await.unwrap();
+        accepts_clone.fetch_add(1, Ordering::SeqCst);
+        for expected in ["reuse-one", "reuse-two"] {
+            if let Some(bytes) = peer.recv().await.unwrap() {
+                assert_eq!(bytes, Bytes::from(expected));
+            }
+        }
+        // Keep the connection alive briefly before dropping.
+        sleep(Duration::from_millis(200)).await;
+    });
+
+    sleep(Duration::from_millis(50)).await;
+
+    transport1
+        .send(actual_addr2, Bytes::from("reuse-one"))
+        .await
+        .unwrap();
+    transport1
+        .send(actual_addr2, Bytes::from("reuse-two"))
+        .await
+        .unwrap();
+
+    assert!(
+        transport1.has_active_peer(actual_addr2).await,
+        "transport should track active peer after reuse"
+    );
+
+    server_handle.await.unwrap();
+    assert_eq!(
+        accepts.load(Ordering::SeqCst),
+        1,
+        "connection should be accepted only once and reused"
+    );
+
+    transport1.close();
+    let start = std::time::Instant::now();
+    while start.elapsed() < Duration::from_secs(5) {
+        if !transport1.has_active_peer(actual_addr2).await {
+            break;
+        }
+        sleep(Duration::from_millis(100)).await;
+    }
+    assert!(
+        !transport1.has_active_peer(actual_addr2).await,
+        "active peer should be dropped after transport close"
+    );
+
     transport2.close();
 }

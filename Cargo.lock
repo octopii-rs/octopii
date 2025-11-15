@@ -944,6 +944,7 @@ dependencies = [
  "io-uring",
  "libc",
  "memmap2",
+ "once_cell",
  "openraft",
  "protobuf",
  "quinn",

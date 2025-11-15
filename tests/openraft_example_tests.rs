@@ -10,7 +10,6 @@
 /// 4. test_membership_change_removal - Node removal and quorum verification
 /// 5. test_large_entries_replication - Large message replication (chunking test)
 /// 6. test_snapshot_transfer - Snapshot creation and transfer to learner
-
 use octopii::{Config, OctopiiNode, OctopiiRuntime};
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -69,7 +68,9 @@ fn test_cluster() {
         };
 
         let runtime = OctopiiRuntime::from_handle(tokio::runtime::Handle::current());
-        let n1 = OctopiiNode::new(config1, runtime.clone()).await.expect("create n1");
+        let n1 = OctopiiNode::new(config1, runtime.clone())
+            .await
+            .expect("create n1");
         n1.start().await.expect("start n1");
         n1.campaign().await.expect("n1 campaign");
         sleep(Duration::from_secs(1)).await;
@@ -92,7 +93,9 @@ fn test_cluster() {
             snapshot_lag_threshold: 50,
         };
 
-        let n2 = OctopiiNode::new(config2, runtime.clone()).await.expect("create n2");
+        let n2 = OctopiiNode::new(config2, runtime.clone())
+            .await
+            .expect("create n2");
         n2.start().await.expect("start n2");
         n1.add_learner(2, addr2).await.expect("add n2 as learner");
         sleep(Duration::from_millis(500)).await;
@@ -111,7 +114,9 @@ fn test_cluster() {
             snapshot_lag_threshold: 50,
         };
 
-        let n3 = OctopiiNode::new(config3, runtime.clone()).await.expect("create n3");
+        let n3 = OctopiiNode::new(config3, runtime.clone())
+            .await
+            .expect("create n3");
         n3.start().await.expect("start n3");
         n1.add_learner(3, addr3).await.expect("add n3 as learner");
         sleep(Duration::from_millis(500)).await;
@@ -218,7 +223,9 @@ fn test_follower_read() {
         };
 
         let runtime = OctopiiRuntime::from_handle(tokio::runtime::Handle::current());
-        let n1 = OctopiiNode::new(config1, runtime.clone()).await.expect("create n1");
+        let n1 = OctopiiNode::new(config1, runtime.clone())
+            .await
+            .expect("create n1");
         n1.start().await.expect("start n1");
         n1.campaign().await.expect("n1 campaign");
 
@@ -246,7 +253,9 @@ fn test_follower_read() {
             is_initial_leader: false,
             snapshot_lag_threshold: 50,
         };
-        let n2 = OctopiiNode::new(config2, runtime.clone()).await.expect("create n2");
+        let n2 = OctopiiNode::new(config2, runtime.clone())
+            .await
+            .expect("create n2");
         n2.start().await.expect("start n2");
         n1.add_learner(2, addr2).await.expect("add n2");
 
@@ -278,7 +287,9 @@ fn test_follower_read() {
 
         // Write some data
         println!("=== write test_key=test_value");
-        n1.propose(b"SET test_key test_value".to_vec()).await.expect("write should succeed");
+        n1.propose(b"SET test_key test_value".to_vec())
+            .await
+            .expect("write should succeed");
 
         // Wait for replication
         sleep(Duration::from_millis(500)).await;
@@ -299,7 +310,10 @@ fn test_follower_read() {
         println!("=== follower_read on node 2 with non-existent key");
         let result = n2.query(b"GET non_existent").await;
         // Query should succeed even if key doesn't exist
-        assert!(result.is_ok(), "follower_read should succeed even for non-existent key");
+        assert!(
+            result.is_ok(),
+            "follower_read should succeed even for non-existent key"
+        );
         println!("=== follower_read returned: {:?}", result);
 
         println!("=== test_follower_read passed!");
@@ -343,7 +357,9 @@ fn test_write_forwarding() {
         };
 
         let runtime = OctopiiRuntime::from_handle(tokio::runtime::Handle::current());
-        let n1 = OctopiiNode::new(config1, runtime.clone()).await.expect("create n1");
+        let n1 = OctopiiNode::new(config1, runtime.clone())
+            .await
+            .expect("create n1");
         n1.start().await.expect("start n1");
         n1.campaign().await.expect("n1 campaign");
         sleep(Duration::from_secs(1)).await;
@@ -359,7 +375,9 @@ fn test_write_forwarding() {
             is_initial_leader: false,
             snapshot_lag_threshold: 50,
         };
-        let n2 = OctopiiNode::new(config2, runtime.clone()).await.expect("create n2");
+        let n2 = OctopiiNode::new(config2, runtime.clone())
+            .await
+            .expect("create n2");
         n2.start().await.expect("start n2");
         n1.add_learner(2, addr2).await.expect("add n2");
 
@@ -389,12 +407,16 @@ fn test_write_forwarding() {
 
         // Write through leader first
         println!("=== write forwarding_key=from_leader via leader");
-        n1.propose(b"SET forwarding_key from_leader".to_vec()).await.expect("write via leader");
+        n1.propose(b"SET forwarding_key from_leader".to_vec())
+            .await
+            .expect("write via leader");
         sleep(Duration::from_millis(500)).await;
 
         // Now try to write through follower (node 2)
         println!("=== write forwarding_key=from_follower via follower (node 2)");
-        let result = n2.propose(b"SET forwarding_key from_follower".to_vec()).await;
+        let result = n2
+            .propose(b"SET forwarding_key from_follower".to_vec())
+            .await;
 
         // Note: This might fail if write forwarding is not implemented
         // In OpenRaft, followers can forward writes to the leader
@@ -454,7 +476,9 @@ fn test_membership_change_removal() {
         };
 
         let runtime = OctopiiRuntime::from_handle(tokio::runtime::Handle::current());
-        let n1 = OctopiiNode::new(config1, runtime.clone()).await.expect("create n1");
+        let n1 = OctopiiNode::new(config1, runtime.clone())
+            .await
+            .expect("create n1");
         n1.start().await.expect("start n1");
         n1.campaign().await.expect("n1 campaign");
         sleep(Duration::from_secs(1)).await;
@@ -470,7 +494,9 @@ fn test_membership_change_removal() {
             is_initial_leader: false,
             snapshot_lag_threshold: 50,
         };
-        let n2 = OctopiiNode::new(config2, runtime.clone()).await.expect("create n2");
+        let n2 = OctopiiNode::new(config2, runtime.clone())
+            .await
+            .expect("create n2");
         n2.start().await.expect("start n2");
         n1.add_learner(2, addr2).await.expect("add n2");
 
@@ -501,7 +527,9 @@ fn test_membership_change_removal() {
         // Write some data to the cluster
         println!("=== write test_data to 3-node cluster");
         for i in 0..10 {
-            let _ = n1.propose(format!("SET key{} value{}", i, i).into_bytes()).await;
+            let _ = n1
+                .propose(format!("SET key{} value{}", i, i).into_bytes())
+                .await;
         }
         sleep(Duration::from_secs(1)).await;
 
@@ -517,7 +545,10 @@ fn test_membership_change_removal() {
         let is_leader = n3.is_leader().await;
         let has_leader = n3.has_leader().await;
 
-        println!("=== node 3 is_leader: {}, has_leader: {}", is_leader, has_leader);
+        println!(
+            "=== node 3 is_leader: {}, has_leader: {}",
+            is_leader, has_leader
+        );
         // With only 1 node out of 3, there's no quorum
         // The cluster should not have a functioning leader
 
@@ -564,7 +595,9 @@ fn test_large_entries_replication() {
         };
 
         let runtime = OctopiiRuntime::from_handle(tokio::runtime::Handle::current());
-        let n1 = OctopiiNode::new(config1, runtime.clone()).await.expect("create n1");
+        let n1 = OctopiiNode::new(config1, runtime.clone())
+            .await
+            .expect("create n1");
         n1.start().await.expect("start n1");
         n1.campaign().await.expect("n1 campaign");
         sleep(Duration::from_secs(1)).await;
@@ -594,7 +627,9 @@ fn test_large_entries_replication() {
         let large_value = "x".repeat(200);
         for i in 0..10 {
             let payload = format!("SET key_{} {}_{}", i, large_value, i);
-            n1.propose(payload.into_bytes()).await.expect(&format!("write key_{}", i));
+            n1.propose(payload.into_bytes())
+                .await
+                .expect(&format!("write key_{}", i));
         }
 
         // Wait for replication to complete
@@ -655,7 +690,9 @@ fn test_snapshot_transfer() {
         };
 
         let runtime = OctopiiRuntime::from_handle(tokio::runtime::Handle::current());
-        let n1 = OctopiiNode::new(config1, runtime.clone()).await.expect("create n1");
+        let n1 = OctopiiNode::new(config1, runtime.clone())
+            .await
+            .expect("create n1");
         n1.start().await.expect("start n1");
         n1.campaign().await.expect("n1 campaign");
         sleep(Duration::from_secs(1)).await;
@@ -664,7 +701,9 @@ fn test_snapshot_transfer() {
         // Write enough logs to trigger a snapshot
         for i in 0..20 {
             let payload = format!("SET foo{} bar{}", i, i);
-            n1.propose(payload.into_bytes()).await.expect(&format!("write {}", i));
+            n1.propose(payload.into_bytes())
+                .await
+                .expect(&format!("write {}", i));
         }
         sleep(Duration::from_millis(500)).await;
 

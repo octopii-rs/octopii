@@ -1,3 +1,4 @@
+use octopii::openraft::types::AppTypeConfig;
 /// Comprehensive OpenRaft test suite
 ///
 /// This module contains extensive tests for OpenRaft functionality including:
@@ -6,15 +7,64 @@
 /// - Various election scenarios (partitions, concurrent elections)
 /// - Consistency verification (linearizable reads, log consistency)
 /// - Performance under load
-
 use octopii::{Config, OctopiiNode, OctopiiRuntime};
+use openraft::metrics::RaftMetrics;
 use std::collections::HashMap;
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 use tokio::time::sleep;
 use tracing_subscriber::EnvFilter;
+
+async fn wait_for_peer_addr(
+    node: &OctopiiNode,
+    node_label: &str,
+    peer_id: u64,
+    peer_addr: SocketAddr,
+) {
+    let start = std::time::Instant::now();
+    let timeout = Duration::from_secs(8);
+    loop {
+        if node.peer_addr_for(peer_id).await == Some(peer_addr) {
+            break;
+        }
+        if start.elapsed() > timeout {
+            panic!(
+                "{} never learned peer {} at {}",
+                node_label, peer_id, peer_addr
+            );
+        }
+        sleep(Duration::from_millis(100)).await;
+    }
+}
+
+fn metrics_has_voter(metrics: &RaftMetrics<AppTypeConfig>, node_id: u64) -> bool {
+    metrics
+        .membership_config
+        .membership()
+        .get_joint_config()
+        .iter()
+        .any(|set| set.contains(&node_id))
+}
+
+async fn wait_until_voter(node: &OctopiiNode, node_label: &str, voter_id: u64) {
+    let start = std::time::Instant::now();
+    let timeout = Duration::from_secs(10);
+    loop {
+        if metrics_has_voter(&node.raft_metrics(), voter_id) {
+            break;
+        }
+        if start.elapsed() > timeout {
+            panic!(
+                "{} never saw node {} in membership config",
+                node_label, voter_id
+            );
+        }
+        sleep(Duration::from_millis(100)).await;
+    }
+}
 
 fn init_test_tracing() {
     let _ = tracing_subscriber::fmt()
@@ -58,7 +108,9 @@ fn test_multiple_learners_sequential_promotion() {
         };
 
         let runtime = OctopiiRuntime::from_handle(tokio::runtime::Handle::current());
-        let n1 = OctopiiNode::new(config1, runtime.clone()).await.expect("create n1");
+        let n1 = OctopiiNode::new(config1, runtime.clone())
+            .await
+            .expect("create n1");
         n1.start().await.expect("start n1");
         n1.campaign().await.expect("n1 campaign");
         sleep(Duration::from_secs(1)).await;
@@ -66,7 +118,9 @@ fn test_multiple_learners_sequential_promotion() {
 
         // Write some initial data
         for i in 0..20 {
-            let _ = n1.propose(format!("SET key{} val{}", i, i).into_bytes()).await;
+            let _ = n1
+                .propose(format!("SET key{} val{}", i, i).into_bytes())
+                .await;
         }
         sleep(Duration::from_millis(500)).await;
 
@@ -83,7 +137,9 @@ fn test_multiple_learners_sequential_promotion() {
             is_initial_leader: false,
             snapshot_lag_threshold: 50,
         };
-        let n2 = OctopiiNode::new(config2, runtime.clone()).await.expect("create n2");
+        let n2 = OctopiiNode::new(config2, runtime.clone())
+            .await
+            .expect("create n2");
         n2.start().await.expect("start n2");
 
         n1.add_learner(2, addr2).await.expect("add n2 as learner");
@@ -102,7 +158,9 @@ fn test_multiple_learners_sequential_promotion() {
             is_initial_leader: false,
             snapshot_lag_threshold: 50,
         };
-        let n3 = OctopiiNode::new(config3, runtime.clone()).await.expect("create n3");
+        let n3 = OctopiiNode::new(config3, runtime.clone())
+            .await
+            .expect("create n3");
         n3.start().await.expect("start n3");
 
         n1.add_learner(3, addr3).await.expect("add n3 as learner");
@@ -120,7 +178,9 @@ fn test_multiple_learners_sequential_promotion() {
 
         // Write more data to the now 3-voter cluster
         for i in 20..40 {
-            let _ = n1.propose(format!("SET key{} val{}", i, i).into_bytes()).await;
+            let _ = n1
+                .propose(format!("SET key{} val{}", i, i).into_bytes())
+                .await;
         }
         sleep(Duration::from_secs(1)).await;
 
@@ -151,7 +211,10 @@ fn test_multiple_learners_sequential_promotion() {
             }
         }
 
-        assert!(new_leader.is_some(), "New leader should be elected after promoting learners");
+        assert!(
+            new_leader.is_some(),
+            "New leader should be elected after promoting learners"
+        );
 
         let _ = tokio::fs::remove_dir_all(&base).await;
     });
@@ -213,9 +276,15 @@ fn test_learner_catches_up_via_append_entries() {
         };
 
         let runtime = OctopiiRuntime::from_handle(tokio::runtime::Handle::current());
-        let n1 = OctopiiNode::new(config1, runtime.clone()).await.expect("create n1");
-        let n2 = OctopiiNode::new(config2, runtime.clone()).await.expect("create n2");
-        let n3 = OctopiiNode::new(config3, runtime.clone()).await.expect("create n3");
+        let n1 = OctopiiNode::new(config1, runtime.clone())
+            .await
+            .expect("create n1");
+        let n2 = OctopiiNode::new(config2, runtime.clone())
+            .await
+            .expect("create n2");
+        let n3 = OctopiiNode::new(config3, runtime.clone())
+            .await
+            .expect("create n3");
 
         n1.start().await.expect("start n1");
         n2.start().await.expect("start n2");
@@ -227,7 +296,9 @@ fn test_learner_catches_up_via_append_entries() {
 
         // Write some data before adding learner
         for i in 0..30 {
-            let _ = n1.propose(format!("SET before{} val{}", i, i).into_bytes()).await;
+            let _ = n1
+                .propose(format!("SET before{} val{}", i, i).into_bytes())
+                .await;
             sleep(Duration::from_millis(10)).await;
         }
         sleep(Duration::from_millis(500)).await;
@@ -245,7 +316,9 @@ fn test_learner_catches_up_via_append_entries() {
             is_initial_leader: false,
             snapshot_lag_threshold: 50,
         };
-        let n4 = OctopiiNode::new(config4, runtime.clone()).await.expect("create n4");
+        let n4 = OctopiiNode::new(config4, runtime.clone())
+            .await
+            .expect("create n4");
         n4.start().await.expect("start n4");
 
         println!("[test] Adding node 4 as learner");
@@ -253,7 +326,9 @@ fn test_learner_catches_up_via_append_entries() {
 
         // Write more data - learner should catch up
         for i in 30..60 {
-            let _ = n1.propose(format!("SET after{} val{}", i, i).into_bytes()).await;
+            let _ = n1
+                .propose(format!("SET after{} val{}", i, i).into_bytes())
+                .await;
             sleep(Duration::from_millis(10)).await;
         }
 
@@ -267,7 +342,9 @@ fn test_learner_catches_up_via_append_entries() {
 
         // Write final data and ensure cluster is still healthy
         for i in 60..70 {
-            let _ = n1.propose(format!("SET final{} val{}", i, i).into_bytes()).await;
+            let _ = n1
+                .propose(format!("SET final{} val{}", i, i).into_bytes())
+                .await;
         }
         sleep(Duration::from_secs(1)).await;
 
@@ -335,8 +412,12 @@ fn test_concurrent_elections() {
         };
 
         let runtime = OctopiiRuntime::from_handle(tokio::runtime::Handle::current());
-        let n1 = OctopiiNode::new(config1, runtime.clone()).await.expect("create n1");
-        let n2 = OctopiiNode::new(config2, runtime.clone()).await.expect("create n2");
+        let n1 = OctopiiNode::new(config1, runtime.clone())
+            .await
+            .expect("create n1");
+        let n2 = OctopiiNode::new(config2, runtime.clone())
+            .await
+            .expect("create n2");
         let n3 = OctopiiNode::new(config3, runtime).await.expect("create n3");
 
         n1.start().await.expect("start n1");
@@ -354,12 +435,8 @@ fn test_concurrent_elections() {
 
         // Both followers campaign simultaneously
         println!("[test] Both n2 and n3 campaign simultaneously");
-        let campaign2 = tokio::spawn(async move {
-            n2.campaign().await
-        });
-        let campaign3 = tokio::spawn(async move {
-            n3.campaign().await
-        });
+        let campaign2 = tokio::spawn(async move { n2.campaign().await });
+        let campaign3 = tokio::spawn(async move { n3.campaign().await });
 
         let _ = campaign2.await;
         let _ = campaign3.await;
@@ -418,7 +495,11 @@ fn test_five_node_cluster_majority_requirement() {
         let runtime = OctopiiRuntime::from_handle(tokio::runtime::Handle::current());
 
         // Start node 1 and make it leader
-        let n1 = OctopiiNode::new(config1, runtime.clone()).await.expect("create n1");
+        let n1 = Arc::new(
+            OctopiiNode::new(config1, runtime.clone())
+                .await
+                .expect("create n1"),
+        );
         n1.start().await.expect("start n1");
         n1.campaign().await.expect("n1 campaign");
         sleep(Duration::from_secs(1)).await;
@@ -431,27 +512,45 @@ fn test_five_node_cluster_majority_requirement() {
             (5, addr5, config5),
         ];
 
-        let mut node_handles = HashMap::new();
-        for (id, addr, config) in nodes {
-            let node = OctopiiNode::new(config, runtime.clone()).await.expect(&format!("create n{}", id));
-            node.start().await.expect(&format!("start n{}", id));
-            n1.add_learner(id, addr).await.expect(&format!("add n{} as learner", id));
-            sleep(Duration::from_millis(500)).await;
-            n1.promote_learner(id).await.expect(&format!("promote n{}", id));
-            sleep(Duration::from_millis(500)).await;
-            node_handles.insert(id, node);
-        }
+        let mut address_book = HashMap::new();
+        address_book.insert(1, addr1);
 
-        // TODO: Implement automatic peer address distribution in add_learner/promote_learner
-        // For now, manually sync addresses so followers can communicate during elections
-        println!("[test] Syncing peer addresses in full mesh for follower-to-follower communication");
-        let all_addrs = vec![(2, addr2), (3, addr3), (4, addr4), (5, addr5)];
-        for (node_id, node) in &node_handles {
-            for (peer_id, peer_addr) in &all_addrs {
-                if node_id != peer_id {
-                    node.update_peer_addr(*peer_id, *peer_addr).await;
-                }
+        let mut node_handles: HashMap<u64, Arc<OctopiiNode>> = HashMap::new();
+        for (id, addr, config) in nodes {
+            let node = Arc::new(
+                OctopiiNode::new(config, runtime.clone())
+                    .await
+                    .expect(&format!("create n{}", id)),
+            );
+            node.start().await.expect(&format!("start n{}", id));
+            n1.add_learner(id, addr)
+                .await
+                .expect(&format!("add n{} as learner", id));
+
+            for (existing_id, existing_addr) in address_book.iter() {
+                let existing = if *existing_id == 1 {
+                    Arc::clone(&n1)
+                } else {
+                    Arc::clone(node_handles.get(existing_id).expect("existing node"))
+                };
+                wait_for_peer_addr(existing.as_ref(), &format!("n{}", existing_id), id, addr).await;
+                wait_for_peer_addr(
+                    node.as_ref(),
+                    &format!("n{}", id),
+                    *existing_id,
+                    *existing_addr,
+                )
+                .await;
             }
+
+            address_book.insert(id, addr);
+
+            n1.promote_learner(id)
+                .await
+                .expect(&format!("promote n{}", id));
+            wait_until_voter(n1.as_ref(), "n1", id).await;
+            wait_until_voter(node.as_ref(), &format!("n{}", id), id).await;
+            node_handles.insert(id, node);
         }
 
         sleep(Duration::from_secs(2)).await;
@@ -470,7 +569,10 @@ fn test_five_node_cluster_majority_requirement() {
 
         // Remaining 3 nodes (3, 4, 5) should be able to elect a leader
         let mut new_leader = None;
-        for _ in 0..30 {
+        let election_wait = Duration::from_secs(30);
+        let check_interval = Duration::from_millis(200);
+        let start = Instant::now();
+        while start.elapsed() < election_wait {
             for id in &[3, 4, 5] {
                 if node_handles.get(id).unwrap().is_leader().await {
                     new_leader = Some(*id);
@@ -480,20 +582,29 @@ fn test_five_node_cluster_majority_requirement() {
             if new_leader.is_some() {
                 break;
             }
-            sleep(Duration::from_millis(200)).await;
+            sleep(check_interval).await;
         }
 
         if new_leader.is_none() {
-            // Nudge one of the remaining nodes
-            let _ = node_handles.get(&3).unwrap().campaign().await;
-            sleep(Duration::from_secs(2)).await;
-            if node_handles.get(&3).unwrap().is_leader().await {
-                new_leader = Some(3);
+            for candidate in &[3, 4, 5] {
+                let node = node_handles.get(candidate).unwrap();
+                let _ = node.campaign().await;
+                sleep(Duration::from_secs(3)).await;
+                if node.is_leader().await {
+                    new_leader = Some(*candidate);
+                    break;
+                }
             }
         }
 
-        assert!(new_leader.is_some(), "Majority (3/5) should elect a new leader");
-        println!("[test] Node {} became leader (majority requirement satisfied)", new_leader.unwrap());
+        assert!(
+            new_leader.is_some(),
+            "Majority (3/5) should elect a new leader"
+        );
+        println!(
+            "[test] Node {} became leader (majority requirement satisfied)",
+            new_leader.unwrap()
+        );
 
         let _ = tokio::fs::remove_dir_all(&base).await;
     });
@@ -558,8 +669,12 @@ fn test_log_consistency_after_leader_change() {
         };
 
         let runtime = OctopiiRuntime::from_handle(tokio::runtime::Handle::current());
-        let n1 = OctopiiNode::new(config1, runtime.clone()).await.expect("create n1");
-        let n2 = OctopiiNode::new(config2, runtime.clone()).await.expect("create n2");
+        let n1 = OctopiiNode::new(config1, runtime.clone())
+            .await
+            .expect("create n1");
+        let n2 = OctopiiNode::new(config2, runtime.clone())
+            .await
+            .expect("create n2");
         let n3 = OctopiiNode::new(config3, runtime).await.expect("create n3");
 
         n1.start().await.expect("start n1");
@@ -572,7 +687,9 @@ fn test_log_consistency_after_leader_change() {
         // Write data through node 1
         println!("[test] Writing data through initial leader");
         for i in 0..50 {
-            let _ = n1.propose(format!("SET key{} value{}", i, i).into_bytes()).await;
+            let _ = n1
+                .propose(format!("SET key{} value{}", i, i).into_bytes())
+                .await;
             sleep(Duration::from_millis(20)).await;
         }
         sleep(Duration::from_secs(1)).await;
@@ -590,7 +707,9 @@ fn test_log_consistency_after_leader_change() {
         // Write more data through node 2
         println!("[test] Writing data through new leader");
         for i in 50..100 {
-            let _ = n2.propose(format!("SET key{} value{}", i, i).into_bytes()).await;
+            let _ = n2
+                .propose(format!("SET key{} value{}", i, i).into_bytes())
+                .await;
             sleep(Duration::from_millis(20)).await;
         }
         sleep(Duration::from_secs(1)).await;
@@ -598,7 +717,10 @@ fn test_log_consistency_after_leader_change() {
         // Both remaining nodes should have consistent state
         // In a real test, we'd query the state machines and verify they're identical
         // For now, we verify the cluster remains functional
-        assert!(n2.is_leader().await || n3.is_leader().await, "Cluster should have a leader");
+        assert!(
+            n2.is_leader().await || n3.is_leader().await,
+            "Cluster should have a leader"
+        );
 
         println!("[test] Log consistency maintained across leader change");
         let _ = tokio::fs::remove_dir_all(&base).await;
@@ -660,8 +782,12 @@ fn test_read_after_write_consistency() {
         };
 
         let runtime = OctopiiRuntime::from_handle(tokio::runtime::Handle::current());
-        let n1 = OctopiiNode::new(config1, runtime.clone()).await.expect("create n1");
-        let n2 = OctopiiNode::new(config2, runtime.clone()).await.expect("create n2");
+        let n1 = OctopiiNode::new(config1, runtime.clone())
+            .await
+            .expect("create n1");
+        let n2 = OctopiiNode::new(config2, runtime.clone())
+            .await
+            .expect("create n2");
         let n3 = OctopiiNode::new(config3, runtime).await.expect("create n3");
 
         n1.start().await.expect("start n1");
@@ -680,7 +806,9 @@ fn test_read_after_write_consistency() {
             let value = format!("value_{}", i);
 
             // Write
-            let write_result = n1.propose(format!("SET {} {}", key, value).into_bytes()).await;
+            let write_result = n1
+                .propose(format!("SET {} {}", key, value).into_bytes())
+                .await;
             write_results.lock().await.push(write_result.is_ok());
 
             // Small delay to let it propagate
@@ -697,7 +825,10 @@ fn test_read_after_write_consistency() {
         println!("[test] Writes succeeded: {}/20", success_count);
 
         // Most writes should succeed (some might fail due to timing)
-        assert!(success_count >= 15, "Most writes should succeed in a healthy cluster");
+        assert!(
+            success_count >= 15,
+            "Most writes should succeed in a healthy cluster"
+        );
 
         let _ = tokio::fs::remove_dir_all(&base).await;
     });
@@ -762,8 +893,12 @@ fn test_sustained_write_load() {
         };
 
         let runtime = OctopiiRuntime::from_handle(tokio::runtime::Handle::current());
-        let n1 = OctopiiNode::new(config1, runtime.clone()).await.expect("create n1");
-        let n2 = OctopiiNode::new(config2, runtime.clone()).await.expect("create n2");
+        let n1 = OctopiiNode::new(config1, runtime.clone())
+            .await
+            .expect("create n1");
+        let n2 = OctopiiNode::new(config2, runtime.clone())
+            .await
+            .expect("create n2");
         let n3 = OctopiiNode::new(config3, runtime).await.expect("create n3");
 
         n1.start().await.expect("start n1");
@@ -779,7 +914,9 @@ fn test_sustained_write_load() {
         let mut success_count = 0;
 
         for i in 0..200 {
-            let result = n1.propose(format!("SET load_key_{} value_{}", i, i).into_bytes()).await;
+            let result = n1
+                .propose(format!("SET load_key_{} value_{}", i, i).into_bytes())
+                .await;
             if result.is_ok() {
                 success_count += 1;
             }
@@ -791,15 +928,26 @@ fn test_sustained_write_load() {
         }
 
         let elapsed = start.elapsed();
-        println!("[test] Completed {} writes in {:?} ({:.2} writes/sec)",
-                 success_count, elapsed, success_count as f64 / elapsed.as_secs_f64());
+        println!(
+            "[test] Completed {} writes in {:?} ({:.2} writes/sec)",
+            success_count,
+            elapsed,
+            success_count as f64 / elapsed.as_secs_f64()
+        );
 
         // Verify cluster is still healthy
         sleep(Duration::from_secs(1)).await;
-        assert!(n1.is_leader().await, "Leader should still be functional after load");
+        assert!(
+            n1.is_leader().await,
+            "Leader should still be functional after load"
+        );
 
         // Most writes should succeed
-        assert!(success_count >= 180, "Most writes should succeed under load: {}/200", success_count);
+        assert!(
+            success_count >= 180,
+            "Most writes should succeed under load: {}/200",
+            success_count
+        );
 
         let _ = tokio::fs::remove_dir_all(&base).await;
     });
