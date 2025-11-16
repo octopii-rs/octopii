@@ -1,7 +1,7 @@
 <div align="center">
   <img src="./assets/octopii.png"
        alt="octopii"
-       width="30%">
+       width="15%">
   <div>Octopii: A batteries-included framework for building distributed systems</div>
   <br>
 
@@ -23,6 +23,14 @@ Octopii provides everything you need to build replicated, fault-tolerant systems
 - **Large File Transfers** - P2P streaming with automatic checksum verification (Shipping Lane)
 - **RPC Framework** - Request/response messaging with correlation and timeouts
 - **Runtime Management** - Flexible async execution with Tokio
+
+## Architecture
+
+<div>
+  <img src="./assets/architecture.png"
+       alt="Octopii Architecture"
+       width="55%">
+</div>
 
 ## Quick Start
 
