@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::time::Duration;
+use uuid::Uuid;
 
 pub use wal::{FsyncSchedule, Walrus};
 
@@ -42,11 +43,12 @@ impl WriteAheadLog {
         let parent_dir = path.parent().ok_or_else(|| {
             OctopiiError::Wal("Invalid WAL path: no parent directory".to_string())
         })?;
-        let key = path
+        let file_name = path
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("default_wal")
             .to_string();
+        let wal_key = wal_instance_key(&file_name);
 
         // Convert flush_interval to FsyncSchedule
         let schedule = if flush_interval.as_millis() == 0 {
@@ -55,13 +57,16 @@ impl WriteAheadLog {
             FsyncSchedule::Milliseconds(flush_interval.as_millis() as u64)
         };
 
-        // Set the WAL data directory for this instance
-        // We use a unique path that combines the parent directory and key
-        let full_wal_dir = parent_dir.join(&key);
-        std::fs::create_dir_all(&full_wal_dir)
-            .map_err(|e| OctopiiError::Wal(format!("Failed to create WAL directory: {}", e)))?;
+        // Ensure the WAL root directory exists (Walrus will create per-key dirs)
+        std::fs::create_dir_all(parent_dir).map_err(|e| {
+            OctopiiError::Wal(format!(
+                "Failed to create WAL parent directory {}: {}",
+                parent_dir.display(),
+                e
+            ))
+        })?;
 
-        let full_path_str = full_wal_dir.to_string_lossy().to_string();
+        let root_dir_str = parent_dir.to_string_lossy().to_string();
 
         // Create Walrus instance using block_in_place (enforces hard thread cap)
         // We use a global lock to prevent race conditions when setting WALRUS_DATA_DIR
@@ -70,10 +75,11 @@ impl WriteAheadLog {
             let _guard = WAL_CREATION_LOCK.lock().unwrap();
 
             // Temporarily set WALRUS_DATA_DIR to point to our unique directory
-            std::env::set_var("WALRUS_DATA_DIR", &full_path_str);
+            std::env::set_var("WALRUS_DATA_DIR", &root_dir_str);
 
             // Create Walrus with a keyed instance for additional isolation
-            let result = wal::Walrus::with_consistency_and_schedule(
+            let result = wal::Walrus::with_consistency_and_schedule_for_key(
+                &wal_key,
                 wal::ReadConsistency::StrictlyAtOnce,
                 schedule,
             );
@@ -166,6 +172,10 @@ impl WriteAheadLog {
             Ok(all_entries)
         })
     }
+}
+
+fn wal_instance_key(base_name: &str) -> String {
+    format!("{}_{}", base_name, Uuid::new_v4())
 }
 
 #[cfg(test)]

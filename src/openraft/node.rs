@@ -23,16 +23,39 @@ use std::sync::{Arc, RwLock as StdRwLock};
 use tokio::sync::RwLock;
 use tokio::time::Duration;
 
-pub(crate) static GLOBAL_PEER_ADDRS: Lazy<StdRwLock<HashMap<u64, SocketAddr>>> =
+pub(crate) static GLOBAL_PEER_ADDRS: Lazy<StdRwLock<HashMap<String, HashMap<u64, SocketAddr>>>> =
     Lazy::new(|| StdRwLock::new(HashMap::new()));
 
-pub(crate) fn register_global_peer_addr(node_id: u64, addr: SocketAddr) {
-    let mut map = GLOBAL_PEER_ADDRS.write().unwrap();
-    map.insert(node_id, addr);
+fn namespace_key_from_path(path: &std::path::Path) -> String {
+    path.to_string_lossy().to_string()
 }
 
-pub(crate) fn global_peer_addr(peer_id: u64) -> Option<SocketAddr> {
-    GLOBAL_PEER_ADDRS.read().unwrap().get(&peer_id).copied()
+fn cluster_namespace_from_wal_dir(wal_dir: &std::path::Path) -> String {
+    match wal_dir.parent() {
+        Some(parent) => namespace_key_from_path(parent),
+        None => namespace_key_from_path(wal_dir),
+    }
+}
+
+pub fn peer_namespace_from_base(path: &std::path::Path) -> String {
+    namespace_key_from_path(path)
+}
+
+pub(crate) fn register_global_peer_addr(namespace: &str, node_id: u64, addr: SocketAddr) {
+    let mut map = GLOBAL_PEER_ADDRS.write().unwrap();
+    map.entry(namespace.to_string()).or_default().insert(node_id, addr);
+}
+
+pub(crate) fn global_peer_addr(namespace: &str, peer_id: u64) -> Option<SocketAddr> {
+    GLOBAL_PEER_ADDRS
+        .read()
+        .unwrap()
+        .get(namespace)
+        .and_then(|m| m.get(&peer_id).copied())
+}
+
+pub fn clear_global_peer_addrs_for(namespace: &str) {
+    GLOBAL_PEER_ADDRS.write().unwrap().remove(namespace);
 }
 
 pub fn clear_global_peer_addrs() {
@@ -78,6 +101,7 @@ pub struct OpenRaftNode {
     state_machine: StateMachine,
     peer_addrs: Arc<RwLock<std::collections::HashMap<u64, SocketAddr>>>,
     peer_addr_wal: Arc<WriteAheadLog>,
+    peer_namespace: Arc<String>,
     #[cfg(feature = "openraft-filters")]
     filters: Arc<OpenRaftFilters>,
 }
@@ -95,7 +119,13 @@ impl OpenRaftNode {
 
         std::fs::create_dir_all(&config.wal_dir).map_err(|e| crate::error::OctopiiError::Io(e))?;
 
-        register_global_peer_addr(config.node_id, config.bind_addr);
+        let cluster_namespace = Arc::new(cluster_namespace_from_wal_dir(&config.wal_dir));
+
+        register_global_peer_addr(
+            cluster_namespace.as_str(),
+            config.node_id,
+            config.bind_addr,
+        );
 
         let flush_interval = Duration::from_millis(config.wal_flush_interval_ms);
         let log_store = new_wal_log_store(Arc::new(
@@ -132,7 +162,7 @@ impl OpenRaftNode {
         {
             let map = peer_addrs.read().await;
             for (peer_id, addr) in map.iter() {
-                register_global_peer_addr(*peer_id, *addr);
+                register_global_peer_addr(cluster_namespace.as_str(), *peer_id, *addr);
             }
         }
 
@@ -206,12 +236,17 @@ impl OpenRaftNode {
             Arc::clone(&rpc),
             Arc::clone(&peer_addrs),
             config.node_id,
+            Arc::clone(&cluster_namespace),
             Arc::clone(&filters),
         );
 
         #[cfg(not(feature = "openraft-filters"))]
-        let network_factory =
-            QuinnNetworkFactory::new(Arc::clone(&rpc), Arc::clone(&peer_addrs), config.node_id);
+        let network_factory = QuinnNetworkFactory::new(
+            Arc::clone(&rpc),
+            Arc::clone(&peer_addrs),
+            config.node_id,
+            Arc::clone(&cluster_namespace),
+        );
 
         // Create Raft config
         let mut raft_config = RaftConfig::default();
@@ -244,6 +279,7 @@ impl OpenRaftNode {
             state_machine,
             peer_addrs,
             peer_addr_wal,
+            peer_namespace: Arc::clone(&cluster_namespace),
             #[cfg(feature = "openraft-filters")]
             filters,
         })
@@ -283,7 +319,7 @@ impl OpenRaftNode {
                 needs_persist = true;
             }
         }
-        register_global_peer_addr(peer_id, addr);
+        register_global_peer_addr(self.peer_namespace.as_str(), peer_id, addr);
         if needs_persist {
             append_peer_addr_record(&self.peer_addr_wal, peer_id, addr).await?;
         }
@@ -608,7 +644,7 @@ impl OpenRaftNode {
             return Some(addr);
         }
 
-        if let Some(addr) = global_peer_addr(peer_id) {
+        if let Some(addr) = global_peer_addr(self.peer_namespace.as_str(), peer_id) {
             let _ = self.persist_peer_addr_if_needed(peer_id, addr).await;
             return Some(addr);
         }
