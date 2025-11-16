@@ -179,7 +179,7 @@ jobs:
         with:
           toolchain: stable
           cache: true
-      - run: cargo test --test peer_sync_test --no-fail-fast -- --test-threads=1
+      - run: cargo test --test peer_sync_test --release -- --test-threads=1
       - if: always()
         run: rm -rf /tmp/octopii_test_* /tmp/walrus_* /tmp/custom_sm_test_* || true
 
