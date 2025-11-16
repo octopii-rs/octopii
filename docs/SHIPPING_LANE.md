@@ -21,9 +21,14 @@ The **Shipping Lane** is Octopii's P2P file transfer system, designed for transf
 
 - **Direct peer-to-peer transfer**: No routing through Raft leader
 - **Checksum verification**: SHA-256 integrity checks
-- **Streaming**: Efficient memory usage for large files
+- **Streaming**: Efficient memory usage for large files (see note below)
 - **QUIC-based**: Fast, reliable, multiplexed transport
 - **Composable**: Build custom protocols combining RPC + bulk transfer
+
+> **Streaming note:** `PeerConnection::recv_chunk_verified()` currently buffers
+> the entire payload in memory. Use the disk-streaming helper
+> `recv_chunk_to_path()` (documented in the API section) for truly constant
+> memory usage when pulling multi-GB snapshots or files.
 
 ### When to Use Shipping Lane
 
@@ -243,11 +248,11 @@ async fn receive_file(transport: &QuicTransport) -> Result<()> {
     let (peer_addr, peer) = transport.accept().await?;
     println!("Connection from {}", peer_addr);
 
-    match peer.recv_chunk_verified().await? {
-        Some(data) => {
-            println!("Received {} bytes", data.len());
-            // Process data...
-            Ok(())
+match peer.recv_chunk_verified().await? {
+    Some(data) => {
+        println!("Received {} bytes", data.len());
+        // Process data...
+        Ok(())
         }
         None => {
             println!("Connection closed");
@@ -255,6 +260,27 @@ async fn receive_file(transport: &QuicTransport) -> Result<()> {
         }
     }
 }
+```
+
+#### Streaming Directly to Disk
+
+```rust
+/// Receive a chunk and write it to the provided path.
+pub async fn recv_chunk_to_path<P: AsRef<Path>>(
+    &self,
+    path: P,
+) -> Result<Option<u64>>;
+```
+
+`recv_chunk_to_path()` streams the payload into the destination file while
+computing the checksum, keeping memory usage bounded by the internal 64KB
+buffer. Prefer this API for large files or snapshots:
+
+```rust
+let Some(bytes_written) = peer.recv_chunk_to_path("/tmp/snapshot.bin").await? else {
+    anyhow::bail!("connection closed before data arrived");
+};
+println!("Wrote {} bytes to disk", bytes_written);
 ```
 
 ---
@@ -974,6 +1000,10 @@ impl RateLimiter {
 ## Complete Examples
 
 ### Example 1: Snapshot Transfer System
+
+> **Note:** The following snapshot protocol is illustrative. The current OpenRaft
+> integration does not automatically invoke Shipping Lane for snapshot installs,
+> so you would need to wire these steps into your own control plane.
 
 ```rust
 use octopii::{OctopiiNode, StateMachineTrait, transport::*};

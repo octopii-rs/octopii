@@ -389,25 +389,9 @@ node.campaign().await?;
 
 ---
 
-```rust
-pub async fn transfer_leader(&self, target_id: u64) -> Result<()>
-```
-
-Transfers leadership to another node.
-
-**Parameters:**
-- `target_id`: Node ID of the target leader
-
-**Returns:** `Result<()>`
-
-**Requirements:**
-- Current node must be leader
-- Target node must be up-to-date
-
-**Example:**
-```rust
-node.transfer_leader(2).await?;
-```
+> **Note:** Direct leader transfer is not yet supported. OpenRaft 0.10 does not
+> expose an API for forcing a leader transfer, so Octopii currently relies on
+> elections via `campaign()`.
 
 ---
 
@@ -486,17 +470,18 @@ let caught_up = node.is_learner_caught_up(3).await?;
 pub async fn force_snapshot_to_peer(&self, peer_id: u64) -> Result<()>
 ```
 
-Forces a snapshot to be sent to a specific peer.
+Triggers OpenRaft's snapshot mechanism. The `peer_id` argument is currently
+ignored; snapshots are created locally and distributed by the Raft core based on
+its own lag detection. Targeted snapshot streaming is not yet implemented.
 
 **Parameters:**
-- `peer_id`: Target peer node ID
+- `peer_id`: Reserved for future use
 
 **Returns:** `Result<()>`
 
 **Use Cases:**
-- Peer is far behind
-- Log has been compacted
-- Faster catch-up than log replication
+- Force log compaction on the leader
+- Help lagging peers indirectly (Raft decides when to install snapshots)
 
 **Example:**
 ```rust
@@ -511,7 +496,10 @@ node.force_snapshot_to_peer(3).await?;
 pub async fn read_index(&self, ctx: Vec<u8>) -> Result<()>
 ```
 
-Ensures linearizable reads by confirming leadership.
+Performs a lightweight leadership check. This helper verifies the current node
+still believes it is leader before a read, but it does **not** execute
+OpenRaft's `client_read`/`read_index` flow yet. Treat it as a guard for cached
+reads rather than a full linearizability fence.
 
 **Parameters:**
 - `ctx`: Context for the read (arbitrary bytes)
@@ -523,6 +511,9 @@ Ensures linearizable reads by confirming leadership.
 node.read_index(b"read-ctx".to_vec()).await?;
 let value = node.query(b"GET key").await?;
 ```
+
+> **Tip:** For strict linearizable reads, issue a Raft write or implement a
+> custom RPC that uses `client_read` once OpenRaft exposes it.
 
 ---
 
@@ -665,6 +656,9 @@ List of network addresses for other nodes in the cluster.
 - Should not include this node's address
 - Can be empty for single-node clusters
 - Can be updated dynamically via membership API
+- **Current limitation:** Node IDs are inferred from the last digit of the peer's
+  port (e.g., `127.0.0.1:5002` → ID `2`). Avoid reusing the same port suffix or
+  exceeding 9 peers until explicit `(id, addr)` mapping is added.
 
 **Example:**
 ```rust

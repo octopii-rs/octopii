@@ -917,7 +917,8 @@ VoteRequest
 
 InstallSnapshotRequest
   ├─► Send metadata
-  ├─► Stream snapshot via chunk protocol
+  ├─► Stream snapshot via chunk protocol *(planned; current builds trigger a Raft
+      snapshot but do not yet stream the payload over Shipping Lane)*
   └─► Wait for completion
 ```
 
