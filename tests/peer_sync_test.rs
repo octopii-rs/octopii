@@ -42,7 +42,6 @@ fn local_test_dir(name: &str) -> PathBuf {
 
 #[test]
 fn test_peer_address_auto_distribution() {
-    octopii::openraft::node::clear_global_peer_addrs();
     let rt = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(4)
         .enable_all()
@@ -51,6 +50,8 @@ fn test_peer_address_auto_distribution() {
 
     rt.block_on(async {
         let base_path = local_test_dir("peer_sync_auto_distribution");
+        let namespace = octopii::openraft::node::peer_namespace_from_base(&base_path);
+        octopii::openraft::node::clear_global_peer_addrs_for(&namespace);
         let _ = std::fs::remove_dir_all(&base_path);
         let port1 = next_port();
         let port2 = next_port();
@@ -146,7 +147,6 @@ async fn wait_for_peer_address(
 
 #[test]
 fn test_peer_address_distribution_without_initial_peers() {
-    octopii::openraft::node::clear_global_peer_addrs();
     let rt = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(4)
         .enable_all()
@@ -155,6 +155,8 @@ fn test_peer_address_distribution_without_initial_peers() {
 
     rt.block_on(async {
         let base_path = local_test_dir("peer_sync_distribution_no_initial");
+        let namespace = octopii::openraft::node::peer_namespace_from_base(&base_path);
+        octopii::openraft::node::clear_global_peer_addrs_for(&namespace);
         let _ = std::fs::remove_dir_all(&base_path);
         let port1 = next_port();
         let port2 = next_port();

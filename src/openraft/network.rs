@@ -22,6 +22,7 @@ pub struct QuinnNetwork {
     peer_addrs: Arc<tokio::sync::RwLock<std::collections::HashMap<AppNodeId, SocketAddr>>>,
     self_id: AppNodeId,
     target: AppNodeId,
+    cluster_namespace: Arc<String>,
     #[cfg(feature = "openraft-filters")]
     pub(crate) filters: Arc<OpenRaftFilters>,
 }
@@ -32,6 +33,7 @@ impl QuinnNetwork {
         peer_addrs: Arc<tokio::sync::RwLock<std::collections::HashMap<AppNodeId, SocketAddr>>>,
         self_id: AppNodeId,
         target: AppNodeId,
+        cluster_namespace: Arc<String>,
         #[cfg(feature = "openraft-filters")] filters: Arc<OpenRaftFilters>,
     ) -> Self {
         Self {
@@ -39,6 +41,7 @@ impl QuinnNetwork {
             peer_addrs,
             self_id,
             target,
+            cluster_namespace,
             #[cfg(feature = "openraft-filters")]
             filters,
         }
@@ -59,7 +62,7 @@ impl QuinnNetwork {
 
         // Fall back to the global map so nodes can still communicate after dynamic
         // membership changes or leadership loss.
-        if let Some(addr) = global_peer_addr(self.target) {
+        if let Some(addr) = global_peer_addr(self.cluster_namespace.as_str(), self.target) {
             tracing::info!(
                 "QuinnNetwork: using global peer addr for target {} -> {}",
                 self.target,
@@ -268,6 +271,7 @@ pub struct QuinnNetworkFactory {
     rpc: Arc<RpcHandler>,
     peer_addrs: Arc<tokio::sync::RwLock<std::collections::HashMap<AppNodeId, SocketAddr>>>,
     self_id: AppNodeId,
+    cluster_namespace: Arc<String>,
     #[cfg(feature = "openraft-filters")]
     filters: Arc<OpenRaftFilters>,
 }
@@ -277,12 +281,14 @@ impl QuinnNetworkFactory {
         rpc: Arc<RpcHandler>,
         peer_addrs: Arc<tokio::sync::RwLock<std::collections::HashMap<AppNodeId, SocketAddr>>>,
         self_id: AppNodeId,
+        cluster_namespace: Arc<String>,
         #[cfg(feature = "openraft-filters")] filters: Arc<OpenRaftFilters>,
     ) -> Self {
         Self {
             rpc,
             peer_addrs,
             self_id,
+            cluster_namespace,
             #[cfg(feature = "openraft-filters")]
             filters,
         }
@@ -302,6 +308,7 @@ impl RaftNetworkFactory<AppTypeConfig> for QuinnNetworkFactory {
             Arc::clone(&self.peer_addrs),
             self.self_id,
             target,
+            Arc::clone(&self.cluster_namespace),
             #[cfg(feature = "openraft-filters")]
             Arc::clone(&self.filters),
         )
