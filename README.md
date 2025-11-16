@@ -1,7 +1,7 @@
 <div align="center">
   <img src="./assets/octopii.png"
        alt="octopii"
-       width="15%">
+       width="20%">
   <div>Octopii: A batteries-included framework for building distributed systems</div>
   <br>
 
@@ -29,7 +29,7 @@ Octopii provides everything you need to build replicated, fault-tolerant systems
 <div>
   <img src="./assets/architecture.png"
        alt="Octopii Architecture"
-       width="55%">
+       width="70%">
 </div>
 
 ## Quick Start
