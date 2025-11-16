@@ -421,10 +421,16 @@ impl OpenRaftNode {
 
     pub async fn peer_addr_for(&self, peer_id: u64) -> Option<SocketAddr> {
         if let Some(addr) = self.peer_addrs.read().await.get(&peer_id).copied() {
-            Some(addr)
-        } else {
-            global_peer_addr(peer_id)
+            return Some(addr);
         }
+
+        if let Some(addr) = global_peer_addr(peer_id) {
+            let mut map = self.peer_addrs.write().await;
+            map.insert(peer_id, addr);
+            return Some(addr);
+        }
+
+        None
     }
 
     pub fn raft_metrics(&self) -> RaftMetrics<AppTypeConfig> {
