@@ -1,5 +1,6 @@
 #![cfg(feature = "openraft")]
 
+use crate::openraft::node::global_peer_addr;
 use crate::rpc::{RequestPayload, RpcHandler, ResponsePayload};
 use crate::openraft::types::{AppNodeId, AppTypeConfig};
 use std::net::SocketAddr;
@@ -42,14 +43,28 @@ impl QuinnNetwork {
 
     async fn peer_addr(&self) -> Option<SocketAddr> {
         let g = self.peer_addrs.read().await;
-        let result = g.get(&self.target).copied();
-        if result.is_none() {
-            tracing::warn!(
-                "QuinnNetwork: peer_addr lookup failed for target {} (self={}), available peers: {:?}",
-                self.target, self.self_id, g.keys().collect::<Vec<_>>()
-            );
+        if let Some(addr) = g.get(&self.target).copied() {
+            return Some(addr);
         }
-        result
+        tracing::warn!(
+            "QuinnNetwork: peer_addr lookup failed for target {} (self={}), local peers: {:?}",
+            self.target,
+            self.self_id,
+            g.keys().collect::<Vec<_>>()
+        );
+        drop(g);
+
+        // Fall back to the global map so nodes can still communicate after dynamic
+        // membership changes or leadership loss.
+        if let Some(addr) = global_peer_addr(self.target) {
+            tracing::info!(
+                "QuinnNetwork: using global peer addr for target {} -> {}",
+                self.target,
+                addr
+            );
+            return Some(addr);
+        }
+        None
     }
 
     async fn send_openraft(&self, kind: &str, data: Vec<u8>) -> Result<ResponsePayload, anyhow::Error> {
