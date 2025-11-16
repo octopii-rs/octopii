@@ -1,6 +1,16 @@
-# Octopii
+<div align="center">
+  <img src="./assets/octopii.png"
+       alt="octopii"
+       width="30%">
+  <div>Octopii: A batteries-included framework for building distributed systems</div>
+  <br>
 
-A batteries-included framework for building distributed systems in Rust.
+[![CI](https://github.com/octopii-rs/octopii/actions/workflows/ci.yml/badge.svg)](https://github.com/octopii-rs/octopii/actions)
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+
+</div>
+
+---
 
 ## What's Included
 
