@@ -62,6 +62,7 @@ impl QuinnNetwork {
                 self.target,
                 addr
             );
+            self.peer_addrs.write().await.insert(self.target, addr);
             return Some(addr);
         }
         None
