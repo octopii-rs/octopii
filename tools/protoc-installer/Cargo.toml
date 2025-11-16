@@ -1,8 +1,0 @@
-[package]
-name = "protoc-installer"
-version = "0.1.0"
-edition = "2021"
-publish = false
-
-[dependencies]
-protobuf-src = "1.1"
