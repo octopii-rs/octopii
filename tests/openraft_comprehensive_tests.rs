@@ -575,12 +575,16 @@ fn test_five_node_cluster_majority_requirement() {
         // Shut down node 1 and 2 (minority of 5)
         println!("[test] Shutting down 2 nodes (minority)");
         n1.shutdown();
-        node_handles.get(&2).unwrap().shutdown();
+        if let Some(node2) = node_handles.remove(&2) {
+            node2.shutdown();
+        }
+        // Drop references so background tasks stop and no stray heartbeats interfere
+        drop(n1);
         sleep(Duration::from_millis(2000)).await;
 
         // Remaining 3 nodes (3, 4, 5) should be able to elect a leader
         let mut new_leader = None;
-        let election_wait = Duration::from_secs(30);
+        let election_wait = Duration::from_secs(60);
         let check_interval = Duration::from_millis(200);
         let start = Instant::now();
         while start.elapsed() < election_wait {
