@@ -436,7 +436,7 @@ impl WalLogStore {
     }
 
     async fn recover_from_wal(&self) -> Result<(), OctopiiError> {
-        let entries = self.wal.read_all().await?;
+        let entries = self.wal.read_all().await.unwrap_or_else(|_| Vec::new());
         let mut inner = self.inner.lock().await;
         for raw in entries {
             let record: WalLogRecord = bincode::deserialize(&raw)
