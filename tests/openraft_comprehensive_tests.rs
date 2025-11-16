@@ -18,6 +18,15 @@ use tokio::sync::Mutex;
 use tokio::time::sleep;
 use tracing_subscriber::EnvFilter;
 
+fn local_test_dir(name: &str) -> PathBuf {
+    let root = std::env::current_dir().expect("current dir");
+    let dir = root.join("octopii_test_artifacts").join(name);
+    if let Some(parent) = dir.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    dir
+}
+
 async fn wait_for_peer_addr(
     node: &OctopiiNode,
     node_label: &str,
@@ -90,7 +99,7 @@ fn test_multiple_learners_sequential_promotion() {
         .unwrap();
 
     rt.block_on(async {
-        let base = PathBuf::from(std::env::temp_dir()).join("octopii_multi_learner");
+        let base = local_test_dir("octopii_multi_learner");
         let _ = std::fs::remove_dir_all(&base);
 
         // Start with single-node cluster
@@ -231,7 +240,7 @@ fn test_learner_catches_up_via_append_entries() {
         .unwrap();
 
     rt.block_on(async {
-        let base = PathBuf::from(std::env::temp_dir()).join("octopii_learner_catchup");
+        let base = local_test_dir("octopii_learner_catchup");
         let _ = std::fs::remove_dir_all(&base);
 
         let addr1 = "127.0.0.1:9411".parse().unwrap();
@@ -368,7 +377,7 @@ fn test_concurrent_elections() {
         .unwrap();
 
     rt.block_on(async {
-        let base = PathBuf::from(std::env::temp_dir()).join("octopii_concurrent_election");
+        let base = local_test_dir("octopii_concurrent_election");
         let _ = std::fs::remove_dir_all(&base);
 
         let addr1 = "127.0.0.1:9421".parse().unwrap();
@@ -464,7 +473,7 @@ fn test_five_node_cluster_majority_requirement() {
         .unwrap();
 
     rt.block_on(async {
-        let base = PathBuf::from(std::env::temp_dir()).join("octopii_five_node");
+        let base = local_test_dir("octopii_five_node");
         let _ = std::fs::remove_dir_all(&base);
 
         let addr1 = "127.0.0.1:9431".parse().unwrap();
@@ -625,7 +634,7 @@ fn test_log_consistency_after_leader_change() {
         .unwrap();
 
     rt.block_on(async {
-        let base = PathBuf::from(std::env::temp_dir()).join("octopii_log_consistency");
+        let base = local_test_dir("octopii_log_consistency");
         let _ = std::fs::remove_dir_all(&base);
 
         let addr1 = "127.0.0.1:9441".parse().unwrap();
@@ -738,7 +747,7 @@ fn test_read_after_write_consistency() {
         .unwrap();
 
     rt.block_on(async {
-        let base = PathBuf::from(std::env::temp_dir()).join("octopii_read_consistency");
+        let base = local_test_dir("octopii_read_consistency");
         let _ = std::fs::remove_dir_all(&base);
 
         let addr1 = "127.0.0.1:9451".parse().unwrap();
@@ -849,7 +858,7 @@ fn test_sustained_write_load() {
         .unwrap();
 
     rt.block_on(async {
-        let base = PathBuf::from(std::env::temp_dir()).join("octopii_write_load");
+        let base = local_test_dir("octopii_write_load");
         let _ = std::fs::remove_dir_all(&base);
 
         let addr1 = "127.0.0.1:9461".parse().unwrap();
