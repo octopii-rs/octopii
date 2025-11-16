@@ -24,6 +24,8 @@ fn local_test_dir(name: &str) -> PathBuf {
     if let Some(parent) = dir.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
+    let namespace = octopii::openraft::node::peer_namespace_from_base(&dir);
+    octopii::openraft::node::clear_global_peer_addrs_for(&namespace);
     dir
 }
 
@@ -463,7 +465,6 @@ fn test_concurrent_elections() {
 }
 
 #[test]
-#[ignore = "flaky until WAL-based peer coordination and elections are stabilized"]
 fn test_five_node_cluster_majority_requirement() {
     init_test_tracing();
     // Test that a 5-node cluster requires 3 nodes (majority) to elect a leader

@@ -2,11 +2,12 @@ pub mod wal;
 
 use crate::error::{OctopiiError, Result};
 use bytes::Bytes;
-use std::path::PathBuf;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::time::Duration;
-use uuid::Uuid;
 
 pub use wal::{FsyncSchedule, Walrus};
 
@@ -48,7 +49,7 @@ impl WriteAheadLog {
             .and_then(|n| n.to_str())
             .unwrap_or("default_wal")
             .to_string();
-        let wal_key = wal_instance_key(&file_name);
+        let wal_key = wal_instance_key(&path, &file_name);
 
         // Convert flush_interval to FsyncSchedule
         let schedule = if flush_interval.as_millis() == 0 {
@@ -174,8 +175,11 @@ impl WriteAheadLog {
     }
 }
 
-fn wal_instance_key(base_name: &str) -> String {
-    format!("{}_{}", base_name, Uuid::new_v4())
+fn wal_instance_key(path: &Path, base_name: &str) -> String {
+    let mut hasher = DefaultHasher::new();
+    path.to_string_lossy().hash(&mut hasher);
+    let hash = hasher.finish();
+    format!("{base_name}_{hash:016x}")
 }
 
 #[cfg(test)]
