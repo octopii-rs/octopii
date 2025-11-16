@@ -45,15 +45,16 @@ struct PeerAddrRecord {
     addr: SocketAddr,
 }
 
-async fn load_peer_addr_records(wal: &Arc<WriteAheadLog>) -> Result<HashMap<u64, SocketAddr>> {
+async fn load_peer_addr_records(wal: &Arc<WriteAheadLog>) -> HashMap<u64, SocketAddr> {
     let mut map = HashMap::new();
-    let entries = wal.read_all().await?;
-    for raw in entries {
-        let record: PeerAddrRecord = bincode::deserialize(&raw)
-            .map_err(|e| crate::error::OctopiiError::Wal(format!("peer addr decode: {e}")))?;
-        map.insert(record.peer_id, record.addr);
+    if let Ok(entries) = wal.read_all().await {
+        for raw in entries {
+            if let Ok(record) = bincode::deserialize::<PeerAddrRecord>(&raw) {
+                map.insert(record.peer_id, record.addr);
+            }
+        }
     }
-    Ok(map)
+    map
 }
 
 async fn append_peer_addr_record(
@@ -115,11 +116,8 @@ impl OpenRaftNode {
             )
             .await?,
         );
-        let mut initial_peer_map = load_peer_addr_records(&peer_addr_wal).await?;
-        if initial_peer_map.get(&config.node_id) != Some(&config.bind_addr) {
-            append_peer_addr_record(&peer_addr_wal, config.node_id, config.bind_addr).await?;
-            initial_peer_map.insert(config.node_id, config.bind_addr);
-        }
+        let mut initial_peer_map = load_peer_addr_records(&peer_addr_wal).await;
+        initial_peer_map.insert(config.node_id, config.bind_addr);
 
         for peer_addr in config.peers.iter() {
             let peer_id = (peer_addr.port() % 10) as u64;
