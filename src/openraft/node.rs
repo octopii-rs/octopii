@@ -35,6 +35,10 @@ pub(crate) fn global_peer_addr(peer_id: u64) -> Option<SocketAddr> {
     GLOBAL_PEER_ADDRS.read().unwrap().get(&peer_id).copied()
 }
 
+pub fn clear_global_peer_addrs() {
+    GLOBAL_PEER_ADDRS.write().unwrap().clear();
+}
+
 #[derive(Serialize, Deserialize)]
 struct PeerAddrRecord {
     peer_id: u64,
