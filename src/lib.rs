@@ -3,11 +3,11 @@ pub mod runtime;
 pub mod chunk;
 pub mod config;
 pub mod error;
-pub mod shipping_lane;
-pub mod state_machine;
 #[cfg(feature = "openraft")]
 pub mod openraft;
 pub mod rpc;
+pub mod shipping_lane;
+pub mod state_machine;
 pub mod transport;
 pub mod wal;
 

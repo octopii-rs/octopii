@@ -2,23 +2,26 @@
 
 use crate::config::Config;
 use crate::error::Result;
-use crate::openraft::network::{QuinnNetwork, QuinnNetworkFactory};
 #[cfg(feature = "openraft-filters")]
 use crate::openraft::network::OpenRaftFilters;
-use crate::openraft::storage::{MemLogStore, MemStateMachine, new_mem_log_store, new_mem_state_machine};
-use crate::openraft::types::{AppEntry, AppResponse, AppNodeId, AppTypeConfig};
+use crate::openraft::network::{QuinnNetwork, QuinnNetworkFactory};
+use crate::openraft::storage::new_mem_state_machine;
+use crate::openraft::storage::new_wal_log_store;
+use crate::openraft::types::{AppEntry, AppNodeId, AppResponse, AppTypeConfig};
 use crate::runtime::OctopiiRuntime;
 use crate::state_machine::{KvStateMachine, StateMachine};
+use crate::wal::WriteAheadLog;
 use bytes::Bytes;
-use openraft::metrics::RaftMetrics;
 use once_cell::sync::Lazy;
+use openraft::impls::BasicNode;
+use openraft::metrics::RaftMetrics;
+use openraft::{Config as RaftConfig, Raft};
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::net::SocketAddr;
 use std::sync::{Arc, RwLock as StdRwLock};
 use tokio::sync::RwLock;
 use tokio::time::Duration;
-use openraft::{Raft, Config as RaftConfig};
-use openraft::impls::BasicNode;
 
 pub(crate) static GLOBAL_PEER_ADDRS: Lazy<StdRwLock<HashMap<u64, SocketAddr>>> =
     Lazy::new(|| StdRwLock::new(HashMap::new()));
@@ -32,6 +35,34 @@ pub(crate) fn global_peer_addr(peer_id: u64) -> Option<SocketAddr> {
     GLOBAL_PEER_ADDRS.read().unwrap().get(&peer_id).copied()
 }
 
+#[derive(Serialize, Deserialize)]
+struct PeerAddrRecord {
+    peer_id: u64,
+    addr: SocketAddr,
+}
+
+async fn load_peer_addr_records(wal: &Arc<WriteAheadLog>) -> Result<HashMap<u64, SocketAddr>> {
+    let mut map = HashMap::new();
+    let entries = wal.read_all().await?;
+    for raw in entries {
+        let record: PeerAddrRecord = bincode::deserialize(&raw)
+            .map_err(|e| crate::error::OctopiiError::Wal(format!("peer addr decode: {e}")))?;
+        map.insert(record.peer_id, record.addr);
+    }
+    Ok(map)
+}
+
+async fn append_peer_addr_record(
+    wal: &Arc<WriteAheadLog>,
+    peer_id: u64,
+    addr: SocketAddr,
+) -> Result<()> {
+    let bytes = bincode::serialize(&PeerAddrRecord { peer_id, addr })
+        .map_err(|e| crate::error::OctopiiError::Wal(format!("peer addr encode: {e}")))?;
+    wal.append(Bytes::from(bytes)).await?;
+    Ok(())
+}
+
 /// OpenRaft-based node
 pub struct OpenRaftNode {
     runtime: OctopiiRuntime,
@@ -41,6 +72,7 @@ pub struct OpenRaftNode {
     raft: Arc<Raft<AppTypeConfig>>,
     state_machine: StateMachine,
     peer_addrs: Arc<RwLock<std::collections::HashMap<u64, SocketAddr>>>,
+    peer_addr_wal: Arc<WriteAheadLog>,
     #[cfg(feature = "openraft-filters")]
     filters: Arc<OpenRaftFilters>,
 }
@@ -56,8 +88,52 @@ impl OpenRaftNode {
         let transport = Arc::new(crate::transport::QuicTransport::new(config.bind_addr).await?);
         let rpc = Arc::new(crate::rpc::RpcHandler::new(Arc::clone(&transport)));
 
+        std::fs::create_dir_all(&config.wal_dir).map_err(|e| crate::error::OctopiiError::Io(e))?;
+
         register_global_peer_addr(config.node_id, config.bind_addr);
-        
+
+        let flush_interval = Duration::from_millis(config.wal_flush_interval_ms);
+        let log_store = new_wal_log_store(Arc::new(
+            WriteAheadLog::new(
+                config.wal_dir.join("openraft_log"),
+                config.wal_batch_size,
+                flush_interval,
+            )
+            .await?,
+        ))
+        .await?;
+
+        let peer_addr_wal = Arc::new(
+            WriteAheadLog::new(
+                config.wal_dir.join("peer_addrs"),
+                config.wal_batch_size,
+                flush_interval,
+            )
+            .await?,
+        );
+        let mut initial_peer_map = load_peer_addr_records(&peer_addr_wal).await?;
+        if initial_peer_map.get(&config.node_id) != Some(&config.bind_addr) {
+            append_peer_addr_record(&peer_addr_wal, config.node_id, config.bind_addr).await?;
+            initial_peer_map.insert(config.node_id, config.bind_addr);
+        }
+
+        for peer_addr in config.peers.iter() {
+            let peer_id = (peer_addr.port() % 10) as u64;
+            if peer_id != config.node_id && peer_id > 0 {
+                if initial_peer_map.get(&peer_id).copied() != Some(*peer_addr) {
+                    append_peer_addr_record(&peer_addr_wal, peer_id, *peer_addr).await?;
+                    initial_peer_map.insert(peer_id, *peer_addr);
+                }
+            }
+        }
+        let peer_addrs = Arc::new(RwLock::new(initial_peer_map));
+        {
+            let map = peer_addrs.read().await;
+            for (peer_id, addr) in map.iter() {
+                register_global_peer_addr(*peer_id, *addr);
+            }
+        }
+
         // Start accepting incoming connections
         let rpc_clone = Arc::clone(&rpc);
         let transport_clone = Arc::clone(&transport);
@@ -72,12 +148,24 @@ impl OpenRaftNode {
                             loop {
                                 match peer.recv().await {
                                     Ok(Some(data)) => {
-                                        match crate::rpc::deserialize::<crate::rpc::RpcMessage>(&data) {
+                                        match crate::rpc::deserialize::<crate::rpc::RpcMessage>(
+                                            &data,
+                                        ) {
                                             Ok(msg) => {
-                                                rpc_inner.notify_message(addr, msg, Some(Arc::clone(&peer))).await;
+                                                rpc_inner
+                                                    .notify_message(
+                                                        addr,
+                                                        msg,
+                                                        Some(Arc::clone(&peer)),
+                                                    )
+                                                    .await;
                                             }
                                             Err(e) => {
-                                                tracing::error!("Failed to deserialize RPC message from {}: {}", addr, e);
+                                                tracing::error!(
+                                                    "Failed to deserialize RPC message from {}: {}",
+                                                    addr,
+                                                    e
+                                                );
                                             }
                                         }
                                     }
@@ -103,19 +191,13 @@ impl OpenRaftNode {
                 }
             }
         });
-        
-        // Initialize peer_addrs from config.peers
-        // We need to infer peer IDs from addresses. For now, we'll populate this
-        // when peers are explicitly added via add_learner or when we receive messages.
-        let peer_addrs = Arc::new(RwLock::new(std::collections::HashMap::new()));
-        
+
         #[cfg(feature = "openraft-filters")]
         let filters = Arc::new(OpenRaftFilters::new());
-        
+
         let state_machine: StateMachine = Arc::new(KvStateMachine::in_memory());
-        let log_store = new_mem_log_store();
         let state_machine_store = new_mem_state_machine(state_machine.clone());
-        
+
         // Create network factory
         #[cfg(feature = "openraft-filters")]
         let network_factory = QuinnNetworkFactory::new(
@@ -124,22 +206,22 @@ impl OpenRaftNode {
             config.node_id,
             Arc::clone(&filters),
         );
-        
+
         #[cfg(not(feature = "openraft-filters"))]
-        let network_factory = QuinnNetworkFactory::new(
-            Arc::clone(&rpc),
-            Arc::clone(&peer_addrs),
-            config.node_id,
-        );
-        
+        let network_factory =
+            QuinnNetworkFactory::new(Arc::clone(&rpc), Arc::clone(&peer_addrs), config.node_id);
+
         // Create Raft config
         let mut raft_config = RaftConfig::default();
         raft_config.heartbeat_interval = 200;
         raft_config.election_timeout_min = 800;
         raft_config.election_timeout_max = 1600;
-        let raft_config = Arc::new(raft_config.validate()
-            .map_err(|e| crate::error::OctopiiError::Rpc(format!("raft config: {e}")))?);
-        
+        let raft_config = Arc::new(
+            raft_config
+                .validate()
+                .map_err(|e| crate::error::OctopiiError::Rpc(format!("raft config: {e}")))?,
+        );
+
         // Create Raft instance
         let raft = Raft::new(
             config.node_id,
@@ -147,8 +229,10 @@ impl OpenRaftNode {
             network_factory,
             log_store,
             state_machine_store.clone(),
-        ).await.map_err(|e| crate::error::OctopiiError::Rpc(format!("raft new: {e}")))?;
-        
+        )
+        .await
+        .map_err(|e| crate::error::OctopiiError::Rpc(format!("raft new: {e}")))?;
+
         Ok(Self {
             runtime,
             config,
@@ -157,6 +241,7 @@ impl OpenRaftNode {
             raft: Arc::new(raft),
             state_machine,
             peer_addrs,
+            peer_addr_wal,
             #[cfg(feature = "openraft-filters")]
             filters,
         })
@@ -168,9 +253,11 @@ impl OpenRaftNode {
         let config_clone = config.clone();
         let runtime_clone = runtime.clone();
         let node = std::thread::scope(|s| {
-            s.spawn(move || handle.block_on(async move { Self::new(config_clone, runtime_clone).await }))
-                .join()
-                .expect("thread panicked")
+            s.spawn(move || {
+                handle.block_on(async move { Self::new(config_clone, runtime_clone).await })
+            })
+            .join()
+            .expect("thread panicked")
         })?;
         Ok(node)
     }
@@ -185,6 +272,22 @@ impl OpenRaftNode {
         Ok(node)
     }
 
+    async fn persist_peer_addr_if_needed(&self, peer_id: u64, addr: SocketAddr) -> Result<()> {
+        let mut needs_persist = false;
+        {
+            let mut map = self.peer_addrs.write().await;
+            if map.get(&peer_id).copied() != Some(addr) {
+                map.insert(peer_id, addr);
+                needs_persist = true;
+            }
+        }
+        register_global_peer_addr(peer_id, addr);
+        if needs_persist {
+            append_peer_addr_record(&self.peer_addr_wal, peer_id, addr).await?;
+        }
+        Ok(())
+    }
+
     pub async fn start(&self) -> Result<()> {
         // Populate peer_addrs map for all nodes (not just initial leader)
         // HACK: Use last digit of port as node ID (e.g., :9321 -> node 1, :9322 -> node 2)
@@ -192,125 +295,187 @@ impl OpenRaftNode {
         for peer_addr in self.config.peers.iter() {
             let peer_id = (peer_addr.port() % 10) as u64;
             if peer_id != self.config.node_id && peer_id > 0 {
-                tracing::info!("Node {}: Adding peer {} at address {}", self.config.node_id, peer_id, peer_addr);
-                self.peer_addrs.write().await.insert(peer_id, *peer_addr);
+                tracing::info!(
+                    "Node {}: Adding peer {} at address {}",
+                    self.config.node_id,
+                    peer_id,
+                    peer_addr
+                );
+                self.persist_peer_addr_if_needed(peer_id, *peer_addr)
+                    .await?;
             }
         }
 
         // Log final peer_addrs state
         let peers = self.peer_addrs.read().await;
-        tracing::info!("Node {}: Initialized with peers: {:?}", self.config.node_id,
-            peers.iter().map(|(id, addr)| format!("{}@{}", id, addr)).collect::<Vec<_>>());
+        tracing::info!(
+            "Node {}: Initialized with peers: {:?}",
+            self.config.node_id,
+            peers
+                .iter()
+                .map(|(id, addr)| format!("{}@{}", id, addr))
+                .collect::<Vec<_>>()
+        );
         drop(peers);
 
         // Register RPC handler for OpenRaft messages BEFORE initialization
         // This is critical: nodes 2 and 3 need to be able to receive RPCs when node 1 initializes
         let raft_clone = self.raft.clone();
         let node_id = self.config.node_id;
-        self.rpc.set_request_handler(move |req| {
-            let raft = raft_clone.clone();
+        self.rpc
+            .set_request_handler(move |req| {
+                let raft = raft_clone.clone();
 
-            match req.payload {
-                crate::rpc::RequestPayload::OpenRaft { kind, data } => {
-                    tracing::info!("Node {}: OpenRaft RPC handler received: kind={}", node_id, kind);
-                    let response_data = tokio::task::block_in_place(|| {
-                        tokio::runtime::Handle::current().block_on(async {
-                        match kind.as_str() {
-                            "append_entries" => {
-                                if let Ok(req) = bincode::deserialize::<openraft::raft::AppendEntriesRequest<AppTypeConfig>>(&data) {
-                                    if let Ok(resp) = raft.append_entries(req).await {
-                                        bincode::serialize(&resp).unwrap_or_default()
-                                    } else {
-                                        Vec::new()
+                match req.payload {
+                    crate::rpc::RequestPayload::OpenRaft { kind, data } => {
+                        tracing::info!(
+                            "Node {}: OpenRaft RPC handler received: kind={}",
+                            node_id,
+                            kind
+                        );
+                        let response_data = tokio::task::block_in_place(|| {
+                            tokio::runtime::Handle::current().block_on(async {
+                                match kind.as_str() {
+                                    "append_entries" => {
+                                        if let Ok(req) =
+                                            bincode::deserialize::<
+                                                openraft::raft::AppendEntriesRequest<AppTypeConfig>,
+                                            >(&data)
+                                        {
+                                            if let Ok(resp) = raft.append_entries(req).await {
+                                                bincode::serialize(&resp).unwrap_or_default()
+                                            } else {
+                                                Vec::new()
+                                            }
+                                        } else {
+                                            Vec::new()
+                                        }
                                     }
-                                } else {
-                                    Vec::new()
-                                }
-                            }
-                            "vote" => {
-                                if let Ok(req) = bincode::deserialize::<openraft::raft::VoteRequest<AppTypeConfig>>(&data) {
-                                    if let Ok(resp) = raft.vote(req).await {
-                                        bincode::serialize(&resp).unwrap_or_default()
-                                    } else {
-                                        Vec::new()
+                                    "vote" => {
+                                        if let Ok(req) =
+                                            bincode::deserialize::<
+                                                openraft::raft::VoteRequest<AppTypeConfig>,
+                                            >(&data)
+                                        {
+                                            if let Ok(resp) = raft.vote(req).await {
+                                                bincode::serialize(&resp).unwrap_or_default()
+                                            } else {
+                                                Vec::new()
+                                            }
+                                        } else {
+                                            Vec::new()
+                                        }
                                     }
-                                } else {
-                                    Vec::new()
-                                }
-                            }
-                            "install_snapshot" => {
-                                if let Ok(req) = bincode::deserialize::<openraft::raft::InstallSnapshotRequest<AppTypeConfig>>(&data) {
-                                    if let Ok(resp) = raft.install_snapshot(req).await {
-                                        bincode::serialize(&resp).unwrap_or_default()
-                                    } else {
-                                        Vec::new()
+                                    "install_snapshot" => {
+                                        if let Ok(req) = bincode::deserialize::<
+                                            openraft::raft::InstallSnapshotRequest<AppTypeConfig>,
+                                        >(
+                                            &data
+                                        ) {
+                                            if let Ok(resp) = raft.install_snapshot(req).await {
+                                                bincode::serialize(&resp).unwrap_or_default()
+                                            } else {
+                                                Vec::new()
+                                            }
+                                        } else {
+                                            Vec::new()
+                                        }
                                     }
-                                } else {
-                                    Vec::new()
+                                    _ => Vec::new(),
                                 }
-                            }
-                            _ => Vec::new(),
+                            })
+                        });
+
+                        crate::rpc::ResponsePayload::OpenRaft {
+                            kind,
+                            data: bytes::Bytes::from(response_data),
                         }
-                        })
-                    });
-
-                    crate::rpc::ResponsePayload::OpenRaft {
-                        kind,
-                        data: bytes::Bytes::from(response_data)
                     }
+                    _ => crate::rpc::ResponsePayload::CustomResponse {
+                        success: false,
+                        data: bytes::Bytes::new(),
+                    },
                 }
-                _ => crate::rpc::ResponsePayload::CustomResponse {
-                    success: false,
-                    data: bytes::Bytes::new()
-                },
-            }
-        }).await;
+            })
+            .await;
 
         // NOW initialize the cluster after all RPC handlers are set up
         // Only initialize if this is the initial leader and cluster is not initialized
         // For multi-node clusters, only the initial leader should call initialize
-        if self.config.is_initial_leader && !self.raft.is_initialized().await
-            .map_err(|e| crate::error::OctopiiError::Rpc(format!("is_initialized: {e}")))?
+        if self.config.is_initial_leader
+            && !self
+                .raft
+                .is_initialized()
+                .await
+                .map_err(|e| crate::error::OctopiiError::Rpc(format!("is_initialized: {e}")))?
         {
-            tracing::info!("Node {}: Initializing cluster as initial leader", self.config.node_id);
+            tracing::info!(
+                "Node {}: Initializing cluster as initial leader",
+                self.config.node_id
+            );
             let mut nodes = BTreeMap::new();
             nodes.insert(
                 self.config.node_id,
-                BasicNode { addr: self.config.bind_addr.to_string() }
+                BasicNode {
+                    addr: self.config.bind_addr.to_string(),
+                },
             );
 
             // Add peer nodes to the initial cluster membership
             for peer_addr in self.config.peers.iter() {
                 let peer_id = (peer_addr.port() % 10) as u64;
                 if peer_id != self.config.node_id && peer_id > 0 {
-                    tracing::info!("Node {}: Adding peer {} to initial membership", self.config.node_id, peer_id);
-                    nodes.insert(peer_id, BasicNode { addr: peer_addr.to_string() });
+                    tracing::info!(
+                        "Node {}: Adding peer {} to initial membership",
+                        self.config.node_id,
+                        peer_id
+                    );
+                    nodes.insert(
+                        peer_id,
+                        BasicNode {
+                            addr: peer_addr.to_string(),
+                        },
+                    );
                 }
             }
 
-            self.raft.initialize(nodes).await
+            self.raft
+                .initialize(nodes)
+                .await
                 .map_err(|e| crate::error::OctopiiError::Rpc(format!("initialize: {e}")))?;
-            tracing::info!("Node {}: Cluster initialization complete", self.config.node_id);
+            tracing::info!(
+                "Node {}: Cluster initialization complete",
+                self.config.node_id
+            );
         }
 
         Ok(())
     }
 
     pub async fn propose(&self, command: Vec<u8>) -> Result<Bytes> {
-        let resp = self.raft.client_write(AppEntry(command)).await
+        let resp = self
+            .raft
+            .client_write(AppEntry(command))
+            .await
             .map_err(|e| crate::error::OctopiiError::Rpc(format!("client_write: {e}")))?;
         Ok(Bytes::from(resp.data.0))
     }
 
     pub async fn query(&self, command: &[u8]) -> Result<Bytes> {
-        self.state_machine.apply(command)
+        self.state_machine
+            .apply(command)
             .map_err(|e| crate::error::OctopiiError::Rpc(e))
     }
 
     pub async fn is_leader(&self) -> bool {
         let metrics = self.raft.metrics().borrow().clone();
-        tracing::debug!("Node {}: is_leader check - current_leader={:?}, server_state={:?}, membership={:?}",
-            self.config.node_id, metrics.current_leader, metrics.state, metrics.membership_config.membership());
+        tracing::debug!(
+            "Node {}: is_leader check - current_leader={:?}, server_state={:?}, membership={:?}",
+            self.config.node_id,
+            metrics.current_leader,
+            metrics.state,
+            metrics.membership_config.membership()
+        );
         metrics.current_leader == Some(self.config.node_id)
     }
 
@@ -320,7 +485,10 @@ impl OpenRaftNode {
     }
 
     pub async fn campaign(&self) -> Result<()> {
-        self.raft.trigger().elect().await
+        self.raft
+            .trigger()
+            .elect()
+            .await
             .map_err(|e| crate::error::OctopiiError::Rpc(format!("elect: {e}")))?;
         Ok(())
     }
@@ -341,10 +509,13 @@ impl OpenRaftNode {
     }
 
     pub async fn add_learner(&self, peer_id: u64, addr: SocketAddr) -> Result<()> {
-        self.peer_addrs.write().await.insert(peer_id, addr);
-        register_global_peer_addr(peer_id, addr);
-        let node = BasicNode { addr: addr.to_string() };
-        self.raft.add_learner(peer_id, node, true).await
+        self.persist_peer_addr_if_needed(peer_id, addr).await?;
+        let node = BasicNode {
+            addr: addr.to_string(),
+        };
+        self.raft
+            .add_learner(peer_id, node, true)
+            .await
             .map_err(|e| crate::error::OctopiiError::Rpc(format!("add_learner: {e}")))?;
         Ok(())
     }
@@ -363,10 +534,16 @@ impl OpenRaftNode {
         // Add the new voter
         members.insert(peer_id);
 
-        tracing::info!("Node {}: Promoting learner {} to voter, new membership: {:?}",
-            self.config.node_id, peer_id, members);
+        tracing::info!(
+            "Node {}: Promoting learner {} to voter, new membership: {:?}",
+            self.config.node_id,
+            peer_id,
+            members
+        );
 
-        self.raft.change_membership(members, true).await
+        self.raft
+            .change_membership(members, true)
+            .await
             .map_err(|e| crate::error::OctopiiError::Rpc(format!("change_membership: {e}")))?;
         Ok(())
     }
@@ -392,11 +569,17 @@ impl OpenRaftNode {
             voters.push(self.config.node_id);
         }
         voters.sort_unstable();
-        ConfStateCompat { voters, learners: Vec::new() }
+        ConfStateCompat {
+            voters,
+            learners: Vec::new(),
+        }
     }
 
     pub async fn force_snapshot_to_peer(&self, _peer_id: u64) -> Result<()> {
-        self.raft.trigger().snapshot().await
+        self.raft
+            .trigger()
+            .snapshot()
+            .await
             .map_err(|e| crate::error::OctopiiError::Rpc(format!("snapshot: {e}")))?;
         Ok(())
     }
@@ -415,8 +598,7 @@ impl OpenRaftNode {
     }
 
     pub async fn update_peer_addr(&self, peer_id: u64, addr: SocketAddr) {
-        self.peer_addrs.write().await.insert(peer_id, addr);
-        register_global_peer_addr(peer_id, addr);
+        let _ = self.persist_peer_addr_if_needed(peer_id, addr).await;
     }
 
     pub async fn peer_addr_for(&self, peer_id: u64) -> Option<SocketAddr> {
@@ -456,12 +638,20 @@ impl OpenRaftNode {
 
     #[cfg(feature = "openraft-filters")]
     pub async fn add_send_drop_to(&self, to: u64) {
-        self.filters.drop_pairs.write().await.insert((self.config.node_id, to));
+        self.filters
+            .drop_pairs
+            .write()
+            .await
+            .insert((self.config.node_id, to));
     }
 
     #[cfg(feature = "openraft-filters")]
     pub async fn add_send_delay_to(&self, to: u64, delay: Duration) {
-        self.filters.delay_pairs.write().await.insert((self.config.node_id, to), delay);
+        self.filters
+            .delay_pairs
+            .write()
+            .await
+            .insert((self.config.node_id, to), delay);
     }
 
     #[cfg(feature = "openraft-filters")]

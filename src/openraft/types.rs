@@ -31,7 +31,3 @@ openraft::declare_raft_types!(
         R = AppResponse,
         NodeId = AppNodeId,
 );
-
-
-
-

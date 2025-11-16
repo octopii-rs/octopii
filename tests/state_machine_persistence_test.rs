@@ -136,7 +136,10 @@ async fn test_wal_backed_state_machine_concurrent_applies() {
 
     // Apply a GET via recovered machine to flush replay if needed.
     let result = recovered.apply(b"GET concurrent0").unwrap();
-    assert_eq!(result, Bytes::from(counter2.value("concurrent0").to_string()));
+    assert_eq!(
+        result,
+        Bytes::from(counter2.value("concurrent0").to_string())
+    );
     assert!(
         counter2.value("concurrent0") >= iterations as i64,
         "recovered machine should observe concurrent increments"

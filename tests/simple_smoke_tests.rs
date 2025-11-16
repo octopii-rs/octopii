@@ -833,8 +833,12 @@ fn test_transfer_leader_noop_is_safe() {
         assert!(n1.is_leader().await, "n1 should be leader before transfer");
 
         // Calling transfer_leader is currently a no-op; verify it returns Ok and leadership stays stable.
-        n1.transfer_leader(2).await.expect("transfer_leader on leader");
-        n2.transfer_leader(1).await.expect("transfer_leader on follower");
+        n1.transfer_leader(2)
+            .await
+            .expect("transfer_leader on leader");
+        n2.transfer_leader(1)
+            .await
+            .expect("transfer_leader on follower");
         sleep(Duration::from_secs(2)).await;
 
         assert!(

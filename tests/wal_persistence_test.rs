@@ -102,12 +102,7 @@ fn test_single_node_wal_persists_across_restart() {
     });
 }
 
-async fn wait_for_value(
-    node: &OctopiiNode,
-    key: &[u8],
-    expected: &str,
-    timeout: Duration,
-) -> bool {
+async fn wait_for_value(node: &OctopiiNode, key: &[u8], expected: &str, timeout: Duration) -> bool {
     let start = Instant::now();
     while start.elapsed() < timeout {
         if let Ok(value) = node.query(key).await {
@@ -140,13 +135,7 @@ fn test_three_node_leader_restart_preserves_wal() {
         let runtime = OctopiiRuntime::from_handle(tokio::runtime::Handle::current());
         let n1 = Arc::new(
             OctopiiNode::new(
-                cluster_config(
-                    &base,
-                    1,
-                    addr1,
-                    vec![addr2, addr3],
-                    true,
-                ),
+                cluster_config(&base, 1, addr1, vec![addr2, addr3], true),
                 runtime.clone(),
             )
             .await
@@ -223,7 +212,11 @@ fn test_three_node_leader_restart_preserves_wal() {
             }
         }
         let new_leader = new_leader_id.expect("cluster failed to elect new leader");
-        let leader = if new_leader == 2 { Arc::clone(&n2) } else { Arc::clone(&n3) };
+        let leader = if new_leader == 2 {
+            Arc::clone(&n2)
+        } else {
+            Arc::clone(&n3)
+        };
         for i in 100..110 {
             let _ = leader
                 .propose(format!("SET post{} {}", i, i).into_bytes())
@@ -233,8 +226,7 @@ fn test_three_node_leader_restart_preserves_wal() {
 
         let restart_block = next_port_block();
         let addr1_restart = addr_for(restart_block, 1);
-        let mut restart_config =
-            cluster_config(&base, 1, addr1_restart, vec![addr2, addr3], false);
+        let mut restart_config = cluster_config(&base, 1, addr1_restart, vec![addr2, addr3], false);
         restart_config.is_initial_leader = false;
         tokio::time::sleep(Duration::from_secs(1)).await;
 

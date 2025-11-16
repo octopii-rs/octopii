@@ -53,11 +53,15 @@ impl RpcHandler {
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
         let request = RpcMessage::new_request(id, payload.clone());
 
-        tracing::debug!("RPC request {} to {}: {:?}", id, addr,
+        tracing::debug!(
+            "RPC request {} to {}: {:?}",
+            id,
+            addr,
             match &payload {
                 super::RequestPayload::OpenRaft { kind, .. } => format!("OpenRaft({})", kind),
                 _ => "Other".to_string(),
-            });
+            }
+        );
 
         let (tx, rx) = oneshot::channel();
 
@@ -92,7 +96,12 @@ impl RpcHandler {
                 OctopiiError::Rpc("Request send timeout".to_string())
             })?
             .map_err(|e| {
-                tracing::error!("RPC request {}: transport send failed to {}: {}", id, addr, e);
+                tracing::error!(
+                    "RPC request {}: transport send failed to {}: {}",
+                    id,
+                    addr,
+                    e
+                );
                 OctopiiError::Rpc(format!("Transport send failed: {}", e))
             })?;
 
@@ -109,7 +118,11 @@ impl RpcHandler {
             }
             Err(_) => {
                 // Timeout - clean up pending request
-                tracing::error!("RPC request {}: timeout waiting for response from {}", id, addr);
+                tracing::error!(
+                    "RPC request {}: timeout waiting for response from {}",
+                    id,
+                    addr
+                );
                 let mut pending = self.pending_requests.write().await;
                 pending.remove(&id);
                 Err(OctopiiError::Rpc("Request timeout".to_string()))

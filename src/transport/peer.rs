@@ -300,9 +300,9 @@ impl PeerConnection {
             match recv_stream.read(&mut buffer[..to_read]).await {
                 Ok(Some(n)) => {
                     hasher.update(&buffer[..n]);
-                    file.write_all(&buffer[..n])
-                        .await
-                        .map_err(|e| OctopiiError::Transport(format!("File write failed: {}", e)))?;
+                    file.write_all(&buffer[..n]).await.map_err(|e| {
+                        OctopiiError::Transport(format!("File write failed: {}", e))
+                    })?;
                     received += n as u64;
                 }
                 Ok(None) => {

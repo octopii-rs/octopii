@@ -11,8 +11,16 @@ use tokio::time::Duration;
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_rpc_request_response() {
     // Use ephemeral ports to avoid conflicts when tests run in parallel.
-    let transport1 = Arc::new(QuicTransport::new("127.0.0.1:0".parse().unwrap()).await.unwrap());
-    let transport2 = Arc::new(QuicTransport::new("127.0.0.1:0".parse().unwrap()).await.unwrap());
+    let transport1 = Arc::new(
+        QuicTransport::new("127.0.0.1:0".parse().unwrap())
+            .await
+            .unwrap(),
+    );
+    let transport2 = Arc::new(
+        QuicTransport::new("127.0.0.1:0".parse().unwrap())
+            .await
+            .unwrap(),
+    );
     let addr1 = transport1.local_addr().unwrap();
     let addr2 = transport2.local_addr().unwrap();
 
@@ -115,8 +123,16 @@ async fn test_rpc_request_response() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_rpc_one_way_message() {
-    let transport1 = Arc::new(QuicTransport::new("127.0.0.1:0".parse().unwrap()).await.unwrap());
-    let transport2 = Arc::new(QuicTransport::new("127.0.0.1:0".parse().unwrap()).await.unwrap());
+    let transport1 = Arc::new(
+        QuicTransport::new("127.0.0.1:0".parse().unwrap())
+            .await
+            .unwrap(),
+    );
+    let transport2 = Arc::new(
+        QuicTransport::new("127.0.0.1:0".parse().unwrap())
+            .await
+            .unwrap(),
+    );
     let addr1 = transport1.local_addr().unwrap();
     let addr2 = transport2.local_addr().unwrap();
 
@@ -170,8 +186,16 @@ async fn test_rpc_one_way_message() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_rpc_request_timeout_and_recovery() {
-    let transport1 = Arc::new(QuicTransport::new("127.0.0.1:0".parse().unwrap()).await.unwrap());
-    let transport2 = Arc::new(QuicTransport::new("127.0.0.1:0".parse().unwrap()).await.unwrap());
+    let transport1 = Arc::new(
+        QuicTransport::new("127.0.0.1:0".parse().unwrap())
+            .await
+            .unwrap(),
+    );
+    let transport2 = Arc::new(
+        QuicTransport::new("127.0.0.1:0".parse().unwrap())
+            .await
+            .unwrap(),
+    );
     let addr1 = transport1.local_addr().unwrap();
     let addr2 = transport2.local_addr().unwrap();
 
@@ -252,12 +276,11 @@ async fn test_rpc_request_timeout_and_recovery() {
     );
 
     // Now install a real handler and ensure subsequent requests succeed.
-    rpc2
-        .set_request_handler(|_req| ResponsePayload::CustomResponse {
-            success: true,
-            data: Bytes::from_static(b"ok"),
-        })
-        .await;
+    rpc2.set_request_handler(|_req| ResponsePayload::CustomResponse {
+        success: true,
+        data: Bytes::from_static(b"ok"),
+    })
+    .await;
 
     tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
 
