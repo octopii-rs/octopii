@@ -1,14 +1,22 @@
 use bytes::Bytes;
 use futures::future;
-use octopii::{ChunkSource, ShippingLane};
 use octopii::transport::QuicTransport;
+use octopii::{ChunkSource, ShippingLane};
 use std::sync::Arc;
 use tokio::time::Duration;
 
 #[tokio::test]
 async fn test_shipping_lane_send_file_to_peer() {
-    let sender = Arc::new(QuicTransport::new("127.0.0.1:0".parse().unwrap()).await.unwrap());
-    let receiver = Arc::new(QuicTransport::new("127.0.0.1:0".parse().unwrap()).await.unwrap());
+    let sender = Arc::new(
+        QuicTransport::new("127.0.0.1:0".parse().unwrap())
+            .await
+            .unwrap(),
+    );
+    let receiver = Arc::new(
+        QuicTransport::new("127.0.0.1:0".parse().unwrap())
+            .await
+            .unwrap(),
+    );
 
     let receiver_addr = receiver.local_addr().unwrap();
     let dest_dir = tempfile::tempdir().unwrap();
@@ -46,8 +54,16 @@ async fn test_shipping_lane_send_file_to_peer() {
 
 #[tokio::test]
 async fn test_shipping_lane_receive_file_from_peer() {
-    let client = Arc::new(QuicTransport::new("127.0.0.1:0".parse().unwrap()).await.unwrap());
-    let server = Arc::new(QuicTransport::new("127.0.0.1:0".parse().unwrap()).await.unwrap());
+    let client = Arc::new(
+        QuicTransport::new("127.0.0.1:0".parse().unwrap())
+            .await
+            .unwrap(),
+    );
+    let server = Arc::new(
+        QuicTransport::new("127.0.0.1:0".parse().unwrap())
+            .await
+            .unwrap(),
+    );
 
     let server_addr = server.local_addr().unwrap();
     let source_dir = tempfile::tempdir().unwrap();
@@ -86,8 +102,16 @@ async fn test_shipping_lane_receive_file_from_peer() {
 
 #[tokio::test]
 async fn test_shipping_lane_send_memory() {
-    let sender = Arc::new(QuicTransport::new("127.0.0.1:0".parse().unwrap()).await.unwrap());
-    let receiver = Arc::new(QuicTransport::new("127.0.0.1:0".parse().unwrap()).await.unwrap());
+    let sender = Arc::new(
+        QuicTransport::new("127.0.0.1:0".parse().unwrap())
+            .await
+            .unwrap(),
+    );
+    let receiver = Arc::new(
+        QuicTransport::new("127.0.0.1:0".parse().unwrap())
+            .await
+            .unwrap(),
+    );
 
     let receiver_addr = receiver.local_addr().unwrap();
     let payload = Bytes::from_static(b"shipping-lane-mem-payload");
@@ -119,8 +143,16 @@ async fn test_shipping_lane_send_memory() {
 
 #[tokio::test]
 async fn test_shipping_lane_receive_memory() {
-    let client = Arc::new(QuicTransport::new("127.0.0.1:0".parse().unwrap()).await.unwrap());
-    let server = Arc::new(QuicTransport::new("127.0.0.1:0".parse().unwrap()).await.unwrap());
+    let client = Arc::new(
+        QuicTransport::new("127.0.0.1:0".parse().unwrap())
+            .await
+            .unwrap(),
+    );
+    let server = Arc::new(
+        QuicTransport::new("127.0.0.1:0".parse().unwrap())
+            .await
+            .unwrap(),
+    );
 
     let server_addr = server.local_addr().unwrap();
     let payload = Bytes::from(vec![42u8; 2048]);
@@ -153,8 +185,16 @@ async fn test_shipping_lane_receive_memory() {
 
 #[tokio::test]
 async fn test_shipping_lane_send_memory_reports_failure_on_aborted_receiver() {
-    let sender = Arc::new(QuicTransport::new("127.0.0.1:0".parse().unwrap()).await.unwrap());
-    let receiver = Arc::new(QuicTransport::new("127.0.0.1:0".parse().unwrap()).await.unwrap());
+    let sender = Arc::new(
+        QuicTransport::new("127.0.0.1:0".parse().unwrap())
+            .await
+            .unwrap(),
+    );
+    let receiver = Arc::new(
+        QuicTransport::new("127.0.0.1:0".parse().unwrap())
+            .await
+            .unwrap(),
+    );
 
     let receiver_addr = receiver.local_addr().unwrap();
 
@@ -184,7 +224,11 @@ async fn test_shipping_lane_send_memory_reports_failure_on_aborted_receiver() {
         "failure path should report checksum not verified"
     );
     assert!(
-        result.error.as_ref().map(|s| !s.is_empty()).unwrap_or(false),
+        result
+            .error
+            .as_ref()
+            .map(|s| !s.is_empty())
+            .unwrap_or(false),
         "failure path should include error message"
     );
 
@@ -194,8 +238,16 @@ async fn test_shipping_lane_send_memory_reports_failure_on_aborted_receiver() {
 
 #[tokio::test]
 async fn test_shipping_lane_large_file_transfer() {
-    let sender = Arc::new(QuicTransport::new("127.0.0.1:0".parse().unwrap()).await.unwrap());
-    let receiver = Arc::new(QuicTransport::new("127.0.0.1:0".parse().unwrap()).await.unwrap());
+    let sender = Arc::new(
+        QuicTransport::new("127.0.0.1:0".parse().unwrap())
+            .await
+            .unwrap(),
+    );
+    let receiver = Arc::new(
+        QuicTransport::new("127.0.0.1:0".parse().unwrap())
+            .await
+            .unwrap(),
+    );
     let receiver_addr = receiver.local_addr().unwrap();
 
     let dest_dir = tempfile::tempdir().unwrap();
@@ -231,8 +283,16 @@ async fn test_shipping_lane_large_file_transfer() {
 
 #[tokio::test]
 async fn test_shipping_lane_concurrent_memory_transfers() {
-    let sender = Arc::new(QuicTransport::new("127.0.0.1:0".parse().unwrap()).await.unwrap());
-    let receiver = Arc::new(QuicTransport::new("127.0.0.1:0".parse().unwrap()).await.unwrap());
+    let sender = Arc::new(
+        QuicTransport::new("127.0.0.1:0".parse().unwrap())
+            .await
+            .unwrap(),
+    );
+    let receiver = Arc::new(
+        QuicTransport::new("127.0.0.1:0".parse().unwrap())
+            .await
+            .unwrap(),
+    );
     let receiver_addr = receiver.local_addr().unwrap();
 
     let payloads: Vec<Bytes> = (0..5)

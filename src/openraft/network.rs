@@ -1,17 +1,20 @@
 #![cfg(feature = "openraft")]
 
 use crate::openraft::node::global_peer_addr;
-use crate::rpc::{RequestPayload, RpcHandler, ResponsePayload};
 use crate::openraft::types::{AppNodeId, AppTypeConfig};
+use crate::rpc::{RequestPayload, ResponsePayload, RpcHandler};
+use openraft::{
+    error::RPCError,
+    network::{RaftNetwork, RaftNetworkFactory},
+    raft::{
+        AppendEntriesRequest, AppendEntriesResponse, InstallSnapshotRequest,
+        InstallSnapshotResponse, VoteRequest, VoteResponse,
+    },
+};
+use std::io;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::io;
 use tokio::time::Duration;
-use openraft::{
-    network::{RaftNetwork, RaftNetworkFactory},
-    error::RPCError,
-    raft::{AppendEntriesRequest, AppendEntriesResponse, InstallSnapshotRequest, InstallSnapshotResponse, VoteRequest, VoteResponse},
-};
 
 /// QUIC-backed network for OpenRaft messages
 pub struct QuinnNetwork {
@@ -68,7 +71,11 @@ impl QuinnNetwork {
         None
     }
 
-    async fn send_openraft(&self, kind: &str, data: Vec<u8>) -> Result<ResponsePayload, anyhow::Error> {
+    async fn send_openraft(
+        &self,
+        kind: &str,
+        data: Vec<u8>,
+    ) -> Result<ResponsePayload, anyhow::Error> {
         #[cfg(feature = "openraft-filters")]
         {
             // Partition check
@@ -76,33 +83,67 @@ impl QuinnNetwork {
                 if (g1.contains(&self.self_id) && g2.contains(&self.target))
                     || (g2.contains(&self.self_id) && g1.contains(&self.target))
                 {
-                    anyhow::bail!("openraft-filters: partition drop {}->{}", self.self_id, self.target);
+                    anyhow::bail!(
+                        "openraft-filters: partition drop {}->{}",
+                        self.self_id,
+                        self.target
+                    );
                 }
             }
             // Pair-specific drop
-            if self.filters.drop_pairs.read().await.contains(&(self.self_id, self.target)) {
-                anyhow::bail!("openraft-filters: drop pair {}->{}", self.self_id, self.target);
+            if self
+                .filters
+                .drop_pairs
+                .read()
+                .await
+                .contains(&(self.self_id, self.target))
+            {
+                anyhow::bail!(
+                    "openraft-filters: drop pair {}->{}",
+                    self.self_id,
+                    self.target
+                );
             }
             // Delay if configured
-            if let Some(d) = self.filters.delay_pairs.read().await.get(&(self.self_id, self.target)).copied() {
+            if let Some(d) = self
+                .filters
+                .delay_pairs
+                .read()
+                .await
+                .get(&(self.self_id, self.target))
+                .copied()
+            {
                 tokio::time::sleep(d).await;
             }
         }
 
         let Some(addr) = self.peer_addr().await else {
-            tracing::warn!("QuinnNetwork: no address for peer {} (self={})", self.target, self.self_id);
+            tracing::warn!(
+                "QuinnNetwork: no address for peer {} (self={})",
+                self.target,
+                self.self_id
+            );
             anyhow::bail!("no address for peer {}", self.target);
         };
-        
-        tracing::debug!("QuinnNetwork: sending {} from {} to {} at {}", kind, self.self_id, self.target, addr);
-        
-        let payload = RequestPayload::OpenRaft { 
-            kind: kind.to_string(), 
-            data: bytes::Bytes::from(data) 
+
+        tracing::debug!(
+            "QuinnNetwork: sending {} from {} to {} at {}",
+            kind,
+            self.self_id,
+            self.target,
+            addr
+        );
+
+        let payload = RequestPayload::OpenRaft {
+            kind: kind.to_string(),
+            data: bytes::Bytes::from(data),
         };
-        
-        let resp = self.rpc.request(addr, payload, Duration::from_secs(5)).await?;
-        
+
+        let resp = self
+            .rpc
+            .request(addr, payload, Duration::from_secs(5))
+            .await?;
+
         Ok(resp.payload)
     }
 }
@@ -115,17 +156,27 @@ impl openraft::network::v2::RaftNetworkV2<AppTypeConfig> for QuinnNetwork {
     ) -> Result<AppendEntriesResponse<AppTypeConfig>, RPCError<AppTypeConfig>> {
         let data = bincode::serialize(&req)
             .map_err(|e| RPCError::Network(openraft::error::NetworkError::new(&e)))?;
-        
-        let resp_payload = self.send_openraft("append_entries", data).await
-            .map_err(|e| RPCError::Unreachable(openraft::error::Unreachable::new(&io::Error::new(io::ErrorKind::Other, e))))?;
-        
+
+        let resp_payload = self
+            .send_openraft("append_entries", data)
+            .await
+            .map_err(|e| {
+                RPCError::Unreachable(openraft::error::Unreachable::new(&io::Error::new(
+                    io::ErrorKind::Other,
+                    e,
+                )))
+            })?;
+
         match resp_payload {
             ResponsePayload::OpenRaft { kind, data } if kind == "append_entries" => {
                 bincode::deserialize(&data)
                     .map_err(|e| RPCError::Network(openraft::error::NetworkError::new(&e)))
             }
             other => Err(RPCError::Unreachable(openraft::error::Unreachable::new(
-                &io::Error::new(io::ErrorKind::Other, format!("unexpected response: {:?}", other))
+                &io::Error::new(
+                    io::ErrorKind::Other,
+                    format!("unexpected response: {:?}", other),
+                ),
             ))),
         }
     }
@@ -134,13 +185,21 @@ impl openraft::network::v2::RaftNetworkV2<AppTypeConfig> for QuinnNetwork {
         &mut self,
         _vote: openraft::Vote<AppTypeConfig>,
         _snapshot: openraft::storage::Snapshot<AppTypeConfig>,
-        _cancel: impl std::future::Future<Output = openraft::error::ReplicationClosed> + openraft::OptionalSend + 'static,
+        _cancel: impl std::future::Future<Output = openraft::error::ReplicationClosed>
+            + openraft::OptionalSend
+            + 'static,
         _option: openraft::network::RPCOption,
-    ) -> Result<openraft::raft::SnapshotResponse<AppTypeConfig>, openraft::error::StreamingError<AppTypeConfig>> {
+    ) -> Result<
+        openraft::raft::SnapshotResponse<AppTypeConfig>,
+        openraft::error::StreamingError<AppTypeConfig>,
+    > {
         // For now, return an error - full snapshot streaming not yet implemented
-        Err(openraft::error::StreamingError::Unreachable(openraft::error::Unreachable::new(
-            &io::Error::new(io::ErrorKind::Other, "full_snapshot not yet implemented")
-        )))
+        Err(openraft::error::StreamingError::Unreachable(
+            openraft::error::Unreachable::new(&io::Error::new(
+                io::ErrorKind::Other,
+                "full_snapshot not yet implemented",
+            )),
+        ))
     }
 
     async fn vote(
@@ -148,34 +207,57 @@ impl openraft::network::v2::RaftNetworkV2<AppTypeConfig> for QuinnNetwork {
         req: VoteRequest<AppTypeConfig>,
         _option: openraft::network::RPCOption,
     ) -> Result<VoteResponse<AppTypeConfig>, RPCError<AppTypeConfig>> {
-        tracing::info!("QuinnNetwork::vote() called: self_id={} target={} vote={:?}", self.self_id, self.target, req.vote);
+        tracing::info!(
+            "QuinnNetwork::vote() called: self_id={} target={} vote={:?}",
+            self.self_id,
+            self.target,
+            req.vote
+        );
 
-        let data = bincode::serialize(&req)
-            .map_err(|e| {
-                tracing::error!("Failed to serialize vote request {}->{}: {}", self.self_id, self.target, e);
-                RPCError::Network(openraft::error::NetworkError::new(&e))
-            })?;
+        let data = bincode::serialize(&req).map_err(|e| {
+            tracing::error!(
+                "Failed to serialize vote request {}->{}: {}",
+                self.self_id,
+                self.target,
+                e
+            );
+            RPCError::Network(openraft::error::NetworkError::new(&e))
+        })?;
 
         tracing::debug!("Sending vote RPC {}->{}", self.self_id, self.target);
-        let resp_payload = self.send_openraft("vote", data).await
-            .map_err(|e| {
-                tracing::error!("Vote RPC {}->{} failed: {}", self.self_id, self.target, e);
-                RPCError::Unreachable(openraft::error::Unreachable::new(&io::Error::new(io::ErrorKind::Other, e)))
-            })?;
+        let resp_payload = self.send_openraft("vote", data).await.map_err(|e| {
+            tracing::error!("Vote RPC {}->{} failed: {}", self.self_id, self.target, e);
+            RPCError::Unreachable(openraft::error::Unreachable::new(&io::Error::new(
+                io::ErrorKind::Other,
+                e,
+            )))
+        })?;
 
         tracing::debug!("Received vote response {}->{}", self.self_id, self.target);
         match resp_payload {
             ResponsePayload::OpenRaft { kind, data } if kind == "vote" => {
-                bincode::deserialize(&data)
-                    .map_err(|e| {
-                        tracing::error!("Failed to deserialize vote response {}->{}: {}", self.self_id, self.target, e);
-                        RPCError::Network(openraft::error::NetworkError::new(&e))
-                    })
+                bincode::deserialize(&data).map_err(|e| {
+                    tracing::error!(
+                        "Failed to deserialize vote response {}->{}: {}",
+                        self.self_id,
+                        self.target,
+                        e
+                    );
+                    RPCError::Network(openraft::error::NetworkError::new(&e))
+                })
             }
             other => {
-                tracing::error!("Unexpected vote response {}->{}: {:?}", self.self_id, self.target, other);
+                tracing::error!(
+                    "Unexpected vote response {}->{}: {:?}",
+                    self.self_id,
+                    self.target,
+                    other
+                );
                 Err(RPCError::Unreachable(openraft::error::Unreachable::new(
-                    &io::Error::new(io::ErrorKind::Other, format!("unexpected response: {:?}", other))
+                    &io::Error::new(
+                        io::ErrorKind::Other,
+                        format!("unexpected response: {:?}", other),
+                    ),
                 )))
             }
         }
@@ -197,12 +279,12 @@ impl QuinnNetworkFactory {
         self_id: AppNodeId,
         #[cfg(feature = "openraft-filters")] filters: Arc<OpenRaftFilters>,
     ) -> Self {
-        Self { 
-            rpc, 
-            peer_addrs, 
-            self_id, 
-            #[cfg(feature = "openraft-filters")] 
-            filters 
+        Self {
+            rpc,
+            peer_addrs,
+            self_id,
+            #[cfg(feature = "openraft-filters")]
+            filters,
         }
     }
 }
@@ -210,7 +292,11 @@ impl QuinnNetworkFactory {
 impl RaftNetworkFactory<AppTypeConfig> for QuinnNetworkFactory {
     type Network = QuinnNetwork;
 
-    async fn new_client(&mut self, target: AppNodeId, _node: &openraft::impls::BasicNode) -> Self::Network {
+    async fn new_client(
+        &mut self,
+        target: AppNodeId,
+        _node: &openraft::impls::BasicNode,
+    ) -> Self::Network {
         QuinnNetwork::new(
             Arc::clone(&self.rpc),
             Arc::clone(&self.peer_addrs),
@@ -225,8 +311,14 @@ impl RaftNetworkFactory<AppTypeConfig> for QuinnNetworkFactory {
 #[cfg(feature = "openraft-filters")]
 pub struct OpenRaftFilters {
     pub(crate) drop_pairs: tokio::sync::RwLock<std::collections::HashSet<(AppNodeId, AppNodeId)>>,
-    pub(crate) delay_pairs: tokio::sync::RwLock<std::collections::HashMap<(AppNodeId, AppNodeId), Duration>>,
-    pub(crate) partitions: tokio::sync::RwLock<Vec<(std::collections::HashSet<AppNodeId>, std::collections::HashSet<AppNodeId>)>>,
+    pub(crate) delay_pairs:
+        tokio::sync::RwLock<std::collections::HashMap<(AppNodeId, AppNodeId), Duration>>,
+    pub(crate) partitions: tokio::sync::RwLock<
+        Vec<(
+            std::collections::HashSet<AppNodeId>,
+            std::collections::HashSet<AppNodeId>,
+        )>,
+    >,
 }
 
 #[cfg(feature = "openraft-filters")]
@@ -238,7 +330,7 @@ impl OpenRaftFilters {
             partitions: tokio::sync::RwLock::new(vec![]),
         }
     }
-    
+
     pub async fn clear(&self) {
         self.drop_pairs.write().await.clear();
         self.delay_pairs.write().await.clear();

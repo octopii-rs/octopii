@@ -16,8 +16,16 @@ const LONG_TIMEOUT: Duration = Duration::from_secs(20);
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "chaos test - slow and flaky"]
 async fn test_rpc_storm_with_handler_flaps() {
-    let transport1 = Arc::new(QuicTransport::new("127.0.0.1:0".parse().unwrap()).await.unwrap());
-    let transport2 = Arc::new(QuicTransport::new("127.0.0.1:0".parse().unwrap()).await.unwrap());
+    let transport1 = Arc::new(
+        QuicTransport::new("127.0.0.1:0".parse().unwrap())
+            .await
+            .unwrap(),
+    );
+    let transport2 = Arc::new(
+        QuicTransport::new("127.0.0.1:0".parse().unwrap())
+            .await
+            .unwrap(),
+    );
     let addr1 = transport1.local_addr().unwrap();
     let addr2 = transport2.local_addr().unwrap();
 
@@ -25,30 +33,29 @@ async fn test_rpc_storm_with_handler_flaps() {
     let rpc2 = Arc::new(RpcHandler::new(Arc::clone(&transport2)));
 
     let drop_rate = Arc::new(AtomicBool::new(true));
-    rpc2
-        .set_request_handler({
-            let drop_rate = Arc::clone(&drop_rate);
-            move |req: RpcRequest| {
-                if drop_rate.load(Ordering::SeqCst) {
-                    ResponsePayload::CustomResponse {
-                        success: false,
-                        data: Bytes::from_static(b"dropped"),
+    rpc2.set_request_handler({
+        let drop_rate = Arc::clone(&drop_rate);
+        move |req: RpcRequest| {
+            if drop_rate.load(Ordering::SeqCst) {
+                ResponsePayload::CustomResponse {
+                    success: false,
+                    data: Bytes::from_static(b"dropped"),
+                }
+            } else {
+                let payload = match &req.payload {
+                    RequestPayload::Custom { operation, .. } => {
+                        Bytes::from(format!("ack-{operation}"))
                     }
-                } else {
-                    let payload = match &req.payload {
-                        RequestPayload::Custom { operation, .. } => {
-                            Bytes::from(format!("ack-{operation}"))
-                        }
-                        _ => Bytes::from_static(b"ack"),
-                    };
-                    ResponsePayload::CustomResponse {
-                        success: true,
-                        data: payload,
-                    }
+                    _ => Bytes::from_static(b"ack"),
+                };
+                ResponsePayload::CustomResponse {
+                    success: true,
+                    data: payload,
                 }
             }
-        })
-        .await;
+        }
+    })
+    .await;
 
     let t2_clone = Arc::clone(&transport2);
     let rpc2_clone = Arc::clone(&rpc2);
@@ -180,8 +187,16 @@ async fn test_rpc_storm_with_handler_flaps() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "chaos test - slow and flaky"]
 async fn test_shipping_lane_retries_under_flaky_receiver() {
-    let sender = Arc::new(QuicTransport::new("127.0.0.1:0".parse().unwrap()).await.unwrap());
-    let receiver = Arc::new(QuicTransport::new("127.0.0.1:0".parse().unwrap()).await.unwrap());
+    let sender = Arc::new(
+        QuicTransport::new("127.0.0.1:0".parse().unwrap())
+            .await
+            .unwrap(),
+    );
+    let receiver = Arc::new(
+        QuicTransport::new("127.0.0.1:0".parse().unwrap())
+            .await
+            .unwrap(),
+    );
     let receiver_addr = receiver.local_addr().unwrap();
 
     let fail_counter = Arc::new(AtomicUsize::new(0));
@@ -219,7 +234,10 @@ async fn test_shipping_lane_retries_under_flaky_receiver() {
         let mut attempt = 0;
         loop {
             attempt += 1;
-            let result = lane.send_memory(receiver_addr, payload.clone()).await.unwrap();
+            let result = lane
+                .send_memory(receiver_addr, payload.clone())
+                .await
+                .unwrap();
             if result.success {
                 break;
             }
@@ -230,7 +248,8 @@ async fn test_shipping_lane_retries_under_flaky_receiver() {
 
     let received = done_rx.await.unwrap();
     assert_eq!(received.len(), total_successes);
-    let mut expected_sorted: Vec<Vec<u8>> = expected_payloads.into_iter().map(|b| b.to_vec()).collect();
+    let mut expected_sorted: Vec<Vec<u8>> =
+        expected_payloads.into_iter().map(|b| b.to_vec()).collect();
     let mut actual_sorted: Vec<Vec<u8>> = received.into_iter().map(|b| b.to_vec()).collect();
     expected_sorted.sort();
     actual_sorted.sort();

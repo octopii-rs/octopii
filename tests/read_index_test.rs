@@ -17,17 +17,11 @@ async fn wait_for_leader(node: &OctopiiNode, timeout: Duration) -> bool {
     false
 }
 
-async fn wait_for_peer_leader(
-    nodes: &[Arc<OctopiiNode>],
-    timeout: Duration,
-) -> Option<usize> {
+async fn wait_for_peer_leader(nodes: &[Arc<OctopiiNode>], timeout: Duration) -> Option<usize> {
     let start = Instant::now();
     while start.elapsed() < timeout {
         for (idx, node) in nodes.iter().enumerate() {
-            if node
-                .is_leader()
-                .await
-            {
+            if node.is_leader().await {
                 return Some(idx);
             }
         }
@@ -68,12 +62,9 @@ fn test_read_index_enforces_leadership() {
 
         let runtime = OctopiiRuntime::from_handle(tokio::runtime::Handle::current());
         let n1 = Arc::new(
-            OctopiiNode::new(
-                config(1, addr1, vec![addr2, addr3], true),
-                runtime.clone(),
-            )
-            .await
-            .expect("create n1"),
+            OctopiiNode::new(config(1, addr1, vec![addr2, addr3], true), runtime.clone())
+                .await
+                .expect("create n1"),
         );
         let n2 = Arc::new(
             OctopiiNode::new(config(2, addr2, vec![addr1, addr3], false), runtime.clone())
@@ -91,12 +82,13 @@ fn test_read_index_enforces_leadership() {
         }
 
         n1.campaign().await.expect("n1 campaign");
-        assert!(wait_for_leader(&n1, LEADER_WAIT).await, "n1 never became leader");
+        assert!(
+            wait_for_leader(&n1, LEADER_WAIT).await,
+            "n1 never became leader"
+        );
 
         for i in 0..10 {
-            let _ = n1
-                .propose(format!("SET li{} {}", i, i).into_bytes())
-                .await;
+            let _ = n1.propose(format!("SET li{} {}", i, i).into_bytes()).await;
         }
 
         let nodes = vec![Arc::clone(&n1), Arc::clone(&n2), Arc::clone(&n3)];
@@ -111,7 +103,10 @@ fn test_read_index_enforces_leadership() {
             .expect("missing follower reference");
 
         leader.read_index(b"leader-read".to_vec()).await.unwrap();
-        let err = follower.read_index(b"follower-read".to_vec()).await.unwrap_err();
+        let err = follower
+            .read_index(b"follower-read".to_vec())
+            .await
+            .unwrap_err();
         assert!(
             err.to_string().contains("not leader"),
             "expected not leader error, got {err}"

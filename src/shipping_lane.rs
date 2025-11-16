@@ -69,8 +69,7 @@ impl ShippingLane {
         let start = Instant::now();
         match peer.recv_chunk_verified().await {
             Ok(Some(bytes)) => {
-                let result =
-                    TransferResult::success(addr, bytes.len() as u64, start.elapsed());
+                let result = TransferResult::success(addr, bytes.len() as u64, start.elapsed());
                 Ok((result, Some(bytes)))
             }
             Ok(None) => Ok((

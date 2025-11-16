@@ -1,20 +1,27 @@
 #![cfg(feature = "openraft")]
 
-use crate::openraft::types::{AppEntry, AppResponse, AppNodeId, AppTypeConfig};
+use crate::error::OctopiiError;
+use crate::openraft::types::{AppEntry, AppNodeId, AppResponse, AppTypeConfig};
 use crate::state_machine::StateMachine;
-use std::sync::Arc;
-use std::collections::BTreeMap;
-use std::ops::RangeBounds;
-use std::fmt::Debug;
-use openraft::{
-    Entry, LogId, RaftTypeConfig, StoredMembership,
-    storage::{Snapshot, SnapshotMeta, RaftLogStorage, RaftStateMachine, RaftSnapshotBuilder, LogState, IOFlushed, EntryResponder},
-    alias::SnapshotDataOf,
-    StorageError, EntryPayload, RaftLogReader, OptionalSend,
-};
-use std::io::{self, Cursor};
+use crate::wal::WriteAheadLog;
+use bytes::Bytes;
 use futures::{Stream, TryStreamExt};
+use openraft::{
+    alias::SnapshotDataOf,
+    storage::{
+        EntryResponder, IOFlushed, LogState, RaftLogStorage, RaftSnapshotBuilder, RaftStateMachine,
+        Snapshot, SnapshotMeta,
+    },
+    Entry, EntryPayload, LogId, OptionalSend, RaftLogReader, RaftTypeConfig, StorageError,
+    StoredMembership,
+};
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+use std::fmt::Debug;
+use std::io::{self, Cursor};
+use std::ops::RangeBounds;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 // --- Log Store ---
 #[derive(Clone, Debug, Default)]
@@ -46,7 +53,11 @@ impl MemLogStoreInner {
         &mut self,
         range: RB,
     ) -> Result<Vec<Entry<AppTypeConfig>>, io::Error> {
-        let response = self.log.range(range.clone()).map(|(_, val)| val.clone()).collect::<Vec<_>>();
+        let response = self
+            .log
+            .range(range.clone())
+            .map(|(_, val)| val.clone())
+            .collect::<Vec<_>>();
         Ok(response)
     }
 
@@ -66,7 +77,10 @@ impl MemLogStoreInner {
         })
     }
 
-    async fn save_committed(&mut self, committed: Option<LogId<AppTypeConfig>>) -> Result<(), io::Error> {
+    async fn save_committed(
+        &mut self,
+        committed: Option<LogId<AppTypeConfig>>,
+    ) -> Result<(), io::Error> {
         self.committed = committed;
         Ok(())
     }
@@ -84,8 +98,14 @@ impl MemLogStoreInner {
         Ok(self.vote.clone())
     }
 
-    async fn append<I>(&mut self, entries: I, callback: IOFlushed<AppTypeConfig>) -> Result<(), io::Error>
-    where I: IntoIterator<Item = Entry<AppTypeConfig>> {
+    async fn append<I>(
+        &mut self,
+        entries: I,
+        callback: IOFlushed<AppTypeConfig>,
+    ) -> Result<(), io::Error>
+    where
+        I: IntoIterator<Item = Entry<AppTypeConfig>>,
+    {
         for entry in entries {
             self.log.insert(entry.log_id.index, entry);
         }
@@ -94,7 +114,11 @@ impl MemLogStoreInner {
     }
 
     async fn truncate(&mut self, log_id: LogId<AppTypeConfig>) -> Result<(), io::Error> {
-        let keys = self.log.range(log_id.index..).map(|(k, _v)| *k).collect::<Vec<_>>();
+        let keys = self
+            .log
+            .range(log_id.index..)
+            .map(|(k, _v)| *k)
+            .collect::<Vec<_>>();
         for key in keys {
             self.log.remove(&key);
         }
@@ -109,7 +133,11 @@ impl MemLogStoreInner {
         }
 
         {
-            let keys = self.log.range(..=log_id.index).map(|(k, _v)| *k).collect::<Vec<_>>();
+            let keys = self
+                .log
+                .range(..=log_id.index)
+                .map(|(k, _v)| *k)
+                .collect::<Vec<_>>();
             for key in keys {
                 self.log.remove(&key);
             }
@@ -148,7 +176,10 @@ impl RaftLogStorage<AppTypeConfig> for MemLogStore {
         inner.get_log_state().await
     }
 
-    async fn save_committed(&mut self, committed: Option<LogId<AppTypeConfig>>) -> Result<(), io::Error> {
+    async fn save_committed(
+        &mut self,
+        committed: Option<LogId<AppTypeConfig>>,
+    ) -> Result<(), io::Error> {
         let mut inner = self.inner.lock().await;
         inner.save_committed(committed).await
     }
@@ -163,7 +194,11 @@ impl RaftLogStorage<AppTypeConfig> for MemLogStore {
         inner.save_vote(vote).await
     }
 
-    async fn append<I>(&mut self, entries: I, callback: IOFlushed<AppTypeConfig>) -> Result<(), io::Error>
+    async fn append<I>(
+        &mut self,
+        entries: I,
+        callback: IOFlushed<AppTypeConfig>,
+    ) -> Result<(), io::Error>
     where
         I: IntoIterator<Item = Entry<AppTypeConfig>> + OptionalSend,
         I::IntoIter: OptionalSend,
@@ -263,14 +298,24 @@ impl RaftStateMachine<AppTypeConfig> for Arc<MemStateMachine> {
 
     async fn applied_state(
         &mut self,
-    ) -> Result<(Option<LogId<AppTypeConfig>>, StoredMembership<AppTypeConfig>), io::Error> {
+    ) -> Result<
+        (
+            Option<LogId<AppTypeConfig>>,
+            StoredMembership<AppTypeConfig>,
+        ),
+        io::Error,
+    > {
         let state_machine = self.state_machine.read().await;
-        Ok((state_machine.last_applied_log, state_machine.last_membership.clone()))
+        Ok((
+            state_machine.last_applied_log,
+            state_machine.last_membership.clone(),
+        ))
     }
 
     async fn apply<Strm>(&mut self, mut entries: Strm) -> Result<(), io::Error>
     where
-        Strm: Stream<Item = Result<EntryResponder<AppTypeConfig>, io::Error>> + Unpin + OptionalSend,
+        Strm:
+            Stream<Item = Result<EntryResponder<AppTypeConfig>, io::Error>> + Unpin + OptionalSend,
     {
         let mut sm = self.state_machine.write().await;
 
@@ -280,7 +325,9 @@ impl RaftStateMachine<AppTypeConfig> for Arc<MemStateMachine> {
             let response = match entry.payload {
                 EntryPayload::Blank => AppResponse(Vec::new()),
                 EntryPayload::Normal(ref data) => {
-                    let result = self.sm.apply(&data.0)
+                    let result = self
+                        .sm
+                        .apply(&data.0)
                         .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
                     AppResponse(result.to_vec())
                 }
@@ -297,7 +344,9 @@ impl RaftStateMachine<AppTypeConfig> for Arc<MemStateMachine> {
         Ok(())
     }
 
-    async fn begin_receiving_snapshot(&mut self) -> Result<SnapshotDataOf<AppTypeConfig>, io::Error> {
+    async fn begin_receiving_snapshot(
+        &mut self,
+    ) -> Result<SnapshotDataOf<AppTypeConfig>, io::Error> {
         Ok(Cursor::new(Vec::new()))
     }
 
@@ -311,15 +360,16 @@ impl RaftStateMachine<AppTypeConfig> for Arc<MemStateMachine> {
             data: snapshot.into_inner(),
         };
 
-        let updated_state_machine_data: BTreeMap<String, String> = bincode::deserialize(&new_snapshot.data)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-        
+        let updated_state_machine_data: BTreeMap<String, String> =
+            bincode::deserialize(&new_snapshot.data)
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+
         let updated_state_machine = StateMachineData {
             last_applied_log: meta.last_log_id,
             last_membership: meta.last_membership.clone(),
             data: updated_state_machine_data.clone(),
         };
-        
+
         let mut state_machine = self.state_machine.write().await;
         *state_machine = updated_state_machine;
 
@@ -329,7 +379,8 @@ impl RaftStateMachine<AppTypeConfig> for Arc<MemStateMachine> {
         // Also restore into the state machine
         let snapshot_bytes = bincode::serialize(&updated_state_machine_data)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-        self.sm.restore(&snapshot_bytes)
+        self.sm
+            .restore(&snapshot_bytes)
             .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
 
         *current_snapshot = Some(new_snapshot);
@@ -357,6 +408,181 @@ impl RaftStateMachine<AppTypeConfig> for Arc<MemStateMachine> {
 /// Helper to create a new memory log store
 pub fn new_mem_log_store() -> MemLogStore {
     MemLogStore::new()
+}
+
+#[derive(Clone)]
+pub struct WalLogStore {
+    inner: Arc<tokio::sync::Mutex<MemLogStoreInner>>,
+    wal: Arc<WriteAheadLog>,
+}
+
+#[derive(Serialize, Deserialize)]
+enum WalLogRecord {
+    LogEntry(Entry<AppTypeConfig>),
+    Vote(openraft::Vote<AppTypeConfig>),
+    Committed(Option<LogId<AppTypeConfig>>),
+    Purged(LogId<AppTypeConfig>),
+    Truncated(LogId<AppTypeConfig>),
+}
+
+impl WalLogStore {
+    pub async fn new(wal: Arc<WriteAheadLog>) -> Result<Self, OctopiiError> {
+        let store = Self {
+            inner: Arc::new(tokio::sync::Mutex::new(MemLogStoreInner::default())),
+            wal,
+        };
+        store.recover_from_wal().await?;
+        Ok(store)
+    }
+
+    async fn recover_from_wal(&self) -> Result<(), OctopiiError> {
+        let entries = self.wal.read_all().await?;
+        let mut inner = self.inner.lock().await;
+        for raw in entries {
+            let record: WalLogRecord = bincode::deserialize(&raw)
+                .map_err(|e| OctopiiError::Wal(format!("Failed to deserialize WAL record: {e}")))?;
+            match record {
+                WalLogRecord::LogEntry(entry) => {
+                    inner.log.insert(entry.log_id.index, entry);
+                }
+                WalLogRecord::Vote(vote) => {
+                    inner.vote = Some(vote);
+                }
+                WalLogRecord::Committed(committed) => {
+                    inner.committed = committed;
+                }
+                WalLogRecord::Purged(log_id) => {
+                    let keys = inner
+                        .log
+                        .range(..=log_id.index)
+                        .map(|(idx, _)| *idx)
+                        .collect::<Vec<_>>();
+                    for key in keys {
+                        inner.log.remove(&key);
+                    }
+                    inner.last_purged_log_id = Some(log_id);
+                }
+                WalLogRecord::Truncated(log_id) => {
+                    let keys = inner
+                        .log
+                        .range(log_id.index..)
+                        .map(|(idx, _)| *idx)
+                        .collect::<Vec<_>>();
+                    for key in keys {
+                        inner.log.remove(&key);
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    async fn persist_record(&self, record: &WalLogRecord) -> Result<(), io::Error> {
+        let data =
+            bincode::serialize(record).map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        self.wal
+            .append(Bytes::from(data))
+            .await
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+        Ok(())
+    }
+}
+
+impl RaftLogReader<AppTypeConfig> for WalLogStore {
+    async fn try_get_log_entries<RB: RangeBounds<u64> + Clone + Debug + Send>(
+        &mut self,
+        range: RB,
+    ) -> Result<Vec<Entry<AppTypeConfig>>, io::Error> {
+        let mut inner = self.inner.lock().await;
+        inner.try_get_log_entries(range).await
+    }
+
+    async fn read_vote(&mut self) -> Result<Option<openraft::Vote<AppTypeConfig>>, io::Error> {
+        let mut inner = self.inner.lock().await;
+        inner.read_vote().await
+    }
+}
+
+impl RaftLogStorage<AppTypeConfig> for WalLogStore {
+    type LogReader = Self;
+
+    async fn get_log_state(&mut self) -> Result<LogState<AppTypeConfig>, io::Error> {
+        let mut inner = self.inner.lock().await;
+        inner.get_log_state().await
+    }
+
+    async fn save_committed(
+        &mut self,
+        committed: Option<LogId<AppTypeConfig>>,
+    ) -> Result<(), io::Error> {
+        {
+            let mut inner = self.inner.lock().await;
+            inner.committed = committed;
+        }
+        self.persist_record(&WalLogRecord::Committed(committed))
+            .await
+    }
+
+    async fn read_committed(&mut self) -> Result<Option<LogId<AppTypeConfig>>, io::Error> {
+        let mut inner = self.inner.lock().await;
+        inner.read_committed().await
+    }
+
+    async fn save_vote(&mut self, vote: &openraft::Vote<AppTypeConfig>) -> Result<(), io::Error> {
+        {
+            let mut inner = self.inner.lock().await;
+            inner.vote = Some(vote.clone());
+        }
+        self.persist_record(&WalLogRecord::Vote(vote.clone())).await
+    }
+
+    async fn append<I>(
+        &mut self,
+        entries: I,
+        callback: IOFlushed<AppTypeConfig>,
+    ) -> Result<(), io::Error>
+    where
+        I: IntoIterator<Item = Entry<AppTypeConfig>> + OptionalSend,
+        I::IntoIter: OptionalSend,
+    {
+        let mut to_persist = Vec::new();
+        {
+            let mut inner = self.inner.lock().await;
+            for entry in entries {
+                to_persist.push(entry.clone());
+                inner.log.insert(entry.log_id.index, entry);
+            }
+        }
+        for entry in to_persist {
+            self.persist_record(&WalLogRecord::LogEntry(entry)).await?;
+        }
+        callback.io_completed(Ok(())).await;
+        Ok(())
+    }
+
+    async fn truncate(&mut self, log_id: LogId<AppTypeConfig>) -> Result<(), io::Error> {
+        {
+            let mut inner = self.inner.lock().await;
+            inner.truncate(log_id).await?;
+        }
+        self.persist_record(&WalLogRecord::Truncated(log_id)).await
+    }
+
+    async fn purge(&mut self, log_id: LogId<AppTypeConfig>) -> Result<(), io::Error> {
+        {
+            let mut inner = self.inner.lock().await;
+            inner.purge(log_id).await?;
+        }
+        self.persist_record(&WalLogRecord::Purged(log_id)).await
+    }
+
+    async fn get_log_reader(&mut self) -> Self::LogReader {
+        self.clone()
+    }
+}
+
+pub async fn new_wal_log_store(wal: Arc<WriteAheadLog>) -> Result<WalLogStore, OctopiiError> {
+    WalLogStore::new(wal).await
 }
 
 /// Helper to create a new memory state machine
