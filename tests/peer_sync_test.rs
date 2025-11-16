@@ -31,6 +31,15 @@ fn node_config(
     }
 }
 
+fn local_test_dir(name: &str) -> PathBuf {
+    let root = std::env::current_dir().expect("current dir");
+    let dir = root.join("octopii_test_artifacts").join(name);
+    if let Some(parent) = dir.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    dir
+}
+
 #[test]
 fn test_peer_address_auto_distribution() {
     octopii::openraft::node::clear_global_peer_addrs();
@@ -41,7 +50,8 @@ fn test_peer_address_auto_distribution() {
         .unwrap();
 
     rt.block_on(async {
-        let base = tempfile::tempdir().unwrap();
+        let base_path = local_test_dir("peer_sync_auto_distribution");
+        let _ = std::fs::remove_dir_all(&base_path);
         let port1 = next_port();
         let port2 = next_port();
         let port3 = next_port();
@@ -49,7 +59,6 @@ fn test_peer_address_auto_distribution() {
         let addr2: SocketAddr = format!("127.0.0.1:{port2}").parse().unwrap();
         let addr3: SocketAddr = format!("127.0.0.1:{port3}").parse().unwrap();
 
-        let base_path = base.path().to_path_buf();
         let config1 = node_config(&base_path, 1, addr1, vec![addr2, addr3], true);
         let config2 = node_config(&base_path, 2, addr2, vec![addr1], false);
         let config3 = node_config(&base_path, 3, addr3, vec![addr1], false);
@@ -145,7 +154,8 @@ fn test_peer_address_distribution_without_initial_peers() {
         .unwrap();
 
     rt.block_on(async {
-        let base = tempfile::tempdir().unwrap();
+        let base_path = local_test_dir("peer_sync_distribution_no_initial");
+        let _ = std::fs::remove_dir_all(&base_path);
         let port1 = next_port();
         let port2 = next_port();
         let port3 = next_port();
@@ -155,7 +165,6 @@ fn test_peer_address_distribution_without_initial_peers() {
         let addr3: SocketAddr = format!("127.0.0.1:{port3}").parse().unwrap();
         let addr4: SocketAddr = format!("127.0.0.1:{port4}").parse().unwrap();
 
-        let base_path = base.path().to_path_buf();
         let config = |node_id, addr, peers, leader| Config {
             node_id,
             bind_addr: addr,
