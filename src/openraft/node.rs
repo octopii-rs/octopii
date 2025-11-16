@@ -607,8 +607,7 @@ impl OpenRaftNode {
         }
 
         if let Some(addr) = global_peer_addr(peer_id) {
-            let mut map = self.peer_addrs.write().await;
-            map.insert(peer_id, addr);
+            let _ = self.persist_peer_addr_if_needed(peer_id, addr).await;
             return Some(addr);
         }
 
