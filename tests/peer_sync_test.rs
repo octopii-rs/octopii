@@ -33,6 +33,7 @@ fn node_config(
 
 #[test]
 fn test_peer_address_auto_distribution() {
+    octopii::openraft::node::clear_global_peer_addrs();
     let rt = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(4)
         .enable_all()
@@ -136,6 +137,7 @@ async fn wait_for_peer_address(
 
 #[test]
 fn test_peer_address_distribution_without_initial_peers() {
+    octopii::openraft::node::clear_global_peer_addrs();
     let rt = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(4)
         .enable_all()
