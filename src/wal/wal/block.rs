@@ -1,4 +1,6 @@
-use crate::wal::wal::config::{checksum64, debug_print, PREFIX_META_SIZE};
+use crate::wal::wal::config::{
+    checksum64, debug_print, ENTRY_TRAILER_MAGIC, ENTRY_TRAILER_SIZE, PREFIX_META_SIZE,
+};
 use crate::wal::wal::storage::SharedMmap;
 use rkyv::{Archive, Deserialize, Serialize};
 use std::sync::Arc;
@@ -13,7 +15,6 @@ const META_LEN_SIZE: usize = 2;
 const META_DATA_OFFSET: usize = META_LEN_OFFSET + META_LEN_SIZE;
 /// Maximum size for serialized metadata (PREFIX_META_SIZE - checksum - length)
 const MAX_META_BYTES: usize = PREFIX_META_SIZE - HEADER_CHECKSUM_SIZE - META_LEN_SIZE;
-
 #[derive(Clone, Debug)]
 pub struct Entry {
     pub data: Vec<u8>,
@@ -47,7 +48,9 @@ impl Block {
         next_block_start: u64,
     ) -> std::io::Result<()> {
         debug_assert!(
-            in_block_offset + (data.len() as u64 + PREFIX_META_SIZE as u64) <= self.limit
+            in_block_offset
+                + (data.len() as u64 + PREFIX_META_SIZE as u64 + ENTRY_TRAILER_SIZE as u64)
+                <= self.limit
         );
 
         let new_meta = Metadata {
@@ -87,10 +90,12 @@ impl Block {
         // Store header checksum in first 8 bytes (little endian)
         meta_buffer[0..8].copy_from_slice(&header_checksum.to_le_bytes());
 
-        // Combine and write
-        let mut combined = Vec::with_capacity(PREFIX_META_SIZE + data.len());
+        // Combine and write (header + payload + trailer)
+        let mut combined = Vec::with_capacity(PREFIX_META_SIZE + data.len() + ENTRY_TRAILER_SIZE);
         combined.extend_from_slice(&meta_buffer);
         combined.extend_from_slice(data);
+        combined.extend_from_slice(&ENTRY_TRAILER_MAGIC.to_le_bytes());
+        combined.extend_from_slice(&new_meta.checksum.to_le_bytes());
 
         let file_offset = self.offset + in_block_offset;
         self.mmap.write(file_offset as usize, &combined)?;
@@ -179,7 +184,35 @@ impl Block {
             ));
         }
 
-        let consumed = PREFIX_META_SIZE + actual_entry_size;
+        // Step 6: Verify trailer commit marker
+        let trailer_offset = new_offset + actual_entry_size as u64;
+        let mut trailer_buf = [0u8; ENTRY_TRAILER_SIZE];
+        self.mmap
+            .read(trailer_offset as usize, &mut trailer_buf)?;
+        let magic = u64::from_le_bytes(
+            trailer_buf[0..8]
+                .try_into()
+                .expect("slice is exactly 8 bytes"),
+        );
+        let checksum = u64::from_le_bytes(
+            trailer_buf[8..16]
+                .try_into()
+                .expect("slice is exactly 8 bytes"),
+        );
+        if magic != ENTRY_TRAILER_MAGIC || checksum != expected {
+            debug_print!(
+                "[reader] trailer mismatch at offset={} in file={}, block_id={}",
+                in_block_offset,
+                self.file_path,
+                self.id
+            );
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "trailer mismatch, incomplete write detected",
+            ));
+        }
+
+        let consumed = PREFIX_META_SIZE + actual_entry_size + ENTRY_TRAILER_SIZE;
         Ok((Entry { data: ret_buffer }, consumed))
     }
 

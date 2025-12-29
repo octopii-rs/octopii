@@ -6,8 +6,8 @@ use crate::wal::wal::block::Metadata;
 #[cfg(target_os = "linux")]
 use crate::wal::wal::config::checksum64;
 use crate::wal::wal::config::{
-    debug_print, is_io_uring_enabled, FsyncSchedule, DEFAULT_BLOCK_SIZE, MAX_BATCH_BYTES,
-    MAX_BATCH_ENTRIES, PREFIX_META_SIZE,
+    debug_print, is_io_uring_enabled, FsyncSchedule, DEFAULT_BLOCK_SIZE, ENTRY_TRAILER_MAGIC,
+    ENTRY_TRAILER_SIZE, MAX_BATCH_BYTES, MAX_BATCH_ENTRIES, PREFIX_META_SIZE,
 };
 #[cfg(feature = "simulation")]
 use crate::wal::wal::vfs::sim;
@@ -69,7 +69,7 @@ impl Writer {
             std::io::Error::new(std::io::ErrorKind::Other, "current_offset lock poisoned")
         })?;
 
-        let need = (PREFIX_META_SIZE as u64) + (data.len() as u64);
+        let need = (PREFIX_META_SIZE as u64) + (data.len() as u64) + (ENTRY_TRAILER_SIZE as u64);
         if *cur + need > block.limit {
             debug_print!(
                 "[writer] sealing: col={}, block_id={}, used={}, need={}, limit={}",
@@ -124,22 +124,8 @@ impl Writer {
                         block.id,
                         write_offset
                     );
-                    // IMPORTANT: Disable fault injection during rollback to ensure cleanup succeeds
-                    #[cfg(feature = "simulation")]
-                    let saved_sim_state = {
-                        let rate = sim::get_io_error_rate();
-                        let partial = sim::get_partial_writes_enabled();
-                        sim::set_io_error_rate(0.0);
-                        sim::set_partial_writes_enabled(false);
-                        (rate, partial)
-                    };
                     let _ = block.zero_range(write_offset, PREFIX_META_SIZE as u64);
                     let _ = block.mmap.flush(); // Best effort to persist the zeroed header
-                    #[cfg(feature = "simulation")]
-                    {
-                        sim::set_io_error_rate(saved_sim_state.0);
-                        sim::set_partial_writes_enabled(saved_sim_state.1);
-                    }
                     *cur = write_offset;
                     return Err(e);
                 }
@@ -184,7 +170,9 @@ impl Writer {
 
         let total_bytes: u64 = batch
             .iter()
-            .map(|data| (PREFIX_META_SIZE as u64) + (data.len() as u64))
+            .map(|data| {
+                (PREFIX_META_SIZE as u64) + (data.len() as u64) + (ENTRY_TRAILER_SIZE as u64)
+            })
             .sum();
 
         if total_bytes > MAX_BATCH_BYTES {
@@ -244,7 +232,8 @@ impl Writer {
 
         while batch_idx < batch.len() {
             let data = batch[batch_idx];
-            let need = (PREFIX_META_SIZE as u64) + (data.len() as u64);
+            let need =
+                (PREFIX_META_SIZE as u64) + (data.len() as u64) + (ENTRY_TRAILER_SIZE as u64);
             let available = block.limit - planning_offset;
 
             if available >= need {
@@ -315,16 +304,6 @@ impl Writer {
             let next_block_start = blk.offset + blk.limit;
 
             if let Err(e) = blk.write(*offset, data, &self.col, next_block_start) {
-                // IMPORTANT: Disable fault injection during rollback to ensure cleanup succeeds
-                #[cfg(feature = "simulation")]
-                let saved_sim_state = {
-                    let rate = sim::get_io_error_rate();
-                    let partial = sim::get_partial_writes_enabled();
-                    sim::set_io_error_rate(0.0);
-                    sim::set_partial_writes_enabled(false);
-                    (rate, partial)
-                };
-
                 // Clean up any partially written headers up to and including the failed index
                 for (w_blk, w_off, _) in write_plan[0..=(*data_idx)].iter() {
                     let _ = w_blk.zero_range(*w_off, PREFIX_META_SIZE as u64);
@@ -336,12 +315,6 @@ impl Writer {
                     if fsynced.insert(w_blk.file_path.clone()) {
                         let _ = w_blk.mmap.flush();
                     }
-                }
-
-                #[cfg(feature = "simulation")]
-                {
-                    sim::set_io_error_rate(saved_sim_state.0);
-                    sim::set_partial_writes_enabled(saved_sim_state.1);
                 }
 
                 *cur_offset = revert_info.original_offset;
@@ -364,16 +337,6 @@ impl Writer {
                         self.col
                     );
 
-                    // IMPORTANT: Disable fault injection during rollback to ensure cleanup succeeds
-                    #[cfg(feature = "simulation")]
-                    let saved_sim_state = {
-                        let rate = sim::get_io_error_rate();
-                        let partial = sim::get_partial_writes_enabled();
-                        sim::set_io_error_rate(0.0);
-                        sim::set_partial_writes_enabled(false);
-                        (rate, partial)
-                    };
-
                     for (w_blk, w_off, _) in write_plan.iter() {
                         let _ = w_blk.zero_range(*w_off, PREFIX_META_SIZE as u64);
                     }
@@ -383,12 +346,6 @@ impl Writer {
                         if zero_fsynced.insert(w_blk.file_path.clone()) {
                             let _ = w_blk.mmap.flush();
                         }
-                    }
-
-                    #[cfg(feature = "simulation")]
-                    {
-                        sim::set_io_error_rate(saved_sim_state.0);
-                        sim::set_partial_writes_enabled(saved_sim_state.1);
                     }
 
                     // Release allocated blocks
@@ -456,9 +413,12 @@ impl Writer {
             meta_buffer[1] = ((meta_bytes.len() >> 8) & 0xFF) as u8;
             meta_buffer[2..2 + meta_bytes.len()].copy_from_slice(&meta_bytes);
 
-            let mut combined = Vec::with_capacity(PREFIX_META_SIZE + data.len());
+            let mut combined =
+                Vec::with_capacity(PREFIX_META_SIZE + data.len() + ENTRY_TRAILER_SIZE);
             combined.extend_from_slice(&meta_buffer);
             combined.extend_from_slice(data);
+            combined.extend_from_slice(&ENTRY_TRAILER_MAGIC.to_le_bytes());
+            combined.extend_from_slice(&new_meta.checksum.to_le_bytes());
 
             let file_offset = blk.offset + offset;
 

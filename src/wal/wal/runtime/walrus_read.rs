@@ -3,7 +3,8 @@ use super::reader::ColReaderInfo;
 use super::{ReadConsistency, Walrus};
 use crate::wal::wal::block::{Block, Entry, Metadata};
 use crate::wal::wal::config::{
-    checksum64, debug_print, is_io_uring_enabled, MAX_BATCH_ENTRIES, PREFIX_META_SIZE,
+    checksum64, debug_print, is_io_uring_enabled, ENTRY_TRAILER_MAGIC, ENTRY_TRAILER_SIZE,
+    MAX_BATCH_ENTRIES, PREFIX_META_SIZE,
 };
 use std::io;
 use std::sync::{Arc, RwLock};
@@ -817,7 +818,7 @@ impl Walrus {
                 };
 
                 let data_size = meta.read_size;
-                let entry_consumed = PREFIX_META_SIZE + data_size;
+                let entry_consumed = PREFIX_META_SIZE + data_size + ENTRY_TRAILER_SIZE;
 
                 // Check if we have enough buffer space for the data
                 if buf_offset + entry_consumed > buffer.len() {
@@ -842,6 +843,27 @@ impl Walrus {
                     return Err(io::Error::new(
                         io::ErrorKind::InvalidData,
                         "checksum mismatch in batch read",
+                    ));
+                }
+
+                // Verify trailer commit marker
+                let trailer_start = data_end;
+                let trailer_end = trailer_start + ENTRY_TRAILER_SIZE;
+                let trailer_slice = &buffer[trailer_start..trailer_end];
+                let magic = u64::from_le_bytes(
+                    trailer_slice[0..8]
+                        .try_into()
+                        .expect("slice is exactly 8 bytes"),
+                );
+                let checksum = u64::from_le_bytes(
+                    trailer_slice[8..16]
+                        .try_into()
+                        .expect("slice is exactly 8 bytes"),
+                );
+                if magic != ENTRY_TRAILER_MAGIC || checksum != meta.checksum {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "trailer mismatch in batch read",
                     ));
                 }
 
