@@ -17,6 +17,24 @@ use std::os::unix::io::AsRawFd;
 impl Walrus {
     pub fn read_next(&self, col_name: &str, checkpoint: bool) -> io::Result<Option<Entry>> {
         const TAIL_FLAG: u64 = 1u64 << 63;
+
+        // Debug: unconditional logging for orders to trace the issue
+        #[cfg(feature = "simulation")]
+        if col_name == "orders" {
+            if let Ok(map) = self.reader.data.read() {
+                if let Some(info_arc) = map.get(col_name) {
+                    if let Ok(info) = info_arc.read() {
+                        debug_print!(
+                            "[reader] READ_START orders: chain_len={} cur_idx={} cur_off={}",
+                            info.chain.len(), info.cur_block_idx, info.cur_block_offset
+                        );
+                    }
+                } else {
+                    debug_print!("[reader] READ_START orders: NOT IN MAP!");
+                }
+            }
+        }
+
         let info_arc = if let Some(arc) = {
             let map = self.reader.data.read().map_err(|_| {
                 io::Error::new(io::ErrorKind::Other, "reader map read lock poisoned")
@@ -113,11 +131,42 @@ impl Walrus {
             let mut info = info_arc.write().map_err(|_| {
                 io::Error::new(io::ErrorKind::Other, "col info write lock poisoned")
             })?;
+
+            // Debug: track read position for orders topic when chain_len >= 5
+            #[cfg(feature = "simulation")]
+            if col_name == "orders" && info.chain.len() >= 5 {
+                debug_print!(
+                    "[reader] ORDERS_READ: cur_block_idx={} chain_len={} cur_block_offset={}",
+                    info.cur_block_idx, info.chain.len(), info.cur_block_offset
+                );
+                if info.cur_block_idx < info.chain.len() {
+                    let blk = &info.chain[info.cur_block_idx];
+                    debug_print!(
+                        "[reader] ORDERS_READ: chain[{}] block_id={} used={}",
+                        info.cur_block_idx, blk.id, blk.used
+                    );
+                } else {
+                    debug_print!(
+                        "[reader] ORDERS_READ: PAST CHAIN! cur_block_idx {} >= chain_len {}",
+                        info.cur_block_idx, info.chain.len()
+                    );
+                }
+            }
+
             // Sealed chain path
             if info.cur_block_idx < info.chain.len() {
                 let idx = info.cur_block_idx;
                 let off = info.cur_block_offset;
                 let block = info.chain[idx].clone();
+
+                // Detailed debug for orders topic
+                #[cfg(feature = "simulation")]
+                if col_name == "orders" && idx >= 9 {
+                    debug_print!(
+                        "[reader] DETAIL: orders chain[{}] block_id={} off={} used={} chain_len={}",
+                        idx, block.id, off, block.used, info.chain.len()
+                    );
+                }
 
                 if off >= block.used {
                     debug_print!(
@@ -357,6 +406,32 @@ impl Walrus {
         max_bytes: usize,
         checkpoint: bool,
     ) -> io::Result<Vec<Entry>> {
+        // Debug: unconditional logging for orders to trace the issue
+        #[cfg(feature = "simulation")]
+        if col_name == "orders" {
+            if let Ok(map) = self.reader.data.read() {
+                if let Some(info_arc) = map.get(col_name) {
+                    if let Ok(info) = info_arc.read() {
+                        debug_print!(
+                            "[reader] BATCH_START orders: chain_len={} cur_idx={} cur_off={}",
+                            info.chain.len(), info.cur_block_idx, info.cur_block_offset
+                        );
+                        // Log each block's info when chain_len >= 10
+                        if info.chain.len() >= 10 {
+                            for (i, blk) in info.chain.iter().enumerate() {
+                                debug_print!(
+                                    "[reader] BATCH_CHAIN[{}]: block_id={} used={}",
+                                    i, blk.id, blk.used
+                                );
+                            }
+                        }
+                    }
+                } else {
+                    debug_print!("[reader] BATCH_START orders: NOT IN MAP!");
+                }
+            }
+        }
+
         // Helper struct for read planning
         struct ReadPlan {
             blk: Block,
@@ -480,6 +555,13 @@ impl Walrus {
 
             let end = block.used.min(cur_off + (max_bytes - planned_bytes) as u64);
             if end > cur_off {
+                #[cfg(feature = "simulation")]
+                if col_name == "orders" {
+                    debug_print!(
+                        "[reader] BATCH_PLAN_BUILD: chain[{}] block_id={} start={} end={} used={} planned_bytes={} max_bytes={}",
+                        cur_idx, block.id, cur_off, end, block.used, planned_bytes, max_bytes
+                    );
+                }
                 plan.push(ReadPlan {
                     blk: block.clone(),
                     start: cur_off,
@@ -489,8 +571,17 @@ impl Walrus {
                 });
                 planned_bytes += (end - cur_off) as usize;
             }
-            cur_idx += 1;
-            cur_off = 0;
+            // Only advance to next block if we've fully read this one
+            // Otherwise, stay at current block with updated offset
+            if end >= block.used {
+                cur_idx += 1;
+                cur_off = 0;
+            } else {
+                // Partially read block - don't advance, just update offset
+                cur_off = end;
+                // Exit loop since we've hit the byte limit
+                break;
+            }
         }
 
         // Plan tail if we're at the end of sealed chain
@@ -659,6 +750,12 @@ impl Walrus {
             let buffer = &buffers[plan_idx];
             let mut buf_offset = 0usize;
 
+            // Header layout constants (must match block.rs)
+            const HEADER_CHECKSUM_SIZE: usize = 8;
+            const META_LEN_OFFSET: usize = HEADER_CHECKSUM_SIZE;
+            const META_DATA_OFFSET: usize = META_LEN_OFFSET + 2;
+            const MAX_META_BYTES: usize = PREFIX_META_SIZE - HEADER_CHECKSUM_SIZE - 2;
+
             while buf_offset < buffer.len() {
                 if entries.len() >= MAX_BATCH_ENTRIES {
                     break;
@@ -668,19 +765,50 @@ impl Walrus {
                     break; // Not enough data for header
                 }
 
-                let meta_len =
-                    (buffer[buf_offset] as usize) | ((buffer[buf_offset + 1] as usize) << 8);
+                // Step 1: Verify header checksum (detects partial/torn writes)
+                let header_start = buf_offset;
+                let stored_checksum = u64::from_le_bytes(
+                    buffer[header_start..header_start + HEADER_CHECKSUM_SIZE]
+                        .try_into()
+                        .expect("slice is exactly 8 bytes"),
+                );
+                let computed_checksum =
+                    checksum64(&buffer[header_start + HEADER_CHECKSUM_SIZE..header_start + PREFIX_META_SIZE]);
 
-                if meta_len == 0 || meta_len > PREFIX_META_SIZE - 2 {
-                    // Invalid or zeroed header - stop parsing this block
+                if stored_checksum != computed_checksum {
+                    // Header corrupted or zeroed - stop parsing this block
+                    #[cfg(feature = "simulation")]
+                    if col_name == "orders" {
+                        debug_print!(
+                            "[reader] BATCH_CHECKSUM_FAIL orders: plan_idx={} is_tail={} buf_offset={} entries_so_far={}",
+                            plan_idx, read_plan.is_tail, buf_offset, entries.len()
+                        );
+                    }
                     break;
                 }
 
-                // Deserialize metadata
-                let mut aligned = AlignedVec::with_capacity(meta_len);
-                aligned.extend_from_slice(&buffer[buf_offset + 2..buf_offset + 2 + meta_len]);
+                // Step 2: Read meta_len from bytes 8-9
+                let meta_len = (buffer[buf_offset + META_LEN_OFFSET] as usize)
+                    | ((buffer[buf_offset + META_LEN_OFFSET + 1] as usize) << 8);
 
-                let archived = unsafe { rkyv::archived_root::<Metadata>(&aligned[..]) };
+                if meta_len == 0 || meta_len > MAX_META_BYTES {
+                    // Invalid metadata length - stop parsing this block
+                    break;
+                }
+
+                // Step 3: Deserialize metadata (starts at byte 10)
+                let mut aligned = AlignedVec::with_capacity(meta_len);
+                aligned.extend_from_slice(
+                    &buffer[buf_offset + META_DATA_OFFSET..buf_offset + META_DATA_OFFSET + meta_len],
+                );
+
+                // Use safe check_archived_root to validate potentially corrupted data
+                let archived = match rkyv::validation::validators::check_archived_root::<Metadata>(
+                    &aligned[..],
+                ) {
+                    Ok(a) => a,
+                    Err(_) => break, // Corrupted metadata - stop parsing
+                };
                 let meta: Metadata = match archived.deserialize(&mut rkyv::Infallible) {
                     Ok(m) => m,
                     Err(_) => break, // Parse error - stop
@@ -735,6 +863,15 @@ impl Walrus {
                 }
 
                 buf_offset += entry_consumed;
+            }
+
+            // Log entries parsed from this plan block
+            #[cfg(feature = "simulation")]
+            if col_name == "orders" && plan.len() >= 10 {
+                debug_print!(
+                    "[reader] BATCH_PLAN[{}]: is_tail={} block_id={} entries_total_now={}",
+                    plan_idx, read_plan.is_tail, read_plan.blk.id, entries.len()
+                );
             }
         }
 

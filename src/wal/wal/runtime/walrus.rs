@@ -184,6 +184,10 @@ impl Walrus {
         let mut next_block_id: usize = 1;
         let mut seen_files = HashSet::new();
 
+        // Track entry counts per topic for debugging
+        #[cfg(feature = "simulation")]
+        let mut topic_entry_counts: HashMap<String, usize> = HashMap::new();
+
         for file_path in files.iter() {
             let mmap = match SharedMmapKeeper::get_mmap_arc(file_path) {
                 Ok(m) => m,
@@ -198,11 +202,15 @@ impl Walrus {
 
             let mut block_offset: u64 = 0;
             while block_offset + DEFAULT_BLOCK_SIZE <= MAX_FILE_SIZE {
-                // heuristic: if first bytes are zero, assume no more blocks
+                // Check if block has any data (first 8 bytes are header checksum)
+                // If all zeros, this block was never written - skip to next
                 let mut probe = [0u8; 8];
                 mmap.read(block_offset as usize, &mut probe);
                 if probe.iter().all(|&b| b == 0) {
-                    break;
+                    // Empty block - continue to next block, don't stop scanning
+                    // Blocks might not be allocated contiguously
+                    block_offset += DEFAULT_BLOCK_SIZE;
+                    continue;
                 }
 
                 let mut used: u64 = 0;
@@ -228,14 +236,17 @@ impl Walrus {
                 );
                 let computed_checksum = checksum64(&meta_buf[HEADER_CHECKSUM_SIZE..]);
                 if stored_checksum != computed_checksum {
-                    // Corrupted header - skip this block
-                    break;
+                    // Corrupted header - skip to next block, don't stop scanning
+                    block_offset += DEFAULT_BLOCK_SIZE;
+                    continue;
                 }
 
                 let meta_len = (meta_buf[META_LEN_OFFSET] as usize)
                     | ((meta_buf[META_LEN_OFFSET + 1] as usize) << 8);
                 if meta_len == 0 || meta_len > MAX_META_BYTES {
-                    break;
+                    // Invalid metadata - skip to next block
+                    block_offset += DEFAULT_BLOCK_SIZE;
+                    continue;
                 }
                 let mut aligned = rkyv::AlignedVec::with_capacity(meta_len);
                 aligned.extend_from_slice(&meta_buf[META_DATA_OFFSET..META_DATA_OFFSET + meta_len]);
@@ -247,7 +258,9 @@ impl Walrus {
                 let md: Metadata = match archived.deserialize(&mut rkyv::Infallible) {
                     Ok(m) => m,
                     Err(_) => {
-                        break;
+                        // Deserialization failed - skip to next block
+                        block_offset += DEFAULT_BLOCK_SIZE;
+                        continue;
                     }
                 };
                 let col_name = md.owned_by;
@@ -262,11 +275,17 @@ impl Walrus {
                     used: 0,
                 };
                 let mut in_block_off: u64 = 0;
+                #[cfg(feature = "simulation")]
+                let mut entry_count_in_block: usize = 0;
                 loop {
                     match block_stub.read(in_block_off) {
                         Ok((_entry, consumed)) => {
                             used += consumed as u64;
                             in_block_off += consumed as u64;
+                            #[cfg(feature = "simulation")]
+                            {
+                                entry_count_in_block += 1;
+                            }
                             if in_block_off >= DEFAULT_BLOCK_SIZE {
                                 break;
                             }
@@ -275,7 +294,9 @@ impl Walrus {
                     }
                 }
                 if used == 0 {
-                    break;
+                    // Block has valid header but no readable entries - skip to next block
+                    block_offset += DEFAULT_BLOCK_SIZE;
+                    continue;
                 }
 
                 let block = Block {
@@ -291,16 +312,39 @@ impl Walrus {
                 FileStateTracker::add_block_to_file_state(file_path);
                 if !col_name.is_empty() {
                     let _ = self.reader.append_block_to_chain(&col_name, block.clone());
+                    #[cfg(feature = "simulation")]
+                    {
+                        *topic_entry_counts.entry(col_name.clone()).or_insert(0) += entry_count_in_block;
+                    }
                     debug_print!(
-                        "[recovery] appended block: file={}, block_id={}, used={}, col={}",
+                        "[recovery] appended block: file={}, block_id={}, used={}, col={}, entries={}",
                         file_path,
                         block.id,
                         block.used,
-                        col_name
+                        col_name,
+                        entry_count_in_block
                     );
                 }
                 next_block_id += 1;
                 block_offset += DEFAULT_BLOCK_SIZE;
+            }
+        }
+
+        // Print recovery summary
+        #[cfg(feature = "simulation")]
+        {
+            debug_print!("[recovery] SUMMARY - entries recovered per topic:");
+            for (topic, count) in topic_entry_counts.iter() {
+                debug_print!("[recovery]   {}: {} entries", topic, count);
+            }
+            // Also log chain lengths
+            if let Ok(map) = self.reader.data.read() {
+                debug_print!("[recovery] CHAIN LENGTHS after recovery:");
+                for (col, info_arc) in map.iter() {
+                    if let Ok(info) = info_arc.read() {
+                        debug_print!("[recovery]   {}: chain_len={}", col, info.chain.len());
+                    }
+                }
             }
         }
 

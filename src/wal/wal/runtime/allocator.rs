@@ -230,6 +230,14 @@ impl BlockStateTracker {
             flush_check(path);
         }
     }
+
+    /// Clear all tracked block state (used for simulation crash testing)
+    #[cfg(feature = "simulation")]
+    pub(crate) fn clear_all() {
+        if let Ok(mut w) = Self::map().write() {
+            w.clear();
+        }
+    }
 }
 
 struct FileState {
@@ -320,5 +328,13 @@ impl FileStateTracker {
         let total = st.total_blocks.load(Ordering::Acquire);
         let fully = st.is_fully_allocated.load(Ordering::Acquire);
         Some((locked, checkpointed, total, fully))
+    }
+
+    /// Clear all tracked file state (used for simulation crash testing)
+    #[cfg(feature = "simulation")]
+    pub(crate) fn clear_all() {
+        if let Ok(mut w) = Self::map().write() {
+            w.clear();
+        }
     }
 }

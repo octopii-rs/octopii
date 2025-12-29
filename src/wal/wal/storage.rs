@@ -215,6 +215,9 @@ pub(crate) struct SharedMmapKeeper {
     data: HashMap<String, Arc<SharedMmap>>,
 }
 
+// Global keeper instance - must be the same across all accessor functions
+static MMAP_KEEPER: OnceLock<RwLock<SharedMmapKeeper>> = OnceLock::new();
+
 impl SharedMmapKeeper {
     fn new() -> Self {
         Self {
@@ -222,11 +225,27 @@ impl SharedMmapKeeper {
         }
     }
 
+    fn get_keeper() -> &'static RwLock<SharedMmapKeeper> {
+        MMAP_KEEPER.get_or_init(|| RwLock::new(SharedMmapKeeper::new()))
+    }
+
+    // Clear all cached storage instances (used for simulation crash testing)
+    #[cfg(feature = "simulation")]
+    pub(crate) fn clear_all() {
+        if let Some(keeper_lock) = MMAP_KEEPER.get() {
+            if let Ok(mut keeper) = keeper_lock.write() {
+                // Flush all storage instances before clearing to ensure data is on disk
+                for (_, arc) in keeper.data.iter() {
+                    let _ = arc.flush();
+                }
+                keeper.data.clear();
+            }
+        }
+    }
+
     // Fast path: many readers concurrently
     fn get_mmap_arc_read(path: &str) -> Option<Arc<SharedMmap>> {
-        static MMAP_KEEPER: OnceLock<RwLock<SharedMmapKeeper>> = OnceLock::new();
-        let keeper_lock = MMAP_KEEPER.get_or_init(|| RwLock::new(SharedMmapKeeper::new()));
-        let keeper = keeper_lock.read().ok()?;
+        let keeper = Self::get_keeper().read().ok()?;
         keeper.data.get(path).cloned()
     }
 
@@ -236,8 +255,7 @@ impl SharedMmapKeeper {
             return Ok(existing);
         }
 
-        static MMAP_KEEPER: OnceLock<RwLock<SharedMmapKeeper>> = OnceLock::new();
-        let keeper_lock = MMAP_KEEPER.get_or_init(|| RwLock::new(SharedMmapKeeper::new()));
+        let keeper_lock = Self::get_keeper();
 
         // Double-check with a fresh read lock to avoid unnecessary write lock
         {

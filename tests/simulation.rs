@@ -91,10 +91,12 @@ mod sim_tests {
         }
 
         fn record_write(&mut self, topic: &str, data: Vec<u8>) {
-            self.history
-                .entry(topic.to_string())
-                .or_default()
-                .push(data);
+            let history = self.history.entry(topic.to_string()).or_default();
+            let idx = history.len();
+            if topic == "orders" {
+                eprintln!("[ORACLE] Recording write for orders[{}] len={}", idx, data.len());
+            }
+            history.push(data);
         }
 
         fn verify_read(&mut self, topic: &str, actual_data: &[u8]) {
@@ -111,6 +113,35 @@ mod sim_tests {
 
             let expected = &history[*cursor];
             if expected != actual_data {
+                // Find if actual_data matches any other entry in history
+                let mut found_at = None;
+                for (i, entry) in history.iter().enumerate() {
+                    if entry == actual_data {
+                        found_at = Some(i);
+                        break;
+                    }
+                }
+
+                eprintln!("\n=== ORACLE DIAGNOSTIC ===");
+                eprintln!("Topic: {}", topic);
+                eprintln!("Oracle history length: {}", history.len());
+                eprintln!("Current cursor: {}", *cursor);
+                eprintln!("Expected entry {} len: {}", *cursor, expected.len());
+                eprintln!("Actual data len: {}", actual_data.len());
+                if let Some(idx) = found_at {
+                    eprintln!("FOUND: Actual data matches Oracle history[{}]", idx);
+                } else {
+                    eprintln!("NOT FOUND: Actual data doesn't match any Oracle history entry");
+                }
+                eprintln!("Nearby entries in Oracle:");
+                let start = (*cursor).saturating_sub(3);
+                let end = ((*cursor) + 4).min(history.len());
+                for i in start..end {
+                    let marker = if i == *cursor { " <-- EXPECTED" } else { "" };
+                    eprintln!("  [{}] len={}{}", i, history[i].len(), marker);
+                }
+                eprintln!("=========================\n");
+
                 panic!(
                     "ORACLE FAILURE: Data mismatch for topic '{}' at index {}.\nExpected len: {}\nActual len: {}\nExpected: {:?}\nActual:   {:?}",
                     topic, *cursor, expected.len(), actual_data.len(), expected, actual_data
@@ -120,6 +151,24 @@ mod sim_tests {
             *cursor += 1;
         }
 
+        /// Verify a batch of entries, advancing the cursor
+        fn verify_batch(&mut self, topic: &str, entries: &[Vec<u8>]) {
+            for data in entries {
+                self.verify_read(topic, data);
+            }
+        }
+
+        /// Read with checkpoint=false (cursor advances in-memory but not persisted)
+        /// In Walrus, checkpoint=false means the cursor position won't be persisted to disk,
+        /// but the in-memory cursor DOES advance. After crash, the cursor resets.
+        /// So we still advance the Oracle cursor - the difference is at recovery time.
+        fn verify_peek(&mut self, topic: &str, actual_data: &[u8]) {
+            // Peek still advances cursor - just doesn't persist to disk
+            // So we verify and advance just like a regular read
+            self.verify_read(topic, actual_data);
+        }
+
+        /// Check EOF without advancing cursor (for peek operations)
         fn check_eof(&self, topic: &str) {
             let history_len = self.history.get(topic).map(|v| v.len()).unwrap_or(0);
             let cursor = *self.read_cursors.get(topic).unwrap_or(&0);
@@ -142,11 +191,19 @@ mod sim_tests {
     // ========================================================================
     // 3. The Simulation Harness
     // ========================================================================
+    /// A paired topic set for dual-write testing (like Octopii's log/log_recovery)
+    struct DualTopic {
+        primary: String,
+        recovery: String,
+    }
+
     struct Simulation {
         rng: SimRng,
         oracle: Oracle,
         wal: Option<Walrus>, // Option so we can drop it to simulate crash
         topics: Vec<String>,
+        // Dual-write topic pairs (primary + recovery) - matches Octopii's pattern
+        dual_topics: Vec<DualTopic>,
         root_dir: PathBuf,
         current_key: String,
         // Phase 5: Track the target error rate to restore after recovery
@@ -167,7 +224,19 @@ mod sim_tests {
                 rng: SimRng::new(seed),
                 oracle: Oracle::new(),
                 wal: None,
+                // Regular topics for single-write operations (keep it simple for now)
                 topics: vec!["orders".into(), "logs".into(), "metrics".into()],
+                // Dual-write topic pairs (mirrors Octopii's Raft storage pattern)
+                dual_topics: vec![
+                    DualTopic {
+                        primary: "log".into(),
+                        recovery: "log_recovery".into(),
+                    },
+                    DualTopic {
+                        primary: "hard_state".into(),
+                        recovery: "hard_state_recovery".into(),
+                    },
+                ],
                 root_dir,
                 current_key: "sim_node".into(),
                 target_error_rate: error_rate,
@@ -199,14 +268,32 @@ mod sim_tests {
             sim::set_io_error_rate(self.target_error_rate);
         }
 
+        /// Get all readable topics (regular + dual topic primaries + dual topic recoveries)
+        fn all_readable_topics(&self) -> Vec<String> {
+            let mut all = self.topics.clone();
+            for dual in &self.dual_topics {
+                all.push(dual.primary.clone());
+                all.push(dual.recovery.clone());
+            }
+            all
+        }
+
         fn crash_and_recover(&mut self) {
+            // Log current Oracle state for orders
+            let orders_count = self.oracle.history.get("orders").map(|v| v.len()).unwrap_or(0);
+            eprintln!("[CRASH] Simulating crash. orders has {} entries in Oracle", orders_count);
+
             // 1. Drop the WAL (simulates process death)
             self.wal = None;
 
-            // 2. Advance time (simulates downtime)
+            // 2. Clear storage cache to simulate fresh process startup
+            // This flushes all pending writes and clears cached file handles
+            octopii::wal::wal::__clear_storage_cache_for_tests();
+
+            // 3. Advance time (simulates downtime)
             sim::advance_time(std::time::Duration::from_secs(5));
 
-            // 3. Clear the WalIndex files to test DATA durability (not cursor persistence)
+            // 4. Clear the WalIndex files to test DATA durability (not cursor persistence)
             let key_dir = self.root_dir.join(&self.current_key);
             if let Ok(entries) = std::fs::read_dir(&key_dir) {
                 for entry in entries.flatten() {
@@ -219,34 +306,50 @@ mod sim_tests {
                 }
             }
 
-            // 4. Reset Oracle cursors to 0 - we'll re-read everything from start
+            // 5. IMPORTANT: After a crash, both Oracle and Walrus must start fresh.
+            // The Oracle history represents what SHOULD be on disk, but after crash we
+            // need to verify Walrus can recover all that data.
+            // Reset Oracle cursors to 0 - we'll re-read everything from start
             self.oracle.reset_read_cursors();
 
-            // 5. Re-initialize (simulates recovery/startup scan)
+            // 6. Re-initialize (simulates recovery/startup scan)
             self.init_wal();
         }
 
         fn run(&mut self, iterations: usize) {
             self.init_wal();
 
+            // Collect all readable topics once for efficiency
+            let all_topics = self.all_readable_topics();
+
             for _i in 0..iterations {
-                let topic = self.topics[self.rng.range(0, self.topics.len())].clone();
+                // For writes: select from regular topics only
+                let write_topic = self.topics[self.rng.range(0, self.topics.len())].clone();
+                // For reads: select from ALL topics (including dual write topics)
+                let read_topic = all_topics[self.rng.range(0, all_topics.len())].clone();
                 let action_roll = self.rng.range(0, 100);
 
-                // Action probabilities
-                // 0-40: Append
-                // 41-50: Batch Append
-                // 51-90: Read
-                // 91-95: Tick Background
-                // 96-99: Crash/Restart
+                // Action probabilities (expanded to test all Walrus features used by Octopii)
+                // 0-40: Append (41%)
+                // 41-50: Batch Append (10%)
+                // 51-55: Dual Write - primary + recovery topic (5%)
+                // 56-80: Read with checkpoint (25%)
+                // 81-87: Batch Read with checkpoint (7%)
+                // 88-93: Tick Background (6%)
+                // 94-99: Crash/Restart (6%)
 
                 if action_roll <= 40 {
                     // === APPEND ===
                     let data = self.rng.gen_payload();
-                    match self.wal.as_ref().unwrap().append_for_topic(&topic, &data) {
+                    match self
+                        .wal
+                        .as_ref()
+                        .unwrap()
+                        .append_for_topic(&write_topic, &data)
+                    {
                         Ok(_) => {
                             // Success: Oracle records the write
-                            self.oracle.record_write(&topic, data);
+                            self.oracle.record_write(&write_topic, data);
                         }
                         Err(_e) => {
                             // Phase 5: I/O error - expected with fault injection
@@ -268,12 +371,12 @@ mod sim_tests {
                         .wal
                         .as_ref()
                         .unwrap()
-                        .batch_append_for_topic(&topic, &batch_refs)
+                        .batch_append_for_topic(&write_topic, &batch_refs)
                     {
                         Ok(_) => {
                             // Success: Oracle records all entries in the batch
                             for d in batch_data {
-                                self.oracle.record_write(&topic, d);
+                                self.oracle.record_write(&write_topic, d);
                             }
                         }
                         Err(_e) => {
@@ -283,14 +386,53 @@ mod sim_tests {
                             // Future reads will verify nothing was partially written.
                         }
                     }
-                } else if action_roll <= 90 {
-                    // === READ ===
-                    match self.wal.as_ref().unwrap().read_next(&topic, true) {
+                } else if action_roll <= 55 {
+                    // === DUAL WRITE (primary + recovery) ===
+                    // This tests Octopii's pattern where data is written to both a primary
+                    // topic (e.g. "log") and a recovery topic (e.g. "log_recovery")
+                    let dual = &self.dual_topics[self.rng.range(0, self.dual_topics.len())];
+                    let data = self.rng.gen_payload();
+
+                    // Write to primary first
+                    let primary_result = self
+                        .wal
+                        .as_ref()
+                        .unwrap()
+                        .append_for_topic(&dual.primary, &data);
+
+                    match primary_result {
+                        Ok(_) => {
+                            // Primary succeeded, now write to recovery
+                            self.oracle.record_write(&dual.primary, data.clone());
+
+                            match self
+                                .wal
+                                .as_ref()
+                                .unwrap()
+                                .append_for_topic(&dual.recovery, &data)
+                            {
+                                Ok(_) => {
+                                    // Both writes succeeded
+                                    self.oracle.record_write(&dual.recovery, data);
+                                }
+                                Err(_e) => {
+                                    // Recovery write failed - primary still valid
+                                    // This is okay: recovery is best-effort in some patterns
+                                }
+                            }
+                        }
+                        Err(_e) => {
+                            // Primary failed - don't write to recovery either
+                        }
+                    }
+                } else if action_roll <= 80 {
+                    // === READ (checkpoint=true) ===
+                    match self.wal.as_ref().unwrap().read_next(&read_topic, true) {
                         Ok(Some(entry)) => {
-                            self.oracle.verify_read(&topic, &entry.data);
+                            self.oracle.verify_read(&read_topic, &entry.data);
                         }
                         Ok(None) => {
-                            self.oracle.check_eof(&topic);
+                            self.oracle.check_eof(&read_topic);
                         }
                         Err(_e) => {
                             // Phase 5: Read failed due to I/O error
@@ -298,7 +440,28 @@ mod sim_tests {
                             // This is correct: transient read failures don't advance cursor
                         }
                     }
-                } else if action_roll <= 95 {
+                } else if action_roll <= 87 {
+                    // === BATCH READ (checkpoint=true) ===
+                    // Max 10KB per batch, like Octopii's recovery patterns
+                    let max_bytes = self.rng.range(1024, 10 * 1024);
+                    match self
+                        .wal
+                        .as_ref()
+                        .unwrap()
+                        .batch_read_for_topic(&read_topic, max_bytes, true)
+                    {
+                        Ok(entries) => {
+                            // Verify all entries in the batch
+                            let batch_data: Vec<Vec<u8>> =
+                                entries.into_iter().map(|e| e.data).collect();
+                            self.oracle.verify_batch(&read_topic, &batch_data);
+                        }
+                        Err(_e) => {
+                            // Phase 5: Batch read failed due to I/O error
+                            // Oracle cursor stays put - next iteration will retry
+                        }
+                    }
+                } else if action_roll <= 93 {
                     // === TICK BACKGROUND ===
                     self.wal.as_ref().unwrap().tick_background();
                     sim::advance_time(std::time::Duration::from_millis(100));
