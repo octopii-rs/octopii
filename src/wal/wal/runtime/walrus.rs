@@ -316,14 +316,27 @@ impl Walrus {
                     {
                         *topic_entry_counts.entry(col_name.clone()).or_insert(0) += entry_count_in_block;
                     }
-                    debug_print!(
-                        "[recovery] appended block: file={}, block_id={}, used={}, col={}, entries={}",
-                        file_path,
-                        block.id,
-                        block.used,
-                        col_name,
-                        entry_count_in_block
-                    );
+                    #[cfg(feature = "simulation")]
+                    {
+                        debug_print!(
+                            "[recovery] appended block: file={}, block_id={}, used={}, col={}, entries={}",
+                            file_path,
+                            block.id,
+                            block.used,
+                            col_name,
+                            entry_count_in_block
+                        );
+                    }
+                    #[cfg(not(feature = "simulation"))]
+                    {
+                        debug_print!(
+                            "[recovery] appended block: file={}, block_id={}, used={}, col={}",
+                            file_path,
+                            block.id,
+                            block.used,
+                            col_name
+                        );
+                    }
                 }
                 next_block_id += 1;
                 block_offset += DEFAULT_BLOCK_SIZE;
