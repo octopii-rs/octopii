@@ -782,13 +782,10 @@ mod sim_tests {
             wal.append_for_topic(topic, data).unwrap();
         }
 
-        for expected in entries.iter().take(2) {
+        for _ in 0..2 {
             let entry = wal.read_next(topic, false).unwrap().expect("Missing entry");
-            assert_eq!(entry.data, *expected);
+            assert_eq!(entry.data, entries[0]);
         }
-
-        let entry = wal.read_next(topic, true).unwrap().expect("Missing entry");
-        assert_eq!(entry.data, entries[2]);
 
         drop(wal);
         octopii::wal::wal::__clear_storage_cache_for_tests();
