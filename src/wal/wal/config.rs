@@ -29,6 +29,18 @@ pub(crate) fn is_fd_backend_enabled() -> bool {
     }
 }
 
+pub(crate) fn is_io_uring_enabled() -> bool {
+    #[cfg(feature = "simulation")]
+    {
+        // io_uring bypasses the VFS simulation layer, breaking fault injection.
+        return false;
+    }
+    #[cfg(not(feature = "simulation"))]
+    {
+        is_fd_backend_enabled()
+    }
+}
+
 // Macro to conditionally print debug messages
 macro_rules! debug_print {
     ($($arg:tt)*) => {

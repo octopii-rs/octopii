@@ -1,4 +1,4 @@
-use crate::wal::wal::config::{debug_print, is_fd_backend_enabled, FsyncSchedule};
+use crate::wal::wal::config::{debug_print, is_io_uring_enabled, FsyncSchedule};
 use crate::wal::wal::storage::{open_storage_for_path, StorageImpl};
 use crate::wal::wal::vfs as fs;
 use std::collections::{HashMap, HashSet};
@@ -88,7 +88,7 @@ impl BackgroundWorker {
         // Phase 3: Flush operations
         #[cfg(target_os = "linux")]
         {
-            if is_fd_backend_enabled() {
+            if is_io_uring_enabled() {
                 // FD backend: Use io_uring for batched fsync
                 let mut fsync_batch = Vec::new();
 
