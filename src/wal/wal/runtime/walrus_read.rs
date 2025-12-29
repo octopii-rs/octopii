@@ -838,12 +838,9 @@ impl Walrus {
                 let data_end = data_start + data_size;
                 let data_slice = &buffer[data_start..data_end];
 
-                // Verify checksum
+                // Verify checksum; treat mismatches as incomplete tail
                 if checksum64(data_slice) != meta.checksum {
-                    return Err(io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        "checksum mismatch in batch read",
-                    ));
+                    break;
                 }
 
                 // Verify trailer commit marker
@@ -861,10 +858,7 @@ impl Walrus {
                         .expect("slice is exactly 8 bytes"),
                 );
                 if magic != ENTRY_TRAILER_MAGIC || checksum != meta.checksum {
-                    return Err(io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        "trailer mismatch in batch read",
-                    ));
+                    break;
                 }
 
                 // Add to results

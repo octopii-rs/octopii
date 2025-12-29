@@ -3,11 +3,9 @@ use super::reader::Reader;
 use crate::wal::wal::block::Block;
 #[cfg(target_os = "linux")]
 use crate::wal::wal::block::Metadata;
-#[cfg(target_os = "linux")]
-use crate::wal::wal::config::checksum64;
 use crate::wal::wal::config::{
-    debug_print, is_io_uring_enabled, FsyncSchedule, DEFAULT_BLOCK_SIZE, ENTRY_TRAILER_MAGIC,
-    ENTRY_TRAILER_SIZE, MAX_BATCH_BYTES, MAX_BATCH_ENTRIES, PREFIX_META_SIZE,
+    checksum64, debug_print, is_io_uring_enabled, FsyncSchedule, DEFAULT_BLOCK_SIZE,
+    ENTRY_TRAILER_MAGIC, ENTRY_TRAILER_SIZE, MAX_BATCH_BYTES, MAX_BATCH_ENTRIES, PREFIX_META_SIZE,
 };
 #[cfg(feature = "simulation")]
 use crate::wal::wal::vfs::sim;
@@ -100,32 +98,27 @@ impl Writer {
         }
         let next_block_start = block.offset + block.limit; // simplistic for now
         let write_offset = *cur;
-        block.write(write_offset, data, &self.col, next_block_start)?;
-        debug_print!(
-            "[writer] wrote: col={}, block_id={}, offset_before={}, bytes={}, offset_after={}",
-            self.col,
-            block.id,
-            write_offset,
-            need,
-            write_offset + need
-        );
-        *cur += need;
 
-        // Handle fsync based on schedule
         match self.fsync_schedule {
             FsyncSchedule::SyncEach => {
-                // Immediate mmap flush, skip background flusher
+                let checksum = checksum64(data);
+                block.write_uncommitted(write_offset, data, &self.col, next_block_start)?;
+                debug_print!(
+                    "[writer] wrote (uncommitted): col={}, block_id={}, offset_before={}, bytes={}, offset_after={}",
+                    self.col,
+                    block.id,
+                    write_offset,
+                    need,
+                    write_offset + need
+                );
+
                 if let Err(e) = block.mmap.flush() {
-                    // CRITICAL: Flush failed - roll back the write
-                    // Zero the header to invalidate the entry, then reset offset
                     debug_print!(
-                        "[writer] fsync FAILED, rolling back: col={}, block_id={}, offset={}",
+                        "[writer] fsync FAILED, leaving uncommitted: col={}, block_id={}, offset={}",
                         self.col,
                         block.id,
                         write_offset
                     );
-                    let _ = block.zero_range(write_offset, PREFIX_META_SIZE as u64);
-                    let _ = block.mmap.flush(); // Best effort to persist the zeroed header
                     *cur = write_offset;
                     return Err(e);
                 }
@@ -134,12 +127,38 @@ impl Writer {
                     self.col,
                     block.id
                 );
+
+                if let Err(e) = block.write_trailer(write_offset, data.len(), checksum) {
+                    *cur = write_offset;
+                    return Err(e);
+                }
+                *cur += need;
             }
             FsyncSchedule::Milliseconds(_) => {
+                block.write(write_offset, data, &self.col, next_block_start)?;
+                debug_print!(
+                    "[writer] wrote: col={}, block_id={}, offset_before={}, bytes={}, offset_after={}",
+                    self.col,
+                    block.id,
+                    write_offset,
+                    need,
+                    write_offset + need
+                );
+                *cur += need;
                 // Send to background flusher
                 let _ = self.publisher.send(block.file_path.clone());
             }
             FsyncSchedule::NoFsync => {
+                block.write(write_offset, data, &self.col, next_block_start)?;
+                debug_print!(
+                    "[writer] wrote: col={}, block_id={}, offset_before={}, bytes={}, offset_after={}",
+                    self.col,
+                    block.id,
+                    write_offset,
+                    need,
+                    write_offset + need
+                );
+                *cur += need;
                 // No fsyncing at all - maximum throughput, no durability guarantees
                 debug_print!("[writer] no fsync: col={}, block_id={}", self.col, block.id);
             }
@@ -303,20 +322,13 @@ impl Writer {
             let data = batch[*data_idx];
             let next_block_start = blk.offset + blk.limit;
 
-            if let Err(e) = blk.write(*offset, data, &self.col, next_block_start) {
-                // Clean up any partially written headers up to and including the failed index
-                for (w_blk, w_off, _) in write_plan[0..=(*data_idx)].iter() {
-                    let _ = w_blk.zero_range(*w_off, PREFIX_META_SIZE as u64);
-                }
+            let write_result = if matches!(self.fsync_schedule, FsyncSchedule::SyncEach) {
+                blk.write_uncommitted(*offset, data, &self.col, next_block_start)
+            } else {
+                blk.write(*offset, data, &self.col, next_block_start)
+            };
 
-                // Flush zeros and rollback
-                let mut fsynced = HashSet::new();
-                for (w_blk, _, _) in write_plan[0..=(*data_idx)].iter() {
-                    if fsynced.insert(w_blk.file_path.clone()) {
-                        let _ = w_blk.mmap.flush();
-                    }
-                }
-
+            if let Err(e) = write_result {
                 *cur_offset = revert_info.original_offset;
                 for block_id in revert_info.allocated_block_ids {
                     FileStateTracker::set_block_unlocked(block_id as usize);
@@ -330,31 +342,32 @@ impl Writer {
         for (blk, _, _) in write_plan.iter() {
             if !fsynced.contains(&blk.file_path) {
                 if let Err(e) = blk.mmap.flush() {
-                    // CRITICAL: Flush failed after writes completed
-                    // Zero ALL headers to invalidate the entire batch
                     debug_print!(
-                        "[batch] fsync FAILED, rolling back all entries: topic={}",
+                        "[batch] fsync FAILED, leaving uncommitted: topic={}",
                         self.col
                     );
-
-                    for (w_blk, w_off, _) in write_plan.iter() {
-                        let _ = w_blk.zero_range(*w_off, PREFIX_META_SIZE as u64);
-                    }
-                    // Flush the zeros
-                    let mut zero_fsynced = HashSet::new();
-                    for (w_blk, _, _) in write_plan.iter() {
-                        if zero_fsynced.insert(w_blk.file_path.clone()) {
-                            let _ = w_blk.mmap.flush();
-                        }
-                    }
-
-                    // Release allocated blocks
+                    *cur_offset = revert_info.original_offset;
                     for block_id in &revert_info.allocated_block_ids {
                         FileStateTracker::set_block_unlocked(*block_id as usize);
                     }
                     return Err(e);
                 }
                 fsynced.insert(blk.file_path.clone());
+            }
+        }
+
+        if matches!(self.fsync_schedule, FsyncSchedule::SyncEach) {
+            // Commit trailers in reverse order to preserve batch atomicity.
+            for (blk, offset, data_idx) in write_plan.iter().rev() {
+                let data = batch[*data_idx];
+                let checksum = checksum64(data);
+                if let Err(e) = blk.write_trailer(*offset, data.len(), checksum) {
+                    *cur_offset = revert_info.original_offset;
+                    for block_id in &revert_info.allocated_block_ids {
+                        FileStateTracker::set_block_unlocked(*block_id as usize);
+                    }
+                    return Err(e);
+                }
             }
         }
 
@@ -408,17 +421,29 @@ impl Writer {
                 )
             })?;
 
+            // Header layout (must match block.rs)
+            const HEADER_CHECKSUM_SIZE: usize = 8;
+            const META_LEN_OFFSET: usize = HEADER_CHECKSUM_SIZE;
+            const META_DATA_OFFSET: usize = META_LEN_OFFSET + 2;
             let mut meta_buffer = vec![0u8; PREFIX_META_SIZE];
-            meta_buffer[0] = (meta_bytes.len() & 0xFF) as u8;
-            meta_buffer[1] = ((meta_bytes.len() >> 8) & 0xFF) as u8;
-            meta_buffer[2..2 + meta_bytes.len()].copy_from_slice(&meta_bytes);
+            meta_buffer[META_LEN_OFFSET] = (meta_bytes.len() & 0xFF) as u8;
+            meta_buffer[META_LEN_OFFSET + 1] = ((meta_bytes.len() >> 8) & 0xFF) as u8;
+            meta_buffer[META_DATA_OFFSET..META_DATA_OFFSET + meta_bytes.len()]
+                .copy_from_slice(&meta_bytes);
+            let header_checksum = checksum64(&meta_buffer[HEADER_CHECKSUM_SIZE..]);
+            meta_buffer[0..8].copy_from_slice(&header_checksum.to_le_bytes());
 
             let mut combined =
                 Vec::with_capacity(PREFIX_META_SIZE + data.len() + ENTRY_TRAILER_SIZE);
             combined.extend_from_slice(&meta_buffer);
             combined.extend_from_slice(data);
-            combined.extend_from_slice(&ENTRY_TRAILER_MAGIC.to_le_bytes());
-            combined.extend_from_slice(&new_meta.checksum.to_le_bytes());
+            if matches!(self.fsync_schedule, FsyncSchedule::SyncEach) {
+                combined.extend_from_slice(&0u64.to_le_bytes());
+                combined.extend_from_slice(&0u64.to_le_bytes());
+            } else {
+                combined.extend_from_slice(&ENTRY_TRAILER_MAGIC.to_le_bytes());
+                combined.extend_from_slice(&new_meta.checksum.to_le_bytes());
+            }
 
             let file_offset = blk.offset + offset;
 
@@ -492,19 +517,6 @@ impl Writer {
                 }
 
                 if !all_success {
-                    // Clean up garbage before rollback: zero headers for all planned entries
-                    for (blk, offset, _idx) in write_plan.iter() {
-                        let _ = blk.zero_range(*offset, PREFIX_META_SIZE as u64);
-                    }
-
-                    // Ensure zeros are persisted
-                    let mut fsynced = HashSet::new();
-                    for (blk, _, _) in write_plan.iter() {
-                        if fsynced.insert(blk.file_path.clone()) {
-                            let _ = blk.mmap.flush();
-                        }
-                    }
-
                     // Rollback
                     *cur_offset = revert_info.original_offset;
                     for block_id in revert_info.allocated_block_ids.iter() {
@@ -525,6 +537,21 @@ impl Writer {
                     }
                 }
 
+                if matches!(self.fsync_schedule, FsyncSchedule::SyncEach) {
+                    // Commit trailers in reverse order to preserve batch atomicity.
+                    for (blk, offset, data_idx) in write_plan.iter().rev() {
+                        let data = batch[*data_idx];
+                        let checksum = checksum64(data);
+                        if let Err(e) = blk.write_trailer(*offset, data.len(), checksum) {
+                            *cur_offset = revert_info.original_offset;
+                            for block_id in revert_info.allocated_block_ids.iter() {
+                                FileStateTracker::set_block_unlocked(*block_id as usize);
+                            }
+                            return Err(e);
+                        }
+                    }
+                }
+
                 // NOW update the writer's offset to make data visible to readers
                 *cur_offset = planning_offset;
 
@@ -537,19 +564,6 @@ impl Writer {
                 Ok(())
             }
             Err(e) => {
-                // Clean up garbage before rollback: zero headers for all planned entries
-                for (blk, offset, _idx) in write_plan.iter() {
-                    let _ = blk.zero_range(*offset, PREFIX_META_SIZE as u64);
-                }
-
-                // Ensure zeros are persisted
-                let mut fsynced = HashSet::new();
-                for (blk, _, _) in write_plan.iter() {
-                    if fsynced.insert(blk.file_path.clone()) {
-                        let _ = blk.mmap.flush();
-                    }
-                }
-
                 // Rollback
                 *cur_offset = revert_info.original_offset;
                 for block_id in revert_info.allocated_block_ids.iter() {

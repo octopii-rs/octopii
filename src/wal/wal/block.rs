@@ -53,11 +53,58 @@ impl Block {
                 <= self.limit
         );
 
+        let checksum = checksum64(data);
+        self.write_with_trailer(
+            in_block_offset,
+            data,
+            owned_by,
+            next_block_start,
+            ENTRY_TRAILER_MAGIC,
+            checksum,
+            checksum,
+        )
+    }
+
+    pub(crate) fn write_uncommitted(
+        &self,
+        in_block_offset: u64,
+        data: &[u8],
+        owned_by: &str,
+        next_block_start: u64,
+    ) -> std::io::Result<()> {
+        let checksum = checksum64(data);
+        self.write_with_trailer(
+            in_block_offset,
+            data,
+            owned_by,
+            next_block_start,
+            0,
+            0,
+            checksum,
+        )
+    }
+
+    fn write_with_trailer(
+        &self,
+        in_block_offset: u64,
+        data: &[u8],
+        owned_by: &str,
+        next_block_start: u64,
+        trailer_magic: u64,
+        trailer_checksum: u64,
+        payload_checksum: u64,
+    ) -> std::io::Result<()> {
+        debug_assert!(
+            in_block_offset
+                + (data.len() as u64 + PREFIX_META_SIZE as u64 + ENTRY_TRAILER_SIZE as u64)
+                <= self.limit
+        );
+
         let new_meta = Metadata {
             read_size: data.len(),
             owned_by: owned_by.to_string(),
             next_block_start,
-            checksum: checksum64(data),
+            checksum: payload_checksum,
         };
 
         let meta_bytes = rkyv::to_bytes::<_, 256>(&new_meta).map_err(|e| {
@@ -94,11 +141,26 @@ impl Block {
         let mut combined = Vec::with_capacity(PREFIX_META_SIZE + data.len() + ENTRY_TRAILER_SIZE);
         combined.extend_from_slice(&meta_buffer);
         combined.extend_from_slice(data);
-        combined.extend_from_slice(&ENTRY_TRAILER_MAGIC.to_le_bytes());
-        combined.extend_from_slice(&new_meta.checksum.to_le_bytes());
+        combined.extend_from_slice(&trailer_magic.to_le_bytes());
+        combined.extend_from_slice(&trailer_checksum.to_le_bytes());
 
         let file_offset = self.offset + in_block_offset;
         self.mmap.write(file_offset as usize, &combined)?;
+        Ok(())
+    }
+
+    pub(crate) fn write_trailer(
+        &self,
+        in_block_offset: u64,
+        data_len: usize,
+        checksum: u64,
+    ) -> std::io::Result<()> {
+        let trailer_offset =
+            self.offset + in_block_offset + PREFIX_META_SIZE as u64 + data_len as u64;
+        let mut trailer_buf = [0u8; ENTRY_TRAILER_SIZE];
+        trailer_buf[0..8].copy_from_slice(&ENTRY_TRAILER_MAGIC.to_le_bytes());
+        trailer_buf[8..16].copy_from_slice(&checksum.to_le_bytes());
+        self.mmap.write(trailer_offset as usize, &trailer_buf)?;
         Ok(())
     }
 
