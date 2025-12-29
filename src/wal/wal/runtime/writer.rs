@@ -126,15 +126,20 @@ impl Writer {
                     );
                     // IMPORTANT: Disable fault injection during rollback to ensure cleanup succeeds
                     #[cfg(feature = "simulation")]
-                    let saved_error_rate = {
+                    let saved_sim_state = {
                         let rate = sim::get_io_error_rate();
+                        let partial = sim::get_partial_writes_enabled();
                         sim::set_io_error_rate(0.0);
-                        rate
+                        sim::set_partial_writes_enabled(false);
+                        (rate, partial)
                     };
                     let _ = block.zero_range(write_offset, PREFIX_META_SIZE as u64);
                     let _ = block.mmap.flush(); // Best effort to persist the zeroed header
                     #[cfg(feature = "simulation")]
-                    sim::set_io_error_rate(saved_error_rate);
+                    {
+                        sim::set_io_error_rate(saved_sim_state.0);
+                        sim::set_partial_writes_enabled(saved_sim_state.1);
+                    }
                     *cur = write_offset;
                     return Err(e);
                 }
@@ -312,10 +317,12 @@ impl Writer {
             if let Err(e) = blk.write(*offset, data, &self.col, next_block_start) {
                 // IMPORTANT: Disable fault injection during rollback to ensure cleanup succeeds
                 #[cfg(feature = "simulation")]
-                let saved_error_rate = {
+                let saved_sim_state = {
                     let rate = sim::get_io_error_rate();
+                    let partial = sim::get_partial_writes_enabled();
                     sim::set_io_error_rate(0.0);
-                    rate
+                    sim::set_partial_writes_enabled(false);
+                    (rate, partial)
                 };
 
                 // Clean up any partially written headers up to and including the failed index
@@ -332,7 +339,10 @@ impl Writer {
                 }
 
                 #[cfg(feature = "simulation")]
-                sim::set_io_error_rate(saved_error_rate);
+                {
+                    sim::set_io_error_rate(saved_sim_state.0);
+                    sim::set_partial_writes_enabled(saved_sim_state.1);
+                }
 
                 *cur_offset = revert_info.original_offset;
                 for block_id in revert_info.allocated_block_ids {
@@ -356,10 +366,12 @@ impl Writer {
 
                     // IMPORTANT: Disable fault injection during rollback to ensure cleanup succeeds
                     #[cfg(feature = "simulation")]
-                    let saved_error_rate = {
+                    let saved_sim_state = {
                         let rate = sim::get_io_error_rate();
+                        let partial = sim::get_partial_writes_enabled();
                         sim::set_io_error_rate(0.0);
-                        rate
+                        sim::set_partial_writes_enabled(false);
+                        (rate, partial)
                     };
 
                     for (w_blk, w_off, _) in write_plan.iter() {
@@ -374,7 +386,10 @@ impl Writer {
                     }
 
                     #[cfg(feature = "simulation")]
-                    sim::set_io_error_rate(saved_error_rate);
+                    {
+                        sim::set_io_error_rate(saved_sim_state.0);
+                        sim::set_partial_writes_enabled(saved_sim_state.1);
+                    }
 
                     // Release allocated blocks
                     for block_id in &revert_info.allocated_block_ids {

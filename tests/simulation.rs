@@ -603,61 +603,52 @@ mod sim_tests {
     // manifest after many operations. Run with: cargo test --release stress_
 
     #[test]
-    #[ignore] // Run with: cargo test --features simulation --test simulation stress_ -- --ignored
+    // Run with: cargo test --features simulation --test simulation stress_ -- --ignored
     fn stress_no_faults_seed_1() {
         run_simulation_with_config(1, 20000, 0.0, false);
     }
 
     #[test]
-    #[ignore]
     fn stress_no_faults_seed_2() {
         run_simulation_with_config(2, 20000, 0.0, false);
     }
 
     #[test]
-    #[ignore]
     fn stress_no_faults_seed_3() {
         run_simulation_with_config(3, 20000, 0.0, false);
     }
 
     #[test]
-    #[ignore]
     fn stress_fault_injection_seed_1000() {
         run_simulation_with_config(1000, 15000, 0.05, false);
     }
 
     #[test]
-    #[ignore]
     fn stress_fault_injection_seed_2000() {
         run_simulation_with_config(2000, 15000, 0.05, false);
     }
 
     #[test]
-    #[ignore]
     fn stress_fault_injection_seed_3000() {
         run_simulation_with_config(3000, 15000, 0.07, false);
     }
 
     #[test]
-    #[ignore]
     fn stress_partial_writes_seed_4000() {
         run_simulation_with_config(4000, 10000, 0.05, true);
     }
 
     #[test]
-    #[ignore]
     fn stress_partial_writes_seed_5000() {
         run_simulation_with_config(5000, 10000, 0.05, true);
     }
 
     #[test]
-    #[ignore]
     fn stress_partial_writes_seed_6000() {
         run_simulation_with_config(6000, 10000, 0.08, true);
     }
 
     #[test]
-    #[ignore]
     fn stress_extreme_seed_7777() {
         // High error rate, many iterations - finds edge cases
         run_simulation_with_config(7777, 8000, 0.15, true);

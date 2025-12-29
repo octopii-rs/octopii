@@ -221,6 +221,26 @@ pub mod sim {
         })
     }
 
+    /// Enable or disable partial write simulation without resetting RNG state.
+    pub fn set_partial_writes_enabled(enabled: bool) {
+        CONTEXT.with(|ctx| {
+            if let Some(ref mut c) = *ctx.borrow_mut() {
+                c.config.enable_partial_writes = enabled;
+            }
+        });
+    }
+
+    /// Get whether partial write simulation is currently enabled.
+    pub fn get_partial_writes_enabled() -> bool {
+        CONTEXT.with(|ctx| {
+            if let Some(ref c) = *ctx.borrow() {
+                c.config.enable_partial_writes
+            } else {
+                false
+            }
+        })
+    }
+
     /// Advance the virtual clock by a small amount to simulate I/O latency
     /// Default: 1ms per I/O operation
     pub(super) fn tick_time() {
