@@ -242,3 +242,16 @@ jobs:
       - run: cargo test --test wal_persistence_test --no-fail-fast
       - if: always()
         run: rm -rf /tmp/test_walrus_* /tmp/walrus_* || true
+
+  simulation-test:
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          cache: true
+      - name: Run deterministic simulation tests
+        run: cargo test --features simulation --test simulation --no-fail-fast -- --test-threads=1
+      - if: always()
+        run: rm -rf /tmp/walrus_sim_* || true

@@ -1,6 +1,6 @@
 use crate::wal::wal::block::{Block, Metadata};
 use crate::wal::wal::config::{
-    debug_print, FsyncSchedule, DEFAULT_BLOCK_SIZE, MAX_FILE_SIZE, PREFIX_META_SIZE,
+    checksum64, debug_print, FsyncSchedule, DEFAULT_BLOCK_SIZE, MAX_FILE_SIZE, PREFIX_META_SIZE,
 };
 use crate::wal::wal::paths::WalPathManager;
 use crate::wal::wal::storage::{set_fsync_schedule, SharedMmapKeeper};
@@ -168,8 +168,8 @@ impl Walrus {
                 }
             }
             if let Some(s) = path.to_str() {
-                // skip index files
-                if s.ends_with("_index.db") {
+                // skip index files and temp files
+                if s.ends_with("_index.db") || s.ends_with(".tmp") {
                     continue;
                 }
                 files.push(s.to_string());
@@ -207,15 +207,38 @@ impl Walrus {
 
                 let mut used: u64 = 0;
 
-                // try to read first metadata to get column name (with 2-byte length prefix)
+                // Header format:
+                // [0..8]   - header checksum (covers bytes 8..PREFIX_META_SIZE)
+                // [8..10]  - metadata length
+                // [10..64] - metadata + padding
+                const HEADER_CHECKSUM_SIZE: usize = 8;
+                const META_LEN_OFFSET: usize = HEADER_CHECKSUM_SIZE;
+                const META_DATA_OFFSET: usize = META_LEN_OFFSET + 2;
+                const MAX_META_BYTES: usize = PREFIX_META_SIZE - HEADER_CHECKSUM_SIZE - 2;
+
+                // try to read first metadata to get column name
                 let mut meta_buf = vec![0u8; PREFIX_META_SIZE];
                 mmap.read(block_offset as usize, &mut meta_buf);
-                let meta_len = (meta_buf[0] as usize) | ((meta_buf[1] as usize) << 8);
-                if meta_len == 0 || meta_len > PREFIX_META_SIZE - 2 {
+
+                // Verify header checksum first
+                let stored_checksum = u64::from_le_bytes(
+                    meta_buf[0..HEADER_CHECKSUM_SIZE]
+                        .try_into()
+                        .expect("slice is exactly 8 bytes"),
+                );
+                let computed_checksum = checksum64(&meta_buf[HEADER_CHECKSUM_SIZE..]);
+                if stored_checksum != computed_checksum {
+                    // Corrupted header - skip this block
+                    break;
+                }
+
+                let meta_len = (meta_buf[META_LEN_OFFSET] as usize)
+                    | ((meta_buf[META_LEN_OFFSET + 1] as usize) << 8);
+                if meta_len == 0 || meta_len > MAX_META_BYTES {
                     break;
                 }
                 let mut aligned = rkyv::AlignedVec::with_capacity(meta_len);
-                aligned.extend_from_slice(&meta_buf[2..2 + meta_len]);
+                aligned.extend_from_slice(&meta_buf[META_DATA_OFFSET..META_DATA_OFFSET + meta_len]);
                 // SAFETY: `aligned` was constructed from a bounded metadata slice
                 // read from our file; alignment is ensured by `AlignedVec`.
                 // SAFETY: `aligned` is built from bounded bytes inside the block,

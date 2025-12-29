@@ -349,13 +349,23 @@ mod sim_tests {
     // ------------------------------------------------------------------------
 
     #[test]
-    fn deterministic_consistency_test() {
+    fn deterministic_consistency_seed_42() {
         run_simulation_with_config(42, 5000, 0.0, false);
     }
 
     #[test]
-    fn deterministic_consistency_test_different_seed() {
+    fn deterministic_consistency_seed_12345() {
         run_simulation_with_config(12345, 5000, 0.0, false);
+    }
+
+    #[test]
+    fn deterministic_consistency_seed_99999() {
+        run_simulation_with_config(99999, 5000, 0.0, false);
+    }
+
+    #[test]
+    fn deterministic_consistency_seed_314159() {
+        run_simulation_with_config(314159, 5000, 0.0, false);
     }
 
     // ------------------------------------------------------------------------
@@ -367,34 +377,126 @@ mod sim_tests {
     // types, ensuring failed writes are never recorded in the Oracle.
 
     #[test]
-    fn deterministic_fault_injection_test() {
+    fn fault_injection_seed_999() {
         // 5% I/O error rate - significant but not overwhelming
         run_simulation_with_config(999, 2000, 0.05, false);
     }
 
     #[test]
-    fn deterministic_fault_injection_high_error_rate() {
+    fn fault_injection_seed_42424() {
         // 10% failure rate - extreme stress test
-        // Fewer iterations because many operations will fail
         run_simulation_with_config(42424, 1000, 0.10, false);
     }
 
+    #[test]
+    fn fault_injection_seed_271828() {
+        // 5% error rate with different seed
+        run_simulation_with_config(271828, 2000, 0.05, false);
+    }
+
+    #[test]
+    fn fault_injection_seed_161803() {
+        // 7% error rate - moderate stress
+        run_simulation_with_config(161803, 1500, 0.07, false);
+    }
+
     // ------------------------------------------------------------------------
-    // Partial Write Tests (DISABLED)
+    // Partial Write Tests
     // ------------------------------------------------------------------------
     //
-    // Partial/torn write simulation is disabled because Walrus's current
-    // protocol does not have a checksum covering the metadata header.
-    // A partial write to the metadata can cause the reader to interpret
-    // old data with a matching checksum as valid, causing data corruption.
+    // These tests verify Walrus handles torn/partial writes correctly.
+    // The header checksum (covering bytes 8..64 of each entry header) detects
+    // partial writes that corrupt metadata, preventing silent data corruption.
+
+    #[test]
+    fn partial_writes_seed_777() {
+        // 5% I/O error rate + partial writes enabled
+        run_simulation_with_config(777, 2000, 0.05, true);
+    }
+
+    #[test]
+    fn partial_writes_seed_88888() {
+        // 10% error rate with partial writes - extreme stress test
+        run_simulation_with_config(88888, 1000, 0.10, true);
+    }
+
+    #[test]
+    fn partial_writes_seed_55555() {
+        // 5% error rate with partial writes - different seed
+        run_simulation_with_config(55555, 2000, 0.05, true);
+    }
+
+    #[test]
+    fn partial_writes_seed_123456() {
+        // 8% error rate with partial writes
+        run_simulation_with_config(123456, 1500, 0.08, true);
+    }
+
+    // ------------------------------------------------------------------------
+    // Long-running Stress Tests
+    // ------------------------------------------------------------------------
     //
-    // This is a known limitation that requires a protocol-level fix:
-    // - Option A: Add a header checksum covering the entire entry
-    // - Option B: Use atomic write semantics (write to temp, rename)
-    // - Option C: Use write-ahead logging with entry checksums
-    //
-    // #[test]
-    // fn deterministic_fault_injection_with_partial_writes() {
-    //     run_simulation_with_config(777, 2000, 0.05, true);
-    // }
+    // These tests run for 10,000+ iterations to find rare bugs that only
+    // manifest after many operations. Run with: cargo test --release stress_
+
+    #[test]
+    #[ignore] // Run with: cargo test --features simulation --test simulation stress_ -- --ignored
+    fn stress_no_faults_seed_1() {
+        run_simulation_with_config(1, 20000, 0.0, false);
+    }
+
+    #[test]
+    #[ignore]
+    fn stress_no_faults_seed_2() {
+        run_simulation_with_config(2, 20000, 0.0, false);
+    }
+
+    #[test]
+    #[ignore]
+    fn stress_no_faults_seed_3() {
+        run_simulation_with_config(3, 20000, 0.0, false);
+    }
+
+    #[test]
+    #[ignore]
+    fn stress_fault_injection_seed_1000() {
+        run_simulation_with_config(1000, 15000, 0.05, false);
+    }
+
+    #[test]
+    #[ignore]
+    fn stress_fault_injection_seed_2000() {
+        run_simulation_with_config(2000, 15000, 0.05, false);
+    }
+
+    #[test]
+    #[ignore]
+    fn stress_fault_injection_seed_3000() {
+        run_simulation_with_config(3000, 15000, 0.07, false);
+    }
+
+    #[test]
+    #[ignore]
+    fn stress_partial_writes_seed_4000() {
+        run_simulation_with_config(4000, 10000, 0.05, true);
+    }
+
+    #[test]
+    #[ignore]
+    fn stress_partial_writes_seed_5000() {
+        run_simulation_with_config(5000, 10000, 0.05, true);
+    }
+
+    #[test]
+    #[ignore]
+    fn stress_partial_writes_seed_6000() {
+        run_simulation_with_config(6000, 10000, 0.08, true);
+    }
+
+    #[test]
+    #[ignore]
+    fn stress_extreme_seed_7777() {
+        // High error rate, many iterations - finds edge cases
+        run_simulation_with_config(7777, 8000, 0.15, true);
+    }
 }

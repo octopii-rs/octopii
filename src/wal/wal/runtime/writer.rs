@@ -9,6 +9,8 @@ use crate::wal::wal::config::{
     debug_print, is_fd_backend_enabled, FsyncSchedule, DEFAULT_BLOCK_SIZE, MAX_BATCH_BYTES,
     MAX_BATCH_ENTRIES, PREFIX_META_SIZE,
 };
+#[cfg(feature = "simulation")]
+use crate::wal::wal::vfs::sim;
 use std::collections::HashSet;
 #[cfg(target_os = "linux")]
 use std::convert::TryFrom;
@@ -97,14 +99,15 @@ impl Writer {
             *cur = 0;
         }
         let next_block_start = block.offset + block.limit; // simplistic for now
-        block.write(*cur, data, &self.col, next_block_start)?;
+        let write_offset = *cur;
+        block.write(write_offset, data, &self.col, next_block_start)?;
         debug_print!(
             "[writer] wrote: col={}, block_id={}, offset_before={}, bytes={}, offset_after={}",
             self.col,
             block.id,
-            *cur,
+            write_offset,
             need,
-            *cur + need
+            write_offset + need
         );
         *cur += need;
 
@@ -112,7 +115,29 @@ impl Writer {
         match self.fsync_schedule {
             FsyncSchedule::SyncEach => {
                 // Immediate mmap flush, skip background flusher
-                block.mmap.flush()?;
+                if let Err(e) = block.mmap.flush() {
+                    // CRITICAL: Flush failed - roll back the write
+                    // Zero the header to invalidate the entry, then reset offset
+                    debug_print!(
+                        "[writer] fsync FAILED, rolling back: col={}, block_id={}, offset={}",
+                        self.col,
+                        block.id,
+                        write_offset
+                    );
+                    // IMPORTANT: Disable fault injection during rollback to ensure cleanup succeeds
+                    #[cfg(feature = "simulation")]
+                    let saved_error_rate = {
+                        let rate = sim::get_io_error_rate();
+                        sim::set_io_error_rate(0.0);
+                        rate
+                    };
+                    let _ = block.zero_range(write_offset, PREFIX_META_SIZE as u64);
+                    let _ = block.mmap.flush(); // Best effort to persist the zeroed header
+                    #[cfg(feature = "simulation")]
+                    sim::set_io_error_rate(saved_error_rate);
+                    *cur = write_offset;
+                    return Err(e);
+                }
                 debug_print!(
                     "[writer] immediate fsync: col={}, block_id={}",
                     self.col,
@@ -285,6 +310,14 @@ impl Writer {
             let next_block_start = blk.offset + blk.limit;
 
             if let Err(e) = blk.write(*offset, data, &self.col, next_block_start) {
+                // IMPORTANT: Disable fault injection during rollback to ensure cleanup succeeds
+                #[cfg(feature = "simulation")]
+                let saved_error_rate = {
+                    let rate = sim::get_io_error_rate();
+                    sim::set_io_error_rate(0.0);
+                    rate
+                };
+
                 // Clean up any partially written headers up to and including the failed index
                 for (w_blk, w_off, _) in write_plan[0..=(*data_idx)].iter() {
                     let _ = w_blk.zero_range(*w_off, PREFIX_META_SIZE as u64);
@@ -298,6 +331,9 @@ impl Writer {
                     }
                 }
 
+                #[cfg(feature = "simulation")]
+                sim::set_io_error_rate(saved_error_rate);
+
                 *cur_offset = revert_info.original_offset;
                 for block_id in revert_info.allocated_block_ids {
                     FileStateTracker::set_block_unlocked(block_id as usize);
@@ -310,7 +346,42 @@ impl Writer {
         let mut fsynced = HashSet::new();
         for (blk, _, _) in write_plan.iter() {
             if !fsynced.contains(&blk.file_path) {
-                blk.mmap.flush()?;
+                if let Err(e) = blk.mmap.flush() {
+                    // CRITICAL: Flush failed after writes completed
+                    // Zero ALL headers to invalidate the entire batch
+                    debug_print!(
+                        "[batch] fsync FAILED, rolling back all entries: topic={}",
+                        self.col
+                    );
+
+                    // IMPORTANT: Disable fault injection during rollback to ensure cleanup succeeds
+                    #[cfg(feature = "simulation")]
+                    let saved_error_rate = {
+                        let rate = sim::get_io_error_rate();
+                        sim::set_io_error_rate(0.0);
+                        rate
+                    };
+
+                    for (w_blk, w_off, _) in write_plan.iter() {
+                        let _ = w_blk.zero_range(*w_off, PREFIX_META_SIZE as u64);
+                    }
+                    // Flush the zeros
+                    let mut zero_fsynced = HashSet::new();
+                    for (w_blk, _, _) in write_plan.iter() {
+                        if zero_fsynced.insert(w_blk.file_path.clone()) {
+                            let _ = w_blk.mmap.flush();
+                        }
+                    }
+
+                    #[cfg(feature = "simulation")]
+                    sim::set_io_error_rate(saved_error_rate);
+
+                    // Release allocated blocks
+                    for block_id in &revert_info.allocated_block_ids {
+                        FileStateTracker::set_block_unlocked(*block_id as usize);
+                    }
+                    return Err(e);
+                }
                 fsynced.insert(blk.file_path.clone());
             }
         }

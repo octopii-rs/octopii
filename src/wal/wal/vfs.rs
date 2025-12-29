@@ -208,6 +208,19 @@ pub mod sim {
         });
     }
 
+    /// Get the current I/O error rate
+    ///
+    /// Returns the configured error rate, or 0.0 if simulation context is not initialized.
+    pub fn get_io_error_rate() -> f64 {
+        CONTEXT.with(|ctx| {
+            if let Some(ref c) = *ctx.borrow() {
+                c.config.io_error_rate
+            } else {
+                0.0
+            }
+        })
+    }
+
     /// Advance the virtual clock by a small amount to simulate I/O latency
     /// Default: 1ms per I/O operation
     pub(super) fn tick_time() {

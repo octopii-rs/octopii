@@ -3,6 +3,17 @@ use crate::wal::wal::storage::SharedMmap;
 use rkyv::{Archive, Deserialize, Serialize};
 use std::sync::Arc;
 
+/// Size of the header checksum field (8 bytes for u64)
+const HEADER_CHECKSUM_SIZE: usize = 8;
+/// Offset where metadata length is stored (after header checksum)
+const META_LEN_OFFSET: usize = HEADER_CHECKSUM_SIZE;
+/// Size of the metadata length field (2 bytes for u16)
+const META_LEN_SIZE: usize = 2;
+/// Offset where actual metadata bytes start
+const META_DATA_OFFSET: usize = META_LEN_OFFSET + META_LEN_SIZE;
+/// Maximum size for serialized metadata (PREFIX_META_SIZE - checksum - length)
+const MAX_META_BYTES: usize = PREFIX_META_SIZE - HEADER_CHECKSUM_SIZE - META_LEN_SIZE;
+
 #[derive(Clone, Debug)]
 pub struct Entry {
     pub data: Vec<u8>,
@@ -52,7 +63,7 @@ impl Block {
                 format!("serialize metadata failed: {:?}", e),
             )
         })?;
-        if meta_bytes.len() > PREFIX_META_SIZE - 2 {
+        if meta_bytes.len() > MAX_META_BYTES {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 "metadata too large",
@@ -60,11 +71,21 @@ impl Block {
         }
 
         let mut meta_buffer = vec![0u8; PREFIX_META_SIZE];
-        // Store actual length in first 2 bytes (little endian)
-        meta_buffer[0] = (meta_bytes.len() & 0xFF) as u8;
-        meta_buffer[1] = ((meta_bytes.len() >> 8) & 0xFF) as u8;
-        // Copy actual metadata starting at byte 2
-        meta_buffer[2..2 + meta_bytes.len()].copy_from_slice(&meta_bytes);
+
+        // Store metadata length at offset 8 (after header checksum slot)
+        meta_buffer[META_LEN_OFFSET] = (meta_bytes.len() & 0xFF) as u8;
+        meta_buffer[META_LEN_OFFSET + 1] = ((meta_bytes.len() >> 8) & 0xFF) as u8;
+
+        // Copy actual metadata starting at offset 10
+        meta_buffer[META_DATA_OFFSET..META_DATA_OFFSET + meta_bytes.len()]
+            .copy_from_slice(&meta_bytes);
+
+        // Compute header checksum over bytes [8..PREFIX_META_SIZE]
+        // This covers: length field + metadata + padding
+        let header_checksum = checksum64(&meta_buffer[HEADER_CHECKSUM_SIZE..]);
+
+        // Store header checksum in first 8 bytes (little endian)
+        meta_buffer[0..8].copy_from_slice(&header_checksum.to_le_bytes());
 
         // Combine and write
         let mut combined = Vec::with_capacity(PREFIX_META_SIZE + data.len());
@@ -81,22 +102,46 @@ impl Block {
         let file_offset = self.offset + in_block_offset;
         self.mmap.read(file_offset as usize, &mut meta_buffer)?;
 
-        // Read the actual metadata length from first 2 bytes
-        let meta_len = (meta_buffer[0] as usize) | ((meta_buffer[1] as usize) << 8);
+        // Step 1: Verify header checksum FIRST (detects partial/torn writes)
+        let stored_checksum = u64::from_le_bytes(
+            meta_buffer[0..HEADER_CHECKSUM_SIZE]
+                .try_into()
+                .expect("slice is exactly 8 bytes"),
+        );
+        let computed_checksum = checksum64(&meta_buffer[HEADER_CHECKSUM_SIZE..]);
 
-        if meta_len == 0 || meta_len > PREFIX_META_SIZE - 2 {
+        if stored_checksum != computed_checksum {
+            // Header is corrupted - likely a partial write
+            debug_print!(
+                "[reader] header checksum mismatch at offset={} in file={}, block_id={} (stored={:#x}, computed={:#x})",
+                in_block_offset,
+                self.file_path,
+                self.id,
+                stored_checksum,
+                computed_checksum
+            );
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "header checksum mismatch, partial write detected",
+            ));
+        }
+
+        // Step 2: Read metadata length (now at offset 8)
+        let meta_len = (meta_buffer[META_LEN_OFFSET] as usize)
+            | ((meta_buffer[META_LEN_OFFSET + 1] as usize) << 8);
+
+        if meta_len == 0 || meta_len > MAX_META_BYTES {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 format!("invalid metadata length: {}", meta_len),
             ));
         }
 
-        // Deserialize only the actual metadata bytes (skip the 2-byte length prefix)
+        // Step 3: Deserialize metadata (starts at offset 10)
         let mut aligned = rkyv::AlignedVec::with_capacity(meta_len);
-        aligned.extend_from_slice(&meta_buffer[2..2 + meta_len]);
+        aligned.extend_from_slice(&meta_buffer[META_DATA_OFFSET..META_DATA_OFFSET + meta_len]);
 
         // Use check_archived_root to safely validate potentially corrupted data
-        // This handles partial writes and I/O errors that may have left garbage bytes
         let archived =
             rkyv::validation::validators::check_archived_root::<Metadata>(&aligned[..]).map_err(
                 |e| {
@@ -114,23 +159,23 @@ impl Block {
         })?;
         let actual_entry_size = meta.read_size;
 
-        // Read the actual data
+        // Step 4: Read the payload data
         let new_offset = file_offset + PREFIX_META_SIZE as u64;
         let mut ret_buffer = vec![0; actual_entry_size];
         self.mmap.read(new_offset as usize, &mut ret_buffer)?;
 
-        // Verify checksum
+        // Step 5: Verify payload checksum
         let expected = meta.checksum;
         if checksum64(&ret_buffer) != expected {
             debug_print!(
-                "[reader] checksum mismatch; skipping corrupted entry at offset={} in file={}, block_id={}",
+                "[reader] payload checksum mismatch at offset={} in file={}, block_id={}",
                 in_block_offset,
                 self.file_path,
                 self.id
             );
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
-                "checksum mismatch, data corruption detected",
+                "payload checksum mismatch, data corruption detected",
             ));
         }
 
@@ -147,7 +192,7 @@ impl Block {
         }
         let zeros = vec![0u8; len];
         let file_offset = self.offset + in_block_offset;
-        self.mmap.write(file_offset as usize, &zeros);
+        self.mmap.write(file_offset as usize, &zeros)?;
         Ok(())
     }
 }
