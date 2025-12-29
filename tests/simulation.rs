@@ -653,4 +653,33 @@ mod sim_tests {
         // High error rate, many iterations - finds edge cases
         run_simulation_with_config(7777, 8000, 0.15, true);
     }
+
+    #[test]
+    fn stress_extreme_seed_20240229() {
+        run_simulation_with_config(20240229, 9000, 0.20, true);
+    }
+
+    #[test]
+    fn stress_extreme_seed_8675309() {
+        run_simulation_with_config(8675309, 9000, 0.25, true);
+    }
+
+    #[test]
+    fn stress_extreme_seed_42424242() {
+        run_simulation_with_config(42424242, 8000, 0.30, true);
+    }
+
+    #[test]
+    fn stress_random_seeds_10_15pct() {
+        // Deterministic pseudo-random seeds to avoid non-reproducible failures.
+        let mut s = 0x9e3779b97f4a7c15u64;
+        for _ in 0..20 {
+            s ^= s >> 12;
+            s ^= s << 25;
+            s ^= s >> 27;
+            let seed = s.wrapping_mul(0x2545f4914f6cdd1d);
+            let error_rate = 0.10 + ((seed % 6) as f64) * 0.01;
+            run_simulation_with_config(seed, 4000, error_rate, true);
+        }
+    }
 }
