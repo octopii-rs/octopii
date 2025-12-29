@@ -1,0 +1,22 @@
+name: Walrus Strict Tests
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  walrus-strict-tests:
+    runs-on: self-hosted
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          cache: true
+      - name: Run StrictlyAtOnce Walrus invariants
+        run: |
+          ulimit -n 1048576
+          cargo test --features simulation --lib strictly_at_once_wal_log_store_recovery strictly_at_once_wal_backed_state_machine_recovery -- --test-threads=1
+      - if: always()
+        run: rm -rf /tmp/walrus_strict_* /tmp/walrus_sim_* || true

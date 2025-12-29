@@ -383,6 +383,7 @@ impl Default for KvStateMachine {
     }
 }
 
+
 /// Implement the StateMachineTrait for KvStateMachine
 impl StateMachineTrait for KvStateMachine {
     fn apply(&self, command: &[u8]) -> Result<Bytes, String> {

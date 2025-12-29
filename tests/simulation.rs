@@ -507,6 +507,16 @@ mod sim_tests {
         );
     }
 
+    fn init_strict_walrus(root_dir: &PathBuf, key: &str) -> Walrus {
+        std::env::set_var("WALRUS_DATA_DIR", root_dir.to_string_lossy().to_string());
+        Walrus::with_consistency_and_schedule_for_key(
+            key,
+            ReadConsistency::StrictlyAtOnce,
+            FsyncSchedule::SyncEach,
+        )
+        .expect("Failed to initialize Walrus")
+    }
+
     // ------------------------------------------------------------------------
     // Phase 4 Tests: No fault injection (verify basic correctness)
     // ------------------------------------------------------------------------
@@ -696,4 +706,148 @@ mod sim_tests {
             run_simulation_with_config(seed, 8000, error_rate, true);
         }
     }
+
+    // ------------------------------------------------------------------------
+    // StrictlyAtOnce invariants (checkpoint persistence and peek semantics)
+    // ------------------------------------------------------------------------
+
+    #[test]
+    fn strictly_at_once_checkpoint_persists_read_next() {
+        let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        sim::setup(SimConfig {
+            seed: 4242,
+            io_error_rate: 0.0,
+            initial_time_ns: 1700000000_000_000_000,
+            enable_partial_writes: false,
+        });
+
+        let root_dir = std::env::temp_dir().join("walrus_strict_checkpoint_read_next");
+        let _ = std::fs::remove_dir_all(&root_dir);
+        std::fs::create_dir_all(&root_dir).expect("Failed to create walrus test dir");
+
+        let key = "strict_node";
+        let topic = "strict_topic";
+        let entries: Vec<Vec<u8>> = (0..5)
+            .map(|i| format!("entry-{i}").into_bytes())
+            .collect();
+
+        let wal = init_strict_walrus(&root_dir, key);
+        for data in &entries {
+            wal.append_for_topic(topic, data).unwrap();
+        }
+
+        for expected in entries.iter().take(2) {
+            let entry = wal.read_next(topic, true).unwrap().expect("Missing entry");
+            assert_eq!(entry.data, *expected);
+        }
+
+        drop(wal);
+        octopii::wal::wal::__clear_storage_cache_for_tests();
+        sim::advance_time(std::time::Duration::from_secs(1));
+
+        let wal = init_strict_walrus(&root_dir, key);
+        let mut recovered = Vec::new();
+        while let Ok(Some(entry)) = wal.read_next(topic, true) {
+            recovered.push(entry.data);
+        }
+        assert_eq!(recovered, entries[2..].to_vec());
+
+        std::env::remove_var("WALRUS_DATA_DIR");
+        let _ = std::fs::remove_dir_all(&root_dir);
+        sim::teardown();
+    }
+
+    #[test]
+    fn strictly_at_once_checkpoint_false_replays_after_crash() {
+        let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        sim::setup(SimConfig {
+            seed: 4243,
+            io_error_rate: 0.0,
+            initial_time_ns: 1700000000_000_000_000,
+            enable_partial_writes: false,
+        });
+
+        let root_dir = std::env::temp_dir().join("walrus_strict_checkpoint_false");
+        let _ = std::fs::remove_dir_all(&root_dir);
+        std::fs::create_dir_all(&root_dir).expect("Failed to create walrus test dir");
+
+        let key = "strict_node";
+        let topic = "strict_topic";
+        let entries: Vec<Vec<u8>> = (0..4)
+            .map(|i| format!("peek-{i}").into_bytes())
+            .collect();
+
+        let wal = init_strict_walrus(&root_dir, key);
+        for data in &entries {
+            wal.append_for_topic(topic, data).unwrap();
+        }
+
+        for expected in entries.iter().take(2) {
+            let entry = wal.read_next(topic, false).unwrap().expect("Missing entry");
+            assert_eq!(entry.data, *expected);
+        }
+
+        let entry = wal.read_next(topic, true).unwrap().expect("Missing entry");
+        assert_eq!(entry.data, entries[2]);
+
+        drop(wal);
+        octopii::wal::wal::__clear_storage_cache_for_tests();
+        sim::advance_time(std::time::Duration::from_secs(1));
+
+        let wal = init_strict_walrus(&root_dir, key);
+        let first = wal.read_next(topic, true).unwrap().expect("Missing entry");
+        assert_eq!(first.data, entries[0]);
+
+        std::env::remove_var("WALRUS_DATA_DIR");
+        let _ = std::fs::remove_dir_all(&root_dir);
+        sim::teardown();
+    }
+
+    #[test]
+    fn strictly_at_once_checkpoint_false_batch_read_replays_after_crash() {
+        let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        sim::setup(SimConfig {
+            seed: 4244,
+            io_error_rate: 0.0,
+            initial_time_ns: 1700000000_000_000_000,
+            enable_partial_writes: false,
+        });
+
+        let root_dir = std::env::temp_dir().join("walrus_strict_checkpoint_false_batch");
+        let _ = std::fs::remove_dir_all(&root_dir);
+        std::fs::create_dir_all(&root_dir).expect("Failed to create walrus test dir");
+
+        let key = "strict_node";
+        let topic = "strict_topic";
+        let entries: Vec<Vec<u8>> = (0..3)
+            .map(|i| format!("batch-peek-{i}").into_bytes())
+            .collect();
+
+        let wal = init_strict_walrus(&root_dir, key);
+        for data in &entries {
+            wal.append_for_topic(topic, data).unwrap();
+        }
+
+        let first_batch = wal
+            .batch_read_for_topic(topic, entries[0].len(), false)
+            .unwrap();
+        assert_eq!(first_batch.len(), 1);
+        assert_eq!(first_batch[0].data, entries[0]);
+
+        drop(wal);
+        octopii::wal::wal::__clear_storage_cache_for_tests();
+        sim::advance_time(std::time::Duration::from_secs(1));
+
+        let wal = init_strict_walrus(&root_dir, key);
+        let mut recovered = Vec::new();
+        while let Ok(Some(entry)) = wal.read_next(topic, true) {
+            recovered.push(entry.data);
+        }
+        assert_eq!(recovered, entries);
+
+        std::env::remove_var("WALRUS_DATA_DIR");
+        let _ = std::fs::remove_dir_all(&root_dir);
+        sim::teardown();
+    }
+
 }
