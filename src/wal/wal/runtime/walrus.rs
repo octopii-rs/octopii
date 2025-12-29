@@ -400,6 +400,25 @@ impl Walrus {
         Ok(())
     }
 
+    pub fn reset_read_offset_for_topic(&self, col_name: &str) -> std::io::Result<()> {
+        if let Ok(mut idx_guard) = self.read_offset_index.write() {
+            let _ = idx_guard.remove(col_name)?;
+        }
+        if let Ok(mut map) = self.reader.data.write() {
+            if let Some(info_arc) = map.get(col_name) {
+                if let Ok(mut info) = info_arc.write() {
+                    info.cur_block_idx = 0;
+                    info.cur_block_offset = 0;
+                    info.reads_since_persist = 0;
+                    info.tail_block_id = 0;
+                    info.tail_offset = 0;
+                    info.hydrated_from_index = false;
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Manually tick the background worker in simulation mode.
     ///
     /// This allows deterministic control over when fsyncs and file cleanup occur,

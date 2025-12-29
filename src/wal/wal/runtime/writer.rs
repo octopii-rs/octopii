@@ -132,6 +132,18 @@ impl Writer {
                     *cur = write_offset;
                     return Err(e);
                 }
+                if block.mmap.storage().as_fd().is_none() {
+                    if let Err(e) = block.mmap.flush() {
+                        debug_print!(
+                            "[writer] fsync FAILED after commit trailer: col={}, block_id={}, offset={}",
+                            self.col,
+                            block.id,
+                            write_offset
+                        );
+                        *cur = write_offset;
+                        return Err(e);
+                    }
+                }
                 *cur += need;
             }
             FsyncSchedule::Milliseconds(_) => {
@@ -369,6 +381,27 @@ impl Writer {
                     return Err(e);
                 }
             }
+            // Persist commit trailers before making entries visible if using mmap backend.
+            let mut fsynced = HashSet::new();
+            for (blk, _, _) in write_plan.iter() {
+                if blk.mmap.storage().as_fd().is_some() {
+                    continue;
+                }
+                if !fsynced.contains(&blk.file_path) {
+                    if let Err(e) = blk.mmap.flush() {
+                        debug_print!(
+                            "[batch] fsync FAILED after commit trailers: topic={}",
+                            self.col
+                        );
+                        *cur_offset = revert_info.original_offset;
+                        for block_id in &revert_info.allocated_block_ids {
+                            FileStateTracker::set_block_unlocked(*block_id as usize);
+                        }
+                        return Err(e);
+                    }
+                    fsynced.insert(blk.file_path.clone());
+                }
+            }
         }
 
         // NOW update the writer's offset to make data visible to readers
@@ -548,6 +581,27 @@ impl Writer {
                                 FileStateTracker::set_block_unlocked(*block_id as usize);
                             }
                             return Err(e);
+                        }
+                    }
+                    // Persist commit trailers before making entries visible if using mmap backend.
+                    let mut fsynced = HashSet::new();
+                    for (blk, _, _) in write_plan.iter() {
+                        if blk.mmap.storage().as_fd().is_some() {
+                            continue;
+                        }
+                        if !fsynced.contains(&blk.file_path) {
+                            if let Err(e) = blk.mmap.flush() {
+                                debug_print!(
+                                    "[batch] fsync FAILED after commit trailers: topic={}",
+                                    self.col
+                                );
+                                *cur_offset = revert_info.original_offset;
+                                for block_id in revert_info.allocated_block_ids.iter() {
+                                    FileStateTracker::set_block_unlocked(*block_id as usize);
+                                }
+                                return Err(e);
+                            }
+                            fsynced.insert(blk.file_path.clone());
                         }
                     }
                 }

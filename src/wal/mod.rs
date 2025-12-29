@@ -141,6 +141,7 @@ impl WriteAheadLog {
 
         // Use block_in_place for hard thread cap (Walrus ops are non-blocking)
         tokio::task::block_in_place(move || {
+            let _ = walrus.reset_read_offset_for_topic(&topic);
             let mut all_entries = Vec::new();
             let mut consecutive_empty_reads = 0;
 
