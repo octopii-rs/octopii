@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::time::SystemTime;
+use crate::wal::wal::vfs::now;
 
 // Global flag to choose backend
 pub(crate) static USE_FD_BACKEND: AtomicBool = AtomicBool::new(true);
@@ -13,6 +13,20 @@ pub fn enable_fd_backend() {
 // Public function to disable FD backend (use mmap instead)
 pub fn disable_fd_backend() {
     USE_FD_BACKEND.store(false, Ordering::Relaxed);
+}
+
+// Helper to check backend status, strictly enforcing FD backend in simulation
+pub(crate) fn is_fd_backend_enabled() -> bool {
+    #[cfg(feature = "simulation")]
+    {
+        // Memory mapped I/O cannot be fault-injected easily, so we force
+        // the FD backend which uses pwrite/pread through our VFS layer.
+        return true;
+    }
+    #[cfg(not(feature = "simulation"))]
+    {
+        USE_FD_BACKEND.load(Ordering::Relaxed)
+    }
 }
 
 // Macro to conditionally print debug messages
@@ -44,8 +58,9 @@ pub(crate) const MAX_BATCH_BYTES: u64 = 10 * 1024 * 1024 * 1024; // 10 GiB total
 static LAST_MILLIS: AtomicU64 = AtomicU64::new(0);
 
 pub(crate) fn now_millis_str() -> String {
-    let system_ms = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
+    // Use vfs::now() for deterministic time in simulation mode
+    let system_ms = now()
+        .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_else(|_| std::time::Duration::from_secs(0))
         .as_millis();
 

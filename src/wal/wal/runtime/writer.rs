@@ -4,10 +4,10 @@ use crate::wal::wal::block::Block;
 #[cfg(target_os = "linux")]
 use crate::wal::wal::block::Metadata;
 #[cfg(target_os = "linux")]
-use crate::wal::wal::config::{checksum64, USE_FD_BACKEND};
+use crate::wal::wal::config::checksum64;
 use crate::wal::wal::config::{
-    debug_print, FsyncSchedule, DEFAULT_BLOCK_SIZE, MAX_BATCH_BYTES, MAX_BATCH_ENTRIES,
-    PREFIX_META_SIZE,
+    debug_print, is_fd_backend_enabled, FsyncSchedule, DEFAULT_BLOCK_SIZE, MAX_BATCH_BYTES,
+    MAX_BATCH_ENTRIES, PREFIX_META_SIZE,
 };
 use std::collections::HashSet;
 #[cfg(target_os = "linux")]
@@ -266,7 +266,8 @@ impl Writer {
 
         #[cfg(target_os = "linux")]
         {
-            if USE_FD_BACKEND.load(Ordering::Relaxed) {
+            // Use helper that enforces FD backend in simulation mode
+            if is_fd_backend_enabled() {
                 return self.submit_batch_via_io_uring(
                     &write_plan,
                     batch,

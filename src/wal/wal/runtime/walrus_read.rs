@@ -2,16 +2,11 @@ use super::allocator::BlockStateTracker;
 use super::reader::ColReaderInfo;
 use super::{ReadConsistency, Walrus};
 use crate::wal::wal::block::{Block, Entry, Metadata};
-use crate::wal::wal::config::{checksum64, debug_print, MAX_BATCH_ENTRIES, PREFIX_META_SIZE};
+use crate::wal::wal::config::{checksum64, debug_print, is_fd_backend_enabled, MAX_BATCH_ENTRIES, PREFIX_META_SIZE};
 use std::io;
 use std::sync::{Arc, RwLock};
 
 use rkyv::{AlignedVec, Deserialize};
-
-#[cfg(target_os = "linux")]
-use crate::wal::wal::config::USE_FD_BACKEND;
-#[cfg(target_os = "linux")]
-use std::sync::atomic::Ordering;
 
 #[cfg(target_os = "linux")]
 use io_uring;
@@ -535,7 +530,8 @@ impl Walrus {
 
         // 3) Read ranges via io_uring (FD backend) or mmap
         #[cfg(target_os = "linux")]
-        let buffers = if USE_FD_BACKEND.load(Ordering::Relaxed) {
+        // Use helper that enforces FD backend in simulation mode
+        let buffers = if is_fd_backend_enabled() {
             // io_uring path - try to initialize, fall back to mmap if not supported
             let ring_size = (plan.len() + 64).min(4096) as u32;
             let ring = match io_uring::IoUring::new(ring_size) {

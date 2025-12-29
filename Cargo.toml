@@ -23,7 +23,8 @@ futures = "0.3"
 rand = "0.8"
 once_cell = "1.19"
 # Walrus WAL dependencies
-rkyv = "0.7"
+rkyv = { version = "0.7", features = ["validation"] }
+bytecheck = { version = "0.6", default-features = false }
 memmap2 = "0.9"
 libc = "0.2"
 openraft = { path = "openraft/openraft", default-features = false, optional = true, features = ["serde", "type-alias", "tokio-rt"] }
@@ -43,3 +44,5 @@ unused = "allow"
 default = ["openraft"]
 openraft = ["dep:openraft"]
 openraft-filters = []
+# Deterministic simulation testing - enables VFS virtualization layer
+simulation = []

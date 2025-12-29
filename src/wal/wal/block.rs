@@ -9,6 +9,7 @@ pub struct Entry {
 }
 
 #[derive(Archive, Deserialize, Serialize, Debug)]
+#[archive_attr(derive(bytecheck::CheckBytes))]
 pub(crate) struct Metadata {
     pub(crate) read_size: usize,
     pub(crate) owned_by: String,
@@ -71,14 +72,14 @@ impl Block {
         combined.extend_from_slice(data);
 
         let file_offset = self.offset + in_block_offset;
-        self.mmap.write(file_offset as usize, &combined);
+        self.mmap.write(file_offset as usize, &combined)?;
         Ok(())
     }
 
     pub(crate) fn read(&self, in_block_offset: u64) -> std::io::Result<(Entry, usize)> {
         let mut meta_buffer = vec![0; PREFIX_META_SIZE];
         let file_offset = self.offset + in_block_offset;
-        self.mmap.read(file_offset as usize, &mut meta_buffer);
+        self.mmap.read(file_offset as usize, &mut meta_buffer)?;
 
         // Read the actual metadata length from first 2 bytes
         let meta_len = (meta_buffer[0] as usize) | ((meta_buffer[1] as usize) << 8);
@@ -94,10 +95,17 @@ impl Block {
         let mut aligned = rkyv::AlignedVec::with_capacity(meta_len);
         aligned.extend_from_slice(&meta_buffer[2..2 + meta_len]);
 
-        // SAFETY: `aligned` contains bytes we just read from our own file format.
-        // We bounded `meta_len` to PREFIX_META_SIZE and copy into an `AlignedVec`,
-        // which satisfies alignment requirements of rkyv.
-        let archived = unsafe { rkyv::archived_root::<Metadata>(&aligned[..]) };
+        // Use check_archived_root to safely validate potentially corrupted data
+        // This handles partial writes and I/O errors that may have left garbage bytes
+        let archived =
+            rkyv::validation::validators::check_archived_root::<Metadata>(&aligned[..]).map_err(
+                |e| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!("corrupted metadata archive: {}", e),
+                    )
+                },
+            )?;
         let meta: Metadata = archived.deserialize(&mut rkyv::Infallible).map_err(|_| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
@@ -109,7 +117,7 @@ impl Block {
         // Read the actual data
         let new_offset = file_offset + PREFIX_META_SIZE as u64;
         let mut ret_buffer = vec![0; actual_entry_size];
-        self.mmap.read(new_offset as usize, &mut ret_buffer);
+        self.mmap.read(new_offset as usize, &mut ret_buffer)?;
 
         // Verify checksum
         let expected = meta.checksum;

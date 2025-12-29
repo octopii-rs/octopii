@@ -1,7 +1,7 @@
 use crate::wal::wal::paths::WalPathManager;
+use crate::wal::wal::vfs as fs;
 use rkyv::{Archive, Deserialize, Serialize};
 use std::collections::HashMap;
-use std::fs;
 
 #[derive(Archive, Deserialize, Serialize, Debug, Clone)]
 pub struct BlockPos {

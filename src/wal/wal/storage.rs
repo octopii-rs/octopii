@@ -1,17 +1,13 @@
-use crate::wal::wal::config::{FsyncSchedule, USE_FD_BACKEND};
+use crate::wal::wal::config::{is_fd_backend_enabled, FsyncSchedule};
+use crate::wal::wal::vfs::{now, File, OpenOptions};
 use memmap2::MmapMut;
 use std::collections::HashMap;
-use std::fs::OpenOptions;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock, RwLock};
-use std::time::SystemTime;
-
-#[cfg(unix)]
-use std::os::unix::fs::OpenOptionsExt;
 
 #[derive(Debug)]
 pub(crate) struct FdBackend {
-    file: std::fs::File,
+    file: File,
     len: usize,
 }
 
@@ -22,6 +18,7 @@ impl FdBackend {
 
         #[cfg(unix)]
         if use_o_sync {
+            // vfs::OpenOptions has custom_flags on unix
             opts.custom_flags(libc::O_SYNC);
         }
 
@@ -32,16 +29,30 @@ impl FdBackend {
         Ok(Self { file, len })
     }
 
-    pub(crate) fn write(&self, offset: usize, data: &[u8]) {
+    pub(crate) fn write(&self, offset: usize, data: &[u8]) -> std::io::Result<()> {
         use std::os::unix::fs::FileExt;
         // pwrite doesn't move the file cursor
-        let _ = self.file.write_at(data, offset as u64);
+        let written = self.file.write_at(data, offset as u64)?;
+        if written != data.len() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::WriteZero,
+                format!("partial write: {} of {} bytes", written, data.len()),
+            ));
+        }
+        Ok(())
     }
 
-    pub(crate) fn read(&self, offset: usize, dest: &mut [u8]) {
+    pub(crate) fn read(&self, offset: usize, dest: &mut [u8]) -> std::io::Result<()> {
         use std::os::unix::fs::FileExt;
         // pread doesn't move the file cursor
-        let _ = self.file.read_at(dest, offset as u64);
+        let read_bytes = self.file.read_at(dest, offset as u64)?;
+        if read_bytes != dest.len() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                format!("partial read: {} of {} bytes", read_bytes, dest.len()),
+            ));
+        }
+        Ok(())
     }
 
     pub(crate) fn flush(&self) -> std::io::Result<()> {
@@ -52,7 +63,7 @@ impl FdBackend {
         self.len
     }
 
-    pub(crate) fn file(&self) -> &std::fs::File {
+    pub(crate) fn file(&self) -> &File {
         &self.file
     }
 }
@@ -64,7 +75,7 @@ pub(crate) enum StorageImpl {
 }
 
 impl StorageImpl {
-    pub(crate) fn write(&self, offset: usize, data: &[u8]) {
+    pub(crate) fn write(&self, offset: usize, data: &[u8]) -> std::io::Result<()> {
         match self {
             StorageImpl::Mmap(mmap) => {
                 debug_assert!(offset <= mmap.len());
@@ -73,17 +84,19 @@ impl StorageImpl {
                     let ptr = mmap.as_ptr() as *mut u8;
                     std::ptr::copy_nonoverlapping(data.as_ptr(), ptr.add(offset), data.len());
                 }
+                Ok(())
             }
             StorageImpl::Fd(fd) => fd.write(offset, data),
         }
     }
 
-    pub(crate) fn read(&self, offset: usize, dest: &mut [u8]) {
+    pub(crate) fn read(&self, offset: usize, dest: &mut [u8]) -> std::io::Result<()> {
         match self {
             StorageImpl::Mmap(mmap) => {
                 debug_assert!(offset + dest.len() <= mmap.len());
                 let src = &mmap[offset..offset + dest.len()];
                 dest.copy_from_slice(src);
+                Ok(())
             }
             StorageImpl::Fd(fd) => fd.read(offset, dest),
         }
@@ -122,11 +135,16 @@ fn should_use_o_sync() -> bool {
 }
 
 fn create_storage_impl(path: &str) -> std::io::Result<StorageImpl> {
-    if USE_FD_BACKEND.load(Ordering::Relaxed) {
+    // Use helper that enforces FD backend in simulation mode
+    if is_fd_backend_enabled() {
         let use_o_sync = should_use_o_sync();
         Ok(StorageImpl::Fd(FdBackend::new(path, use_o_sync)?))
     } else {
-        let file = OpenOptions::new().read(true).write(true).open(path)?;
+        // This path is unreachable in simulation mode due to is_fd_backend_enabled check
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path)?;
         // SAFETY: `file` is opened read/write and lives for the duration of this
         // mapping; `memmap2` upholds aliasing invariants for `MmapMut`.
         let mmap = unsafe { MmapMut::map_mut(&file)? };
@@ -152,8 +170,9 @@ impl SharedMmap {
     pub(crate) fn new(path: &str) -> std::io::Result<Arc<Self>> {
         let storage = create_storage_impl(path)?;
 
-        let now_ms = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
+        // Use vfs::now() for deterministic time in simulation mode
+        let now_ms = now()
+            .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_else(|_| std::time::Duration::from_secs(0))
             .as_millis() as u64;
         Ok(Arc::new(Self {
@@ -162,23 +181,25 @@ impl SharedMmap {
         }))
     }
 
-    pub(crate) fn write(&self, offset: usize, data: &[u8]) {
+    pub(crate) fn write(&self, offset: usize, data: &[u8]) -> std::io::Result<()> {
         // Bounds check before raw copy to maintain memory safety
         debug_assert!(offset <= self.storage.len());
         debug_assert!(self.storage.len() - offset >= data.len());
 
-        self.storage.write(offset, data);
+        self.storage.write(offset, data)?;
 
-        let now_ms = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
+        // Use vfs::now() for deterministic time in simulation mode
+        let now_ms = now()
+            .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_else(|_| std::time::Duration::from_secs(0))
             .as_millis() as u64;
         self.last_touched_at.store(now_ms, Ordering::Relaxed);
+        Ok(())
     }
 
-    pub(crate) fn read(&self, offset: usize, dest: &mut [u8]) {
+    pub(crate) fn read(&self, offset: usize, dest: &mut [u8]) -> std::io::Result<()> {
         debug_assert!(offset + dest.len() <= self.storage.len());
-        self.storage.read(offset, dest);
+        self.storage.read(offset, dest)
     }
 
     pub(crate) fn flush(&self) -> std::io::Result<()> {

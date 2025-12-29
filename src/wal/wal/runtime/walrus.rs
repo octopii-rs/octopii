@@ -4,13 +4,13 @@ use crate::wal::wal::config::{
 };
 use crate::wal::wal::paths::WalPathManager;
 use crate::wal::wal::storage::{set_fsync_schedule, SharedMmapKeeper};
+use crate::wal::wal::vfs as fs;
 use std::collections::{HashMap, HashSet};
-use std::fs;
 use std::sync::mpsc;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 
 use super::allocator::{flush_check, BlockAllocator, BlockStateTracker, FileStateTracker};
-use super::background::start_background_workers;
+use super::background::{start_background_workers, BackgroundWorker};
 use super::reader::Reader;
 use super::writer::Writer;
 use super::WalIndex;
@@ -31,6 +31,8 @@ pub struct Walrus {
     pub(super) read_consistency: ReadConsistency,
     pub(super) fsync_schedule: FsyncSchedule,
     pub(super) paths: Arc<WalPathManager>,
+    #[cfg(feature = "simulation")]
+    pub(crate) background_worker: Arc<Mutex<BackgroundWorker>>,
 }
 
 impl Walrus {
@@ -79,19 +81,37 @@ impl Walrus {
 
         let allocator = Arc::new(BlockAllocator::new(paths.clone())?);
         let reader = Arc::new(Reader::new());
-        let tx_arc = start_background_workers(fsync_schedule);
+        let bg_handle = start_background_workers(fsync_schedule);
 
         let idx = WalIndex::new_in(&paths, "read_offset_idx")?;
+
+        #[cfg(feature = "simulation")]
         let instance = Walrus {
             allocator,
             reader,
             writers: RwLock::new(HashMap::new()),
-            fsync_tx: tx_arc,
+            fsync_tx: bg_handle.tx,
+            read_offset_index: Arc::new(RwLock::new(idx)),
+            read_consistency: mode,
+            fsync_schedule,
+            paths,
+            background_worker: bg_handle
+                .worker
+                .expect("simulation mode must return worker"),
+        };
+
+        #[cfg(not(feature = "simulation"))]
+        let instance = Walrus {
+            allocator,
+            reader,
+            writers: RwLock::new(HashMap::new()),
+            fsync_tx: bg_handle.tx,
             read_offset_index: Arc::new(RwLock::new(idx)),
             read_consistency: mode,
             fsync_schedule,
             paths,
         };
+
         instance.startup_chore()?;
         Ok(instance)
     }
@@ -298,5 +318,16 @@ impl Walrus {
             flush_check(f);
         }
         Ok(())
+    }
+
+    /// Manually tick the background worker in simulation mode.
+    ///
+    /// This allows deterministic control over when fsyncs and file cleanup occur,
+    /// rather than relying on the background thread's timing.
+    #[cfg(feature = "simulation")]
+    pub fn tick_background(&self) {
+        if let Ok(mut worker) = self.background_worker.lock() {
+            worker.tick();
+        }
     }
 }

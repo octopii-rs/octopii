@@ -3,6 +3,7 @@ mod config;
 mod paths;
 mod runtime;
 mod storage;
+pub mod vfs;
 
 pub use block::Entry;
 pub use config::{disable_fd_backend, enable_fd_backend, FsyncSchedule};
