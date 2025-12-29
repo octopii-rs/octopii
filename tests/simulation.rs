@@ -682,4 +682,18 @@ mod sim_tests {
             run_simulation_with_config(seed, 4000, error_rate, true);
         }
     }
+
+    #[test]
+    fn stress_random_seeds_15_20pct_long() {
+        // Deterministic pseudo-random seeds to avoid non-reproducible failures.
+        let mut s = 0xd1b54a32d192ed03u64;
+        for _ in 0..20 {
+            s ^= s >> 12;
+            s ^= s << 25;
+            s ^= s >> 27;
+            let seed = s.wrapping_mul(0x2545f4914f6cdd1d);
+            let error_rate = 0.15 + ((seed % 6) as f64) * 0.01;
+            run_simulation_with_config(seed, 8000, error_rate, true);
+        }
+    }
 }
