@@ -6,9 +6,8 @@
 // reproducible scenarios that verify WAL consistency through crashes
 // and I/O failures.
 //
-// IMPORTANT: These tests MUST run serially (not in parallel) because:
-// 1. They mutate thread-local simulation context and per-thread WAL roots.
-// 2. The harness assumes a single-threaded execution model per seed.
+// IMPORTANT: Each test owns its own thread-local simulation context and WAL root.
+// Tests may run in parallel as long as they use unique roots per test/seed.
 
 #[cfg(feature = "simulation")]
 mod sim_tests {
@@ -17,10 +16,6 @@ mod sim_tests {
     use octopii::wal::wal::{FsyncSchedule, ReadConsistency, Walrus};
     use std::collections::HashMap;
     use std::path::PathBuf;
-    use std::sync::Mutex;
-
-    // Global mutex to ensure tests run serially
-    static TEST_MUTEX: Mutex<()> = Mutex::new(());
 
     // ========================================================================
     // 1. Local Deterministic RNG (Xorshift)
@@ -503,9 +498,6 @@ mod sim_tests {
     // ========================================================================
 
     fn run_simulation_with_config(seed: u64, iterations: usize, error_rate: f64, partial_writes: bool) {
-        // Acquire global lock to ensure serial execution
-        let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-
         // Setup VFS simulation context
         sim::setup(SimConfig {
             seed,
@@ -731,7 +723,6 @@ mod sim_tests {
 
     #[test]
     fn strictly_at_once_checkpoint_persists_read_next() {
-        let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         sim::setup(SimConfig {
             seed: 4242,
             io_error_rate: 0.0,
@@ -777,7 +768,6 @@ mod sim_tests {
 
     #[test]
     fn strictly_at_once_checkpoint_false_replays_after_crash() {
-        let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         sim::setup(SimConfig {
             seed: 4243,
             io_error_rate: 0.0,
@@ -820,7 +810,6 @@ mod sim_tests {
 
     #[test]
     fn strictly_at_once_checkpoint_false_batch_read_replays_after_crash() {
-        let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         sim::setup(SimConfig {
             seed: 4244,
             io_error_rate: 0.0,

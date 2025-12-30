@@ -173,10 +173,16 @@ mod tests {
                 enable_partial_writes: true,
             });
 
+            let prev_rate = sim::get_io_error_rate();
+            let prev_partial = sim::get_partial_writes_enabled();
+            sim::set_io_error_rate(0.0);
+            sim::set_partial_writes_enabled(false);
             let root_dir = std::env::temp_dir()
                 .join(format!("walrus_strict_state_machine_{scenario}"));
             let _ = vfs::remove_dir_all(&root_dir);
             vfs::create_dir_all(&root_dir).expect("Failed to create walrus test dir");
+            sim::set_io_error_rate(prev_rate);
+            sim::set_partial_writes_enabled(prev_partial);
 
             let wal_path = root_dir.join("state_machine.log");
             let mut rng = sim::XorShift128::new(scenario_seed ^ 0xa5a5_a5a5_5a5a_5a5a);
