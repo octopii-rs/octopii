@@ -628,8 +628,14 @@ mod tests {
 
             let root_dir = std::env::temp_dir()
                 .join(format!("walrus_strict_wal_log_store_{scenario}"));
+            let prev_rate = sim::get_io_error_rate();
+            let prev_partial = sim::get_partial_writes_enabled();
+            sim::set_io_error_rate(0.0);
+            sim::set_partial_writes_enabled(false);
             let _ = vfs::remove_dir_all(&root_dir);
             vfs::create_dir_all(&root_dir).expect("Failed to create walrus test dir");
+            sim::set_io_error_rate(prev_rate);
+            sim::set_partial_writes_enabled(prev_partial);
 
             let wal_path = root_dir.join("wal_log_store.log");
             let mut rng = sim::XorShift128::new(scenario_seed ^ 0xd1b5_4a32_1a2b_3c4d);
@@ -801,7 +807,13 @@ mod tests {
             sim::set_io_error_rate(prev_rate);
             sim::set_partial_writes_enabled(prev_partial);
 
+            let prev_rate = sim::get_io_error_rate();
+            let prev_partial = sim::get_partial_writes_enabled();
+            sim::set_io_error_rate(0.0);
+            sim::set_partial_writes_enabled(false);
             let _ = vfs::remove_dir_all(&root_dir);
+            sim::set_io_error_rate(prev_rate);
+            sim::set_partial_writes_enabled(prev_partial);
             sim::teardown();
         }
     }
