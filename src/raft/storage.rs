@@ -116,7 +116,7 @@ fn read_all_topic_bytes(walrus: &crate::wal::Walrus, topic: &str) -> Vec<Vec<u8>
     let mut consecutive_empty_reads = 0;
 
     loop {
-        match walrus.batch_read_for_topic(topic, MAX_BATCH_BYTES, false) {
+        match walrus.batch_read_for_topic(topic, MAX_BATCH_BYTES, true) {
             Ok(batch) => {
                 if batch.is_empty() {
                     consecutive_empty_reads += 1;

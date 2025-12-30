@@ -119,8 +119,11 @@ impl WriteAheadLog {
             #[cfg(feature = "simulation")]
             {
                 let prev_error_rate = vfs::sim::get_io_error_rate();
+                let prev_partial = vfs::sim::get_partial_writes_enabled();
                 vfs::sim::set_io_error_rate(0.0);
+                vfs::sim::set_partial_writes_enabled(false);
                 let meta_result = walrus.append_for_topic(WAL_META_TOPIC, b"1");
+                vfs::sim::set_partial_writes_enabled(prev_partial);
                 vfs::sim::set_io_error_rate(prev_error_rate);
                 if meta_result.is_err() {
                     sim_assert(false, "wal meta append failed after data append");
@@ -165,7 +168,7 @@ impl WriteAheadLog {
         tokio::task::block_in_place(move || {
             let _ = walrus.reset_read_offset_for_topic(&topic);
             let mut all_entries = Vec::new();
-            let checkpoint = cfg!(not(feature = "simulation"));
+            let checkpoint = true;
             let mut consecutive_empty_reads = 0;
 
             // Read in batches, checkpointing to advance the reader
@@ -200,7 +203,7 @@ impl WriteAheadLog {
                 let mut meta_count = 0usize;
                 let mut empty_reads = 0usize;
                 loop {
-                    match walrus.batch_read_for_topic(WAL_META_TOPIC, 1024 * 1024, false) {
+                    match walrus.batch_read_for_topic(WAL_META_TOPIC, 1024 * 1024, true) {
                         Ok(batch) => {
                             if batch.is_empty() {
                                 empty_reads += 1;

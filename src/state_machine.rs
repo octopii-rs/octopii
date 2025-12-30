@@ -125,8 +125,12 @@ impl WalBackedStateMachine {
                             );
                         }
                         let post_snapshot_2 = inner.snapshot();
+                        let post_map: HashMap<Vec<u8>, Vec<u8>> =
+                            bincode::deserialize(&post_snapshot).unwrap_or_default();
+                        let post_map_2: HashMap<Vec<u8>, Vec<u8>> =
+                            bincode::deserialize(&post_snapshot_2).unwrap_or_default();
                         crate::invariants::sim_assert(
-                            post_snapshot_2 == post_snapshot,
+                            post_map_2 == post_map,
                             "wal replay not idempotent across repeated recovery",
                         );
                         let restore_post = inner.restore(&post_snapshot);

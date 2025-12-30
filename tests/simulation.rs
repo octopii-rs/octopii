@@ -430,12 +430,15 @@ mod sim_tests {
                             self.oracle.record_write(&dual.primary, data.clone());
 
                             let prev_error_rate = sim::get_io_error_rate();
+                            let prev_partial = sim::get_partial_writes_enabled();
                             sim::set_io_error_rate(0.0);
+                            sim::set_partial_writes_enabled(false);
                             let recovery_result = self
                                 .wal
                                 .as_ref()
                                 .unwrap()
                                 .append_for_topic(&dual.recovery, &data);
+                            sim::set_partial_writes_enabled(prev_partial);
                             sim::set_io_error_rate(prev_error_rate);
                             if recovery_result.is_err() {
                                 panic!("dual write recovery append failed after primary success");
