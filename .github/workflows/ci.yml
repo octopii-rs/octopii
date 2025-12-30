@@ -14,6 +14,6 @@ jobs:
           toolchain: stable
           cache: true
       - name: Run deterministic simulation tests
-        run: cargo test --features simulation --test simulation --no-fail-fast -- --test-threads=18
+        run: cargo test --features simulation --test simulation --no-fail-fast -- --test-threads=15
       - if: always()
         run: rm -rf /tmp/walrus_sim_* || true
