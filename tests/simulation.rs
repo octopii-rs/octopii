@@ -244,7 +244,7 @@ mod sim_tests {
             }
         }
 
-        fn init_wal(&mut self) {
+        fn init_wal(&mut self, restore_faults: bool) {
             if self.wal.is_some() {
                 return;
             }
@@ -265,8 +265,10 @@ mod sim_tests {
 
             self.wal = Some(w);
 
-            // Phase 5: Restore faults after successful initialization
-            sim::set_io_error_rate(self.target_error_rate);
+            if restore_faults {
+                // Phase 5: Restore faults after successful initialization
+                sim::set_io_error_rate(self.target_error_rate);
+            }
         }
 
         /// Get all readable topics (regular + dual topic primaries + dual topic recoveries)
@@ -294,7 +296,10 @@ mod sim_tests {
             // 3. Advance time (simulates downtime)
             sim::advance_time(std::time::Duration::from_secs(5));
 
-            // 4. Clear the WalIndex files to test DATA durability (not cursor persistence)
+            // 4. Disable faults during recovery/cleanup work
+            sim::set_io_error_rate(0.0);
+
+            // 5. Clear the WalIndex files to test DATA durability (not cursor persistence)
             let key_dir = self.root_dir.join(&self.current_key);
             if let Ok(entries) = vfs::read_dir(&key_dir) {
                 for entry in entries.flatten() {
@@ -307,25 +312,29 @@ mod sim_tests {
                 }
             }
 
-            // 5. IMPORTANT: After a crash, both Oracle and Walrus must start fresh.
+            // 6. IMPORTANT: After a crash, both Oracle and Walrus must start fresh.
             // The Oracle history represents what SHOULD be on disk, but after crash we
             // need to verify Walrus can recover all that data.
             // Reset Oracle cursors to 0 - we'll re-read everything from start
             self.oracle.reset_read_cursors();
 
-            // 6. Re-initialize (simulates recovery/startup scan)
-            self.init_wal();
+            // 7. Re-initialize (simulates recovery/startup scan)
+            self.init_wal(false);
 
-            // 7. Ensure read offsets are fully reset in Walrus too (durability-only check)
+            // 8. Ensure read offsets are fully reset in Walrus too (durability-only check)
             if let Some(wal) = self.wal.as_ref() {
                 for topic in self.all_readable_topics() {
-                    let _ = wal.reset_read_offset_for_topic(&topic);
+                    wal.reset_read_offset_for_topic(&topic)
+                        .expect("reset_read_offset_for_topic failed during recovery");
                 }
             }
+
+            // 9. Restore fault injection after recovery bookkeeping
+            sim::set_io_error_rate(self.target_error_rate);
         }
 
         fn run(&mut self, iterations: usize) {
-            self.init_wal();
+            self.init_wal(true);
 
             // Collect all readable topics once for efficiency
             let all_topics = self.all_readable_topics();
