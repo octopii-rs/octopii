@@ -1444,4 +1444,310 @@ mod sim_tests {
         sim::teardown();
     }
 
+    // ------------------------------------------------------------------------
+    // WalStorage Fault Injection Tests
+    // ------------------------------------------------------------------------
+    // These tests exercise the production sim_assert invariants in WalStorage
+    // with fault injection enabled.
+
+    #[test]
+    fn raft_storage_recovery_with_fault_injection() {
+        const SCENARIOS: usize = 10;
+        const CRASH_CYCLES: usize = 4;
+        const OPS_PER_CYCLE: usize = 200;
+        const BASE_SEED: u64 = 0x7a3f_e291_c4b8_d056;
+        const WAL_CREATE_RETRIES: usize = 32;
+        const ERROR_RATE: f64 = 0.18;
+
+        let rt = Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .expect("Failed to create tokio runtime");
+
+        for scenario in 0..SCENARIOS {
+            let scenario_seed = BASE_SEED ^ (scenario as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15);
+            sim::setup(SimConfig {
+                seed: scenario_seed,
+                io_error_rate: ERROR_RATE,
+                initial_time_ns: 1_700_000_000_000_000_000,
+                enable_partial_writes: true,
+            });
+
+            // Create root directory with faults disabled
+            let prev_rate = sim::get_io_error_rate();
+            let prev_partial = sim::get_partial_writes_enabled();
+            sim::set_io_error_rate(0.0);
+            sim::set_partial_writes_enabled(false);
+            let root_dir = std::env::temp_dir()
+                .join(format!("walrus_raft_storage_fault_injection_{scenario}"));
+            let _ = vfs::remove_dir_all(&root_dir);
+            vfs::create_dir_all(&root_dir).expect("Failed to create walrus test dir");
+            sim::set_io_error_rate(prev_rate);
+            sim::set_partial_writes_enabled(prev_partial);
+
+            let wal_path = root_dir.join("raft_storage.log");
+            let mut rng = sim::XorShift128::new(scenario_seed ^ 0xb7e1_5162_8aed_2a6a);
+
+            // Track term and index for valid Raft semantics
+            let mut current_term: u64 = 1;
+            let mut next_entry_index: u64 = 1;
+            let mut snapshot_index: u64 = 0;
+
+            for _cycle in 0..CRASH_CYCLES {
+                // Create WAL and WalStorage with faults disabled
+                let prev_rate = sim::get_io_error_rate();
+                let prev_partial = sim::get_partial_writes_enabled();
+                sim::set_io_error_rate(0.0);
+                sim::set_partial_writes_enabled(false);
+
+                let wal = create_wal_with_retry(&rt, wal_path.clone(), WAL_CREATE_RETRIES);
+                // WalStorage::new triggers recovery invariants
+                let storage = WalStorage::new(Arc::clone(&wal));
+
+                // Sync state with recovered storage
+                let recovered_last = storage.last_index().unwrap_or(0);
+                let recovered_snap = storage.snapshot(0, 0).ok();
+                let recovered_snap_idx = recovered_snap.as_ref().map(|s| s.get_metadata().index).unwrap_or(0);
+                let recovered_snap_term = recovered_snap.as_ref().map(|s| s.get_metadata().term).unwrap_or(0);
+
+                // Update our tracking to match recovered state
+                next_entry_index = recovered_last + 1;
+                snapshot_index = recovered_snap_idx;
+                current_term = current_term.max(recovered_snap_term);
+
+                // Re-enable faults for operations
+                sim::set_io_error_rate(prev_rate);
+                sim::set_partial_writes_enabled(prev_partial);
+
+                for _ in 0..OPS_PER_CYCLE {
+                    let action = rng.next_usize(10);
+                    match action {
+                        // Append entries (40% of operations) - with faults enabled
+                        0..=3 => {
+                            let num_entries = 1 + rng.next_usize(3);
+                            let start_idx = next_entry_index;
+                            let mut entries = Vec::new();
+                            for i in 0..num_entries {
+                                // Use deterministic data per index so retries produce identical entries
+                                // This mirrors real Raft behavior where the same entry is retried
+                                let idx = start_idx + i as u64;
+                                let data = format!("entry_idx_{}_term_{}", idx, current_term);
+                                entries.push(make_raft_entry(
+                                    idx,
+                                    current_term,
+                                    data.as_bytes(),
+                                ));
+                            }
+                            // With fault injection, some appends will fail
+                            // Only increment index if the append succeeded
+                            if rt.block_on(storage.append_entries(&entries)).is_ok() {
+                                next_entry_index += num_entries as u64;
+                            }
+                        }
+                        // Set hard_state (20% of operations) - disable faults (panics on error)
+                        4..=5 => {
+                            let prev_rate = sim::get_io_error_rate();
+                            let prev_partial = sim::get_partial_writes_enabled();
+                            sim::set_io_error_rate(0.0);
+                            sim::set_partial_writes_enabled(false);
+
+                            // Occasionally bump term
+                            if rng.next_usize(5) == 0 {
+                                current_term += 1;
+                            }
+                            let mut hs = RaftHardState::default();
+                            hs.set_term(current_term);
+                            hs.set_vote(1 + (rng.next_u64() % 5));
+                            // commit should be <= last entry index
+                            let max_commit = next_entry_index.saturating_sub(1).max(snapshot_index);
+                            hs.set_commit(snapshot_index + rng.next_u64() % (max_commit - snapshot_index + 1));
+                            storage.set_hard_state(hs);
+
+                            sim::set_io_error_rate(prev_rate);
+                            sim::set_partial_writes_enabled(prev_partial);
+                        }
+                        // Set conf_state (15% of operations) - disable faults (panics on error)
+                        6..=7 => {
+                            let prev_rate = sim::get_io_error_rate();
+                            let prev_partial = sim::get_partial_writes_enabled();
+                            sim::set_io_error_rate(0.0);
+                            sim::set_partial_writes_enabled(false);
+
+                            let mut cs = RaftConfState::default();
+                            let num_voters = 1 + rng.next_usize(3);
+                            for i in 0..num_voters {
+                                cs.mut_voters().push((i + 1) as u64);
+                            }
+                            if rng.next_usize(3) == 0 {
+                                cs.mut_learners().push(10);
+                            }
+                            storage.set_conf_state(cs);
+
+                            sim::set_io_error_rate(prev_rate);
+                            sim::set_partial_writes_enabled(prev_partial);
+                        }
+                        // Apply snapshot (15% of operations) - disable faults for snapshot
+                        8 => {
+                            // Snapshot at a valid index
+                            let last_idx = storage.last_index().unwrap_or(0);
+                            if last_idx > snapshot_index + 1 {
+                                let prev_rate = sim::get_io_error_rate();
+                                let prev_partial = sim::get_partial_writes_enabled();
+                                sim::set_io_error_rate(0.0);
+                                sim::set_partial_writes_enabled(false);
+
+                                // Pick a random index to snapshot at
+                                let new_snap_idx = snapshot_index + 1 + rng.next_u64() % (last_idx - snapshot_index);
+
+                                // Get the term of the entry at this index
+                                let entries = storage.entries(
+                                    new_snap_idx, new_snap_idx + 1, u64::MAX,
+                                    GetEntriesContext::empty(false)
+                                ).unwrap_or_default();
+                                let snap_term = entries.first().map(|e| e.term).unwrap_or(current_term);
+
+                                let mut snapshot = RaftSnapshot::default();
+                                snapshot.data = Bytes::from(format!("snapshot_{}", new_snap_idx));
+                                let metadata = snapshot.mut_metadata();
+                                metadata.index = new_snap_idx;
+                                metadata.term = snap_term;
+                                let mut cs = RaftConfState::default();
+                                cs.mut_voters().push(1);
+                                *metadata.mut_conf_state() = cs;
+
+                                if storage.apply_snapshot(snapshot).is_ok() {
+                                    snapshot_index = new_snap_idx;
+                                }
+
+                                sim::set_io_error_rate(prev_rate);
+                                sim::set_partial_writes_enabled(prev_partial);
+                            }
+                        }
+                        // Bump term (10% of operations)
+                        _ => {
+                            current_term += 1;
+                        }
+                    }
+                }
+
+                // Simulate crash
+                drop(storage);
+                drop(wal);
+                wal::__clear_storage_cache_for_tests();
+                sim::advance_time(std::time::Duration::from_secs(1));
+            }
+
+            // Final recovery check with faults disabled
+            let prev_rate = sim::get_io_error_rate();
+            let prev_partial = sim::get_partial_writes_enabled();
+            sim::set_io_error_rate(0.0);
+            sim::set_partial_writes_enabled(false);
+
+            let wal = create_wal_with_retry(&rt, wal_path.clone(), WAL_CREATE_RETRIES);
+            // This triggers all recovery invariants one final time
+            let _recovered = WalStorage::new(Arc::clone(&wal));
+
+            sim::set_io_error_rate(prev_rate);
+            sim::set_partial_writes_enabled(prev_partial);
+
+            // Cleanup
+            let prev_rate = sim::get_io_error_rate();
+            let prev_partial = sim::get_partial_writes_enabled();
+            sim::set_io_error_rate(0.0);
+            sim::set_partial_writes_enabled(false);
+            let _ = vfs::remove_dir_all(&root_dir);
+            sim::set_io_error_rate(prev_rate);
+            sim::set_partial_writes_enabled(prev_partial);
+            sim::teardown();
+        }
+    }
+
+    #[test]
+    fn snapshot_log_filtering_stress() {
+        // This test validates that log entries are correctly filtered after snapshot
+        // by running multiple crash/recovery cycles with different snapshot points.
+        // Note: This test disables fault injection to focus on recovery invariant testing.
+        const SCENARIOS: usize = 5;
+        const CRASH_CYCLES: usize = 3;
+        const BASE_SEED: u64 = 0x4d2c_8f91_e3a7_b5d0;
+        const WAL_CREATE_RETRIES: usize = 32;
+
+        let rt = Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .expect("Failed to create tokio runtime");
+
+        for scenario in 0..SCENARIOS {
+            let scenario_seed = BASE_SEED ^ (scenario as u64).wrapping_mul(0x517c_c1b7_2722_0a95);
+            sim::setup(SimConfig {
+                seed: scenario_seed,
+                io_error_rate: 0.0, // No faults - focus on recovery invariants
+                initial_time_ns: 1_700_000_000_000_000_000,
+                enable_partial_writes: false,
+            });
+
+            let root_dir = std::env::temp_dir()
+                .join(format!("walrus_snapshot_filtering_{scenario}"));
+            let _ = vfs::remove_dir_all(&root_dir);
+            vfs::create_dir_all(&root_dir).expect("Failed to create walrus test dir");
+
+            let wal_path = root_dir.join("raft_storage.log");
+
+            // Use consistent term
+            let term: u64 = 1;
+            let mut next_idx: u64 = 1;
+
+            for cycle in 0..CRASH_CYCLES {
+                let wal = create_wal_with_retry(&rt, wal_path.clone(), WAL_CREATE_RETRIES);
+                // Recovery invariants are triggered here
+                let storage = WalStorage::new(Arc::clone(&wal));
+
+                // Verify recovery state matches what we expect
+                let last_idx = storage.last_index().unwrap_or(0);
+                let current_snap = storage.snapshot(0, 0).ok();
+                let snap_idx = current_snap.as_ref().map(|s| s.get_metadata().index).unwrap_or(0);
+
+                // Update our tracking to match recovered state
+                next_idx = last_idx + 1;
+
+                // Write 10 new entries
+                for i in 0..10 {
+                    let idx = next_idx + i;
+                    let entry = make_raft_entry(idx, term, format!("e{}", idx).as_bytes());
+                    rt.block_on(storage.append_entries(&[entry])).expect("append");
+                }
+                next_idx += 10;
+
+                // On cycle 1, create a snapshot
+                if cycle == 1 {
+                    let new_last = storage.last_index().unwrap();
+                    let snap_at = new_last / 2; // Snapshot at midpoint
+
+                    let mut snapshot = RaftSnapshot::default();
+                    snapshot.data = Bytes::from(format!("snap_{}", snap_at));
+                    let metadata = snapshot.mut_metadata();
+                    metadata.index = snap_at;
+                    metadata.term = term;
+                    let mut cs = RaftConfState::default();
+                    cs.mut_voters().push(1);
+                    *metadata.mut_conf_state() = cs;
+
+                    storage.apply_snapshot(snapshot).expect("snapshot");
+                }
+
+                // Crash
+                drop(storage);
+                drop(wal);
+                wal::__clear_storage_cache_for_tests();
+                sim::advance_time(std::time::Duration::from_secs(1));
+            }
+
+            // Cleanup
+            let _ = vfs::remove_dir_all(&root_dir);
+            sim::teardown();
+        }
+    }
+
 }

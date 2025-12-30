@@ -236,6 +236,20 @@ pub struct StateMachineData {
     pub data: BTreeMap<String, String>,
 }
 
+/// In-memory state machine wrapper for OpenRaft.
+///
+/// **Important:** This state machine does NOT persist Raft metadata (`last_applied_log`,
+/// `last_membership`) to WAL. The metadata is held purely in memory and will be lost
+/// on process restart.
+///
+/// Durability depends entirely on the user's `StateMachine` implementation:
+/// - The user's `StateMachine` must persist its own state via Walrus (e.g., `KvStateMachine::with_wal()`)
+/// - On recovery, OpenRaft will replay committed entries to rebuild `last_applied_log`
+/// - Snapshots are rebuilt from the `StateMachine::snapshot()` method
+///
+/// This design is intentional: the log store (`WalLogStore`) persists all committed entries,
+/// so replaying them on startup reconstructs the correct state machine state. The trade-off
+/// is slightly slower startup (replay cost) in exchange for simpler state machine code.
 pub struct MemStateMachine {
     sm: StateMachine,
     state_machine: tokio::sync::RwLock<StateMachineData>,

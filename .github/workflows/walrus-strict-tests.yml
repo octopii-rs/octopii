@@ -25,5 +25,7 @@ jobs:
           cargo test --features simulation --test simulation openraft_peer_addr_wal_recovery_roundtrip -- --test-threads=1
           cargo test --features simulation --test simulation deterministic_random_seeds_smoke_8 -- --test-threads=1
           cargo test --features simulation --test simulation fault_injection_random_seeds_8 -- --test-threads=1
+          cargo test --features simulation --test simulation raft_storage_recovery_with_fault_injection -- --test-threads=1
+          cargo test --features simulation --test simulation snapshot_log_filtering_stress -- --test-threads=1
       - if: always()
-        run: rm -rf /tmp/walrus_strict_* /tmp/walrus_sim_* || true
+        run: rm -rf /tmp/walrus_strict_* /tmp/walrus_sim_* /tmp/walrus_raft_storage_* /tmp/walrus_snapshot_* || true
