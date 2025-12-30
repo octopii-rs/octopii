@@ -1,5 +1,6 @@
 use crate::wal::wal::block::Block;
 use crate::wal::wal::config::{debug_print, DEFAULT_BLOCK_SIZE, MAX_ALLOC, MAX_FILE_SIZE};
+use crate::invariants::sim_assert;
 use crate::wal::wal::paths::WalPathManager;
 use crate::wal::wal::storage::{SharedMmap, SharedMmapKeeper};
 use std::cell::UnsafeCell;
@@ -101,6 +102,10 @@ impl BlockAllocator {
         }
         let alloc_units = (want_bytes + DEFAULT_BLOCK_SIZE - 1) / DEFAULT_BLOCK_SIZE;
         let alloc_size = alloc_units * DEFAULT_BLOCK_SIZE;
+        sim_assert(
+            alloc_size % DEFAULT_BLOCK_SIZE == 0,
+            "alloc size not aligned to default block size",
+        );
         debug_print!(
             "[alloc] alloc_block: want_bytes={}, units={}, size={}",
             want_bytes,
@@ -132,6 +137,12 @@ impl BlockAllocator {
             mmap: data.mmap.clone(),
             used: 0,
         };
+        sim_assert(ret.offset % DEFAULT_BLOCK_SIZE == 0, "block offset not aligned");
+        sim_assert(
+            ret.offset + ret.limit <= MAX_FILE_SIZE,
+            "block exceeds max file size",
+        );
+        sim_assert(ret.limit >= want_bytes, "block limit smaller than requested");
         // register the new block before handing it out
         BlockStateTracker::register_block(ret.id as usize, &ret.file_path);
         FileStateTracker::register_file_if_absent(&ret.file_path);
@@ -182,22 +193,30 @@ pub(super) fn flush_check(file_path: String) {
     if let Some((locked, checkpointed, total, fully_allocated)) =
         FileStateTracker::get_state_snapshot(&file_path)
     {
+        sim_assert(
+            locked <= total,
+            "file state has more locked blocks than total",
+        );
+        sim_assert(
+            checkpointed <= total,
+            "file state has more checkpointed blocks than total",
+        );
         let ready_to_delete = fully_allocated && locked == 0 && total > 0 && checkpointed >= total;
         if ready_to_delete {
-        #[cfg(feature = "simulation")]
-        {
-            if let Some(tx) = crate::wal::wal::runtime::get_deletion_tx() {
-                let _ = tx.send(file_path);
+            #[cfg(feature = "simulation")]
+            {
+                if let Some(tx) = crate::wal::wal::runtime::get_deletion_tx() {
+                    let _ = tx.send(file_path);
+                }
             }
-        }
-        #[cfg(not(feature = "simulation"))]
-        {
-            if let Some(tx) = DELETION_TX.get() {
-                let _ = tx.send(file_path);
+            #[cfg(not(feature = "simulation"))]
+            {
+                if let Some(tx) = DELETION_TX.get() {
+                    let _ = tx.send(file_path);
+                }
             }
         }
     }
-}
 }
 
 struct BlockState {
@@ -258,6 +277,8 @@ impl BlockStateTracker {
                 None
             }
         });
+        #[cfg(feature = "simulation")]
+        sim_assert(path_opt.is_some(), "checkpointed block not registered");
 
         #[cfg(not(feature = "simulation"))]
         let path_opt = {
@@ -375,7 +396,9 @@ impl FileStateTracker {
                 FILE_STATE_MAP.with(|map| {
                     let map = map.borrow();
                     if let Some(st) = map.get(&path) {
-                        st.locked_block_ctr.fetch_add(1, Ordering::AcqRel);
+                        let total = st.total_blocks.load(Ordering::Acquire);
+                        let next = st.locked_block_ctr.fetch_add(1, Ordering::AcqRel) + 1;
+                        sim_assert(next <= total, "locked blocks exceed total");
                     }
                 });
             }
@@ -398,6 +421,8 @@ impl FileStateTracker {
                 FILE_STATE_MAP.with(|map| {
                     let map = map.borrow();
                     if let Some(st) = map.get(&path) {
+                        let prev = st.locked_block_ctr.load(Ordering::Acquire);
+                        sim_assert(prev > 0, "unlock on zero locked blocks");
                         st.locked_block_ctr.fetch_sub(1, Ordering::AcqRel);
                     }
                 });
@@ -421,7 +446,9 @@ impl FileStateTracker {
             FILE_STATE_MAP.with(|map| {
                 let map = map.borrow();
                 if let Some(st) = map.get(file_path) {
-                    st.checkpoint_block_ctr.fetch_add(1, Ordering::AcqRel);
+                    let total = st.total_blocks.load(Ordering::Acquire);
+                    let next = st.checkpoint_block_ctr.fetch_add(1, Ordering::AcqRel) + 1;
+                    sim_assert(next <= total, "checkpointed blocks exceed total");
                 }
             });
         }

@@ -1,6 +1,7 @@
 use crate::wal::wal::config::{
     checksum64, debug_print, ENTRY_TRAILER_MAGIC, ENTRY_TRAILER_SIZE, PREFIX_META_SIZE,
 };
+use crate::invariants::sim_assert;
 use crate::wal::wal::storage::SharedMmap;
 use rkyv::{Archive, Deserialize, Serialize};
 use std::sync::Arc;
@@ -169,6 +170,12 @@ impl Block {
         in_block_offset: u64,
         data_len: usize,
     ) -> std::io::Result<()> {
+        sim_assert(
+            in_block_offset
+                + (PREFIX_META_SIZE + data_len + ENTRY_TRAILER_SIZE) as u64
+                <= self.limit,
+            "invalidate_entry out of bounds",
+        );
         let header_offset = self.offset + in_block_offset;
         let mut zero_header = [0u8; HEADER_CHECKSUM_SIZE];
         self.mmap.write(header_offset as usize, &zero_header)?;
@@ -241,6 +248,11 @@ impl Block {
             )
         })?;
         let actual_entry_size = meta.read_size;
+        let total_size = PREFIX_META_SIZE + actual_entry_size + ENTRY_TRAILER_SIZE;
+        sim_assert(
+            in_block_offset + total_size as u64 <= self.limit,
+            "entry exceeds block limit",
+        );
 
         // Step 4: Read the payload data
         let new_offset = file_offset + PREFIX_META_SIZE as u64;

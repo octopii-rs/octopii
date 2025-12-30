@@ -11,6 +11,7 @@ use crate::openraft::types::{AppEntry, AppNodeId, AppResponse, AppTypeConfig};
 use crate::runtime::OctopiiRuntime;
 use crate::state_machine::{KvStateMachine, StateMachine};
 use crate::wal::WriteAheadLog;
+use crate::invariants::sim_assert;
 use bytes::Bytes;
 use once_cell::sync::Lazy;
 use openraft::impls::BasicNode;
@@ -75,6 +76,21 @@ async fn load_peer_addr_records(wal: &Arc<WriteAheadLog>) -> HashMap<u64, Socket
             if let Ok(record) = bincode::deserialize::<PeerAddrRecord>(&raw) {
                 map.insert(record.peer_id, record.addr);
             }
+        }
+    }
+    #[cfg(feature = "simulation")]
+    {
+        if let Ok(entries) = wal.read_all().await {
+            let mut verify = HashMap::new();
+            for raw in entries {
+                if let Ok(record) = bincode::deserialize::<PeerAddrRecord>(&raw) {
+                    verify.insert(record.peer_id, record.addr);
+                }
+            }
+            sim_assert(
+                verify == map,
+                "peer addr WAL recovery not idempotent across replay",
+            );
         }
     }
     map
@@ -321,7 +337,28 @@ impl OpenRaftNode {
         }
         register_global_peer_addr(self.peer_namespace.as_str(), peer_id, addr);
         if needs_persist {
-            append_peer_addr_record(&self.peer_addr_wal, peer_id, addr).await?;
+            let append_res = append_peer_addr_record(&self.peer_addr_wal, peer_id, addr).await;
+            if append_res.is_err() {
+                sim_assert(false, "peer addr WAL append failed after map update");
+            }
+            append_res?;
+            #[cfg(feature = "simulation")]
+            {
+                if let Ok(entries) = self.peer_addr_wal.read_all().await {
+                    let mut last_addr: Option<SocketAddr> = None;
+                    for raw in entries {
+                        if let Ok(record) = bincode::deserialize::<PeerAddrRecord>(&raw) {
+                            if record.peer_id == peer_id {
+                                last_addr = Some(record.addr);
+                            }
+                        }
+                    }
+                    sim_assert(
+                        last_addr == Some(addr),
+                        "peer addr WAL last record mismatch after append",
+                    );
+                }
+            }
         }
         Ok(())
     }

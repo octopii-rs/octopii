@@ -98,11 +98,41 @@ impl WalBackedStateMachine {
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async move {
                 if let Ok(entries) = wal.read_all().await {
-                    for entry in entries {
-                        let result = inner.apply(&entry);
+                    #[cfg(feature = "simulation")]
+                    let pre_snapshot = inner.snapshot();
+                    #[cfg(feature = "simulation")]
+                    let replay_entries = entries.clone();
+                    for entry in &entries {
+                        let result = inner.apply(entry);
                         crate::invariants::sim_assert(
                             result.is_ok(),
                             "wal replay apply failed",
+                        );
+                    }
+                    #[cfg(feature = "simulation")]
+                    {
+                        let post_snapshot = inner.snapshot();
+                        let restore_result = inner.restore(&pre_snapshot);
+                        crate::invariants::sim_assert(
+                            restore_result.is_ok(),
+                            "wal replay restore failed",
+                        );
+                        for entry in &replay_entries {
+                            let result = inner.apply(entry);
+                            crate::invariants::sim_assert(
+                                result.is_ok(),
+                                "wal replay apply failed on second pass",
+                            );
+                        }
+                        let post_snapshot_2 = inner.snapshot();
+                        crate::invariants::sim_assert(
+                            post_snapshot_2 == post_snapshot,
+                            "wal replay not idempotent across repeated recovery",
+                        );
+                        let restore_post = inner.restore(&post_snapshot);
+                        crate::invariants::sim_assert(
+                            restore_post.is_ok(),
+                            "wal replay restore to post state failed",
                         );
                     }
                 }

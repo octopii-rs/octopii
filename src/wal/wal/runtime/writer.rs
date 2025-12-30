@@ -1,5 +1,6 @@
 use super::allocator::{BlockAllocator, FileStateTracker};
 use super::reader::Reader;
+use crate::invariants::sim_assert;
 use crate::wal::wal::block::Block;
 #[cfg(target_os = "linux")]
 use crate::wal::wal::block::Metadata;
@@ -28,6 +29,13 @@ pub(super) struct Writer {
     current_offset: Mutex<u64>,
     fsync_schedule: FsyncSchedule,
     is_batch_writing: AtomicBool,
+}
+
+#[cfg(feature = "simulation")]
+fn invalidate_entry_sim(block: &Block, offset: u64, len: usize) {
+    if block.invalidate_entry(offset, len).is_err() {
+        sim_assert(false, "failed to invalidate entry after error");
+    }
 }
 
 impl Writer {
@@ -80,6 +88,7 @@ impl Writer {
             FileStateTracker::set_block_unlocked(block.id as usize);
             let mut sealed = block.clone();
             sealed.used = *cur;
+            sim_assert(sealed.used <= sealed.limit, "sealed block used exceeds limit");
             sealed.mmap.flush()?;
             let _ = self.reader.append_block_to_chain(&self.col, sealed);
             debug_print!("[writer] appended sealed block to chain: col={}", self.col);
@@ -125,7 +134,7 @@ impl Writer {
                         let prev_partial = sim::get_partial_writes_enabled();
                         sim::set_io_error_rate(0.0);
                         sim::set_partial_writes_enabled(false);
-                        let _ = block.invalidate_entry(write_offset, data.len());
+                        invalidate_entry_sim(&block, write_offset, data.len());
                         sim::set_io_error_rate(prev_rate);
                         sim::set_partial_writes_enabled(prev_partial);
                     }
@@ -149,7 +158,7 @@ impl Writer {
                         let prev_partial = sim::get_partial_writes_enabled();
                         sim::set_io_error_rate(0.0);
                         sim::set_partial_writes_enabled(false);
-                        let _ = block.invalidate_entry(write_offset, data.len());
+                        invalidate_entry_sim(&block, write_offset, data.len());
                         sim::set_io_error_rate(prev_rate);
                         sim::set_partial_writes_enabled(prev_partial);
                     }
@@ -174,7 +183,7 @@ impl Writer {
                             let prev_partial = sim::get_partial_writes_enabled();
                             sim::set_io_error_rate(0.0);
                             sim::set_partial_writes_enabled(false);
-                            let _ = block.invalidate_entry(write_offset, data.len());
+                            invalidate_entry_sim(&block, write_offset, data.len());
                             sim::set_io_error_rate(prev_rate);
                             sim::set_partial_writes_enabled(prev_partial);
                         }
@@ -187,6 +196,7 @@ impl Writer {
                     }
                 }
                 *cur += need;
+                sim_assert(*cur <= block.limit, "write advanced past block limit");
             }
             FsyncSchedule::Milliseconds(_) => {
                 block.write(write_offset, data, &self.col, next_block_start)?;
@@ -199,6 +209,7 @@ impl Writer {
                     write_offset + need
                 );
                 *cur += need;
+                sim_assert(*cur <= block.limit, "write advanced past block limit");
                 // Send to background flusher
                 let _ = self.publisher.send(block.file_path.clone());
             }
@@ -213,6 +224,7 @@ impl Writer {
                     write_offset + need
                 );
                 *cur += need;
+                sim_assert(*cur <= block.limit, "write advanced past block limit");
                 // No fsyncing at all - maximum throughput, no durability guarantees
                 debug_print!("[writer] no fsync: col={}, block_id={}", self.col, block.id);
             }
@@ -310,6 +322,10 @@ impl Writer {
             let available = block.limit - planning_offset;
 
             if available >= need {
+                sim_assert(
+                    planning_offset + need <= block.limit,
+                    "batch plan exceeded block limit",
+                );
                 // Fits in current block
                 write_plan.push((block.clone(), planning_offset, batch_idx));
                 planning_offset += need;
@@ -333,6 +349,7 @@ impl Writer {
                 // SAFETY: We hold locks, so this writer has exclusive ownership
                 let new_block =
                     unsafe { self.allocator.alloc_block(need.max(DEFAULT_BLOCK_SIZE))? };
+                sim_assert(new_block.limit >= need, "allocated block too small for batch entry");
                 debug_print!("[batch] allocated new block_id={}", new_block.id);
 
                 revert_info.allocated_block_ids.push(new_block.id);
@@ -340,6 +357,10 @@ impl Writer {
                 planning_offset = 0;
             }
         }
+        sim_assert(
+            planning_offset <= block.limit,
+            "batch planning offset exceeds block limit",
+        );
 
         debug_print!(
             "[batch] planning complete: {} write operations across {} blocks",
@@ -394,7 +415,7 @@ impl Writer {
                     sim::set_io_error_rate(0.0);
                     sim::set_partial_writes_enabled(false);
                     for (blk, offset, data_idx) in write_plan.iter() {
-                        let _ = blk.invalidate_entry(*offset, batch[*data_idx].len());
+                        invalidate_entry_sim(blk, *offset, batch[*data_idx].len());
                     }
                     sim::set_io_error_rate(prev_rate);
                     sim::set_partial_writes_enabled(prev_partial);
@@ -429,7 +450,7 @@ impl Writer {
                         sim::set_io_error_rate(0.0);
                         sim::set_partial_writes_enabled(false);
                         for (blk, offset, data_idx) in write_plan.iter() {
-                            let _ = blk.invalidate_entry(*offset, batch[*data_idx].len());
+                            invalidate_entry_sim(blk, *offset, batch[*data_idx].len());
                         }
                         sim::set_io_error_rate(prev_rate);
                         sim::set_partial_writes_enabled(prev_partial);
@@ -459,7 +480,7 @@ impl Writer {
                         sim::set_io_error_rate(0.0);
                         sim::set_partial_writes_enabled(false);
                         for (blk, offset, data_idx) in write_plan.iter() {
-                            let _ = blk.invalidate_entry(*offset, batch[*data_idx].len());
+                            invalidate_entry_sim(blk, *offset, batch[*data_idx].len());
                         }
                         sim::set_io_error_rate(prev_rate);
                         sim::set_partial_writes_enabled(prev_partial);
@@ -500,7 +521,7 @@ impl Writer {
                             sim::set_io_error_rate(0.0);
                             sim::set_partial_writes_enabled(false);
                             for (blk, offset, data_idx) in write_plan.iter() {
-                                let _ = blk.invalidate_entry(*offset, batch[*data_idx].len());
+                                invalidate_entry_sim(blk, *offset, batch[*data_idx].len());
                             }
                             sim::set_io_error_rate(prev_rate);
                             sim::set_partial_writes_enabled(prev_partial);
@@ -669,6 +690,18 @@ impl Writer {
                     for block_id in revert_info.allocated_block_ids.iter() {
                         FileStateTracker::set_block_unlocked(*block_id as usize);
                     }
+                    #[cfg(feature = "simulation")]
+                    {
+                        let prev_rate = sim::get_io_error_rate();
+                        let prev_partial = sim::get_partial_writes_enabled();
+                        sim::set_io_error_rate(0.0);
+                        sim::set_partial_writes_enabled(false);
+                        for (blk, offset, data_idx) in write_plan.iter() {
+                            invalidate_entry_sim(blk, *offset, batch[*data_idx].len());
+                        }
+                        sim::set_io_error_rate(prev_rate);
+                        sim::set_partial_writes_enabled(prev_partial);
+                    }
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::Other,
                         "batch write failed, rolled back",
@@ -690,6 +723,18 @@ impl Writer {
                         let data = batch[*data_idx];
                         let checksum = checksum64(data);
                         if let Err(e) = blk.write_trailer(*offset, data.len(), checksum) {
+                            #[cfg(feature = "simulation")]
+                            {
+                                let prev_rate = sim::get_io_error_rate();
+                                let prev_partial = sim::get_partial_writes_enabled();
+                                sim::set_io_error_rate(0.0);
+                                sim::set_partial_writes_enabled(false);
+                                for (blk, offset, data_idx) in write_plan.iter() {
+                                    invalidate_entry_sim(blk, *offset, batch[*data_idx].len());
+                                }
+                                sim::set_io_error_rate(prev_rate);
+                                sim::set_partial_writes_enabled(prev_partial);
+                            }
                             *cur_offset = revert_info.original_offset;
                             for block_id in revert_info.allocated_block_ids.iter() {
                                 FileStateTracker::set_block_unlocked(*block_id as usize);
@@ -712,6 +757,18 @@ impl Writer {
                                 *cur_offset = revert_info.original_offset;
                                 for block_id in revert_info.allocated_block_ids.iter() {
                                     FileStateTracker::set_block_unlocked(*block_id as usize);
+                                }
+                                #[cfg(feature = "simulation")]
+                                {
+                                    let prev_rate = sim::get_io_error_rate();
+                                    let prev_partial = sim::get_partial_writes_enabled();
+                                    sim::set_io_error_rate(0.0);
+                                    sim::set_partial_writes_enabled(false);
+                                    for (blk, offset, data_idx) in write_plan.iter() {
+                                        invalidate_entry_sim(blk, *offset, batch[*data_idx].len());
+                                    }
+                                    sim::set_io_error_rate(prev_rate);
+                                    sim::set_partial_writes_enabled(prev_partial);
                                 }
                                 return Err(e);
                             }
@@ -736,6 +793,18 @@ impl Writer {
                 *cur_offset = revert_info.original_offset;
                 for block_id in revert_info.allocated_block_ids.iter() {
                     FileStateTracker::set_block_unlocked(*block_id as usize);
+                }
+                #[cfg(feature = "simulation")]
+                {
+                    let prev_rate = sim::get_io_error_rate();
+                    let prev_partial = sim::get_partial_writes_enabled();
+                    sim::set_io_error_rate(0.0);
+                    sim::set_partial_writes_enabled(false);
+                    for (blk, offset, data_idx) in write_plan.iter() {
+                        invalidate_entry_sim(blk, *offset, batch[*data_idx].len());
+                    }
+                    sim::set_io_error_rate(prev_rate);
+                    sim::set_partial_writes_enabled(prev_partial);
                 }
                 Err(e)
             }

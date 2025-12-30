@@ -2,6 +2,7 @@ use crate::wal::wal::block::{Block, Metadata};
 use crate::wal::wal::config::{
     checksum64, debug_print, FsyncSchedule, DEFAULT_BLOCK_SIZE, MAX_FILE_SIZE, PREFIX_META_SIZE,
 };
+use crate::invariants::sim_assert;
 use crate::wal::wal::paths::WalPathManager;
 use crate::wal::wal::storage::{set_fsync_schedule, SharedMmapKeeper};
 use crate::wal::wal::vfs as fs;
@@ -278,8 +279,13 @@ impl Walrus {
                 loop {
                     match block_stub.read(in_block_off) {
                         Ok((_entry, consumed)) => {
+                            sim_assert(consumed > 0, "startup recovery consumed zero bytes");
                             used += consumed as u64;
                             in_block_off += consumed as u64;
+                            sim_assert(
+                                in_block_off <= DEFAULT_BLOCK_SIZE,
+                                "startup recovery read past block limit",
+                            );
                             #[cfg(feature = "simulation")]
                             {
                                 entry_count_in_block += 1;
@@ -296,6 +302,7 @@ impl Walrus {
                     block_offset += DEFAULT_BLOCK_SIZE;
                     continue;
                 }
+                sim_assert(used <= DEFAULT_BLOCK_SIZE, "startup recovery used exceeds block size");
 
                 let block = Block {
                     id: next_block_id as u64,
@@ -305,6 +312,7 @@ impl Walrus {
                     mmap: mmap.clone(),
                     used,
                 };
+                sim_assert(block.used <= block.limit, "startup recovery block used exceeds limit");
                 // register and append
                 BlockStateTracker::register_block(next_block_id, file_path);
                 FileStateTracker::add_block_to_file_state(file_path);
@@ -377,9 +385,17 @@ impl Walrus {
                         if ib < info.chain.len() {
                             let used = info.chain[ib].used;
                             info.cur_block_offset = pos.cur_block_offset.min(used);
+                            sim_assert(
+                                info.cur_block_offset <= used,
+                                "hydrated offset exceeds block.used",
+                            );
                         } else {
                             info.cur_block_offset = 0;
                         }
+                        sim_assert(
+                            info.cur_block_idx <= info.chain.len(),
+                            "hydrated index exceeds chain length",
+                        );
                         for i in 0..ib {
                             BlockStateTracker::set_checkpointed_true(info.chain[i].id as usize);
                         }

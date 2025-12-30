@@ -1,4 +1,5 @@
 use crate::error::Result;
+use crate::invariants::sim_assert;
 use crate::wal::WriteAheadLog;
 use bytes::Bytes;
 use raft::{prelude::*, Storage};
@@ -8,6 +9,8 @@ use std::sync::{Arc, RwLock as StdRwLock};
 // Walrus topic names for different Raft state components
 const TOPIC_LOG: &str = "raft_log";
 const TOPIC_LOG_RECOVERY: &str = "raft_log_recovery"; // Recovery-only topic (fresh cursor on restart)
+#[cfg(feature = "simulation")]
+const TOPIC_LOG_META: &str = "raft_log_meta";
 const TOPIC_HARD_STATE: &str = "raft_hard_state";
 const TOPIC_HARD_STATE_RECOVERY: &str = "raft_hard_state_recovery"; // Recovery-only topic
 const TOPIC_CONF_STATE: &str = "raft_conf_state";
@@ -96,6 +99,42 @@ struct SnapshotData {
     data: Vec<u8>,
 }
 
+#[cfg(feature = "simulation")]
+#[derive(Archive, Deserialize, Serialize, Debug, Clone)]
+struct LogMeta {
+    index: u64,
+    term: u64,
+}
+
+#[cfg(feature = "simulation")]
+fn read_all_topic_bytes(walrus: &crate::wal::Walrus, topic: &str) -> Vec<Vec<u8>> {
+    const MAX_BATCH_BYTES: usize = 10_000_000;
+    let _ = walrus.reset_read_offset_for_topic(topic);
+    let mut all_entries = Vec::new();
+    let mut consecutive_empty_reads = 0;
+
+    loop {
+        match walrus.batch_read_for_topic(topic, MAX_BATCH_BYTES, true) {
+            Ok(batch) => {
+                if batch.is_empty() {
+                    consecutive_empty_reads += 1;
+                    if consecutive_empty_reads >= 2 {
+                        break;
+                    }
+                    continue;
+                }
+                consecutive_empty_reads = 0;
+                for entry in batch {
+                    all_entries.push(entry.data);
+                }
+            }
+            Err(_) => break,
+        }
+    }
+
+    all_entries
+}
+
 /// Raft storage implementation backed by WAL
 pub struct WalStorage {
     wal: Arc<WriteAheadLog>,
@@ -180,6 +219,114 @@ impl WalStorage {
             if !entries.is_empty() {
                 *self.entries.write().unwrap() = entries.clone();
                 tracing::info!("✓ Recovered {} log entries", entries.len());
+            }
+        }
+
+        #[cfg(feature = "simulation")]
+        {
+            let walrus = &self.wal.walrus;
+            let log_main = read_all_topic_bytes(walrus, TOPIC_LOG);
+            let log_recovery = read_all_topic_bytes(walrus, TOPIC_LOG_RECOVERY);
+            sim_assert(
+                log_main == log_recovery,
+                "raft log topics diverged between main and recovery",
+            );
+
+            let hs_main = read_all_topic_bytes(walrus, TOPIC_HARD_STATE);
+            let hs_recovery = read_all_topic_bytes(walrus, TOPIC_HARD_STATE_RECOVERY);
+            sim_assert(
+                hs_main == hs_recovery,
+                "hard_state topics diverged between main and recovery",
+            );
+
+            let cs_main = read_all_topic_bytes(walrus, TOPIC_CONF_STATE);
+            let cs_recovery = read_all_topic_bytes(walrus, TOPIC_CONF_STATE_RECOVERY);
+            sim_assert(
+                cs_main == cs_recovery,
+                "conf_state topics diverged between main and recovery",
+            );
+
+            let meta_bytes = read_all_topic_bytes(walrus, TOPIC_LOG_META);
+            let mut meta_last_index = 0u64;
+            let mut meta_last_term = 0u64;
+            let mut meta_snapshot_term: Option<u64> = None;
+            let mut meta_expected_next: Option<u64> = None;
+            for raw in meta_bytes {
+                let archived = unsafe { rkyv::archived_root::<LogMeta>(&raw) };
+                let meta: LogMeta = match archived.deserialize(&mut rkyv::Infallible) {
+                    Ok(m) => m,
+                    Err(_) => {
+                        sim_assert(false, "failed to deserialize raft log meta");
+                        continue;
+                    }
+                };
+                if meta_last_index > 0 {
+                    sim_assert(
+                        meta.index > meta_last_index,
+                        "raft log meta not strictly increasing",
+                    );
+                }
+                if meta.index == snapshot_index {
+                    meta_snapshot_term = Some(meta.term);
+                }
+                let expected = meta_expected_next.unwrap_or_else(|| meta.index);
+                if meta_expected_next.is_some() {
+                    sim_assert(
+                        meta.index == expected,
+                        "raft log meta contains a gap",
+                    );
+                }
+                meta_expected_next = Some(meta.index.saturating_add(1));
+                meta_last_index = meta.index;
+                meta_last_term = meta.term;
+            }
+
+            let snapshot = self.snapshot.read().unwrap();
+            let snapshot_index = snapshot.get_metadata().index;
+            let snapshot_term = snapshot.get_metadata().term;
+            let hard_state = self.hard_state.read().unwrap();
+            let entries = self.entries.read().unwrap();
+            let last_log_index = entries
+                .last()
+                .map(|e| e.index)
+                .unwrap_or(snapshot_index);
+            if snapshot_index > 0 {
+                sim_assert(snapshot_term > 0, "snapshot index set without term");
+                sim_assert(
+                    hard_state.commit >= snapshot_index,
+                    "snapshot index beyond hard_state.commit",
+                );
+            }
+            sim_assert(
+                hard_state.commit <= last_log_index,
+                "hard_state.commit beyond last log index",
+            );
+            if meta_last_index > 0 {
+                sim_assert(
+                    hard_state.commit <= meta_last_index,
+                    "hard_state.commit beyond last meta log index",
+                );
+                if snapshot_index > 0 {
+                    sim_assert(
+                        snapshot_index <= meta_last_index,
+                        "snapshot index beyond last meta log index",
+                    );
+                }
+                if let Some(meta_term) = meta_snapshot_term {
+                    sim_assert(
+                        snapshot_term == meta_term,
+                        "snapshot term mismatches meta term at snapshot index",
+                    );
+                }
+            }
+            if hard_state.commit > snapshot_index {
+                sim_assert(!entries.is_empty(), "hard_state.commit beyond snapshot with no log");
+                if let Some(first) = entries.first() {
+                    sim_assert(
+                        first.index <= hard_state.commit,
+                        "hard_state.commit before first recovered log entry",
+                    );
+                }
             }
         }
 
@@ -285,6 +432,10 @@ impl WalStorage {
                     let metadata = snapshot.mut_metadata();
                     metadata.index = snap_data.metadata.index;
                     metadata.term = snap_data.metadata.term;
+                    sim_assert(
+                        metadata.index == 0 || metadata.term > 0,
+                        "snapshot metadata index set without term",
+                    );
                     *metadata.mut_conf_state() = (&snap_data.metadata.conf_state).into();
 
                     latest = Some(snapshot);
@@ -308,6 +459,7 @@ impl WalStorage {
         // Get snapshot index to determine which entries to keep
         let snapshot = self.snapshot.read().unwrap();
         let snapshot_index = snapshot.get_metadata().index;
+        let snapshot_term = snapshot.get_metadata().term;
 
         tracing::info!(
             "Recovering log entries (snapshot at index {}) using batch reads",
@@ -319,6 +471,8 @@ impl WalStorage {
         // but only KEEP entries after the snapshot index in memory
         let mut total_entries = 0;
         let mut compacted_entries = 0;
+        let mut last_index = 0u64;
+        let mut expected_next: Option<u64> = None;
 
         // Use batch reads for 10-50x faster recovery
         const MAX_BATCH_BYTES: usize = 10_000_000; // 10MB per batch
@@ -339,7 +493,31 @@ impl WalStorage {
                             protobuf::Message::parse_from_bytes(&entry_data.data);
                         match parse_result {
                             Ok(raft_entry) => {
+                                if last_index > 0 {
+                                    sim_assert(
+                                        raft_entry.index > last_index,
+                                        "raft log recovery entries not strictly increasing",
+                                    );
+                                }
+                                last_index = raft_entry.index;
+                                if snapshot_index > 0 && raft_entry.index == snapshot_index {
+                                    sim_assert(
+                                        raft_entry.term == snapshot_term,
+                                        "snapshot term mismatches log entry term at snapshot index",
+                                    );
+                                }
                                 if raft_entry.index > snapshot_index {
+                                    sim_assert(
+                                        raft_entry.index > snapshot_index,
+                                        "kept log entry at or before snapshot index",
+                                    );
+                                    let expected = expected_next
+                                        .unwrap_or_else(|| snapshot_index.saturating_add(1));
+                                    sim_assert(
+                                        raft_entry.index == expected,
+                                        "raft log recovery contains a gap after snapshot",
+                                    );
+                                    expected_next = Some(expected.saturating_add(1));
                                     // KEEP entries after snapshot - needed for recovery
                                     entries.push(raft_entry);
                                 } else {
@@ -450,9 +628,28 @@ impl WalStorage {
         // to avoid io_uring initialization in resource-constrained environments
         let walrus = &self.wal.walrus;
         tokio::task::block_in_place(|| {
-            for data in &serialized {
-                walrus.append_for_topic(TOPIC_LOG, data)?;
-                walrus.append_for_topic(TOPIC_LOG_RECOVERY, data)?;
+            for (entry, data) in entries.iter().zip(serialized.iter()) {
+                let main_res = walrus.append_for_topic(TOPIC_LOG, data);
+                if let Err(e) = main_res {
+                    return Err(e.into());
+                }
+                let recovery_res = walrus.append_for_topic(TOPIC_LOG_RECOVERY, data);
+                if let Err(e) = recovery_res {
+                    sim_assert(false, "raft log dual-write failed between main and recovery");
+                    return Err(e.into());
+                }
+                #[cfg(feature = "simulation")]
+                {
+                    let meta = LogMeta {
+                        index: entry.index,
+                        term: entry.term,
+                    };
+                    let bytes = rkyv::to_bytes::<_, 64>(&meta)
+                        .map_err(|e| crate::error::OctopiiError::Wal(format!("{e:?}")))?;
+                    if walrus.append_for_topic(TOPIC_LOG_META, &bytes).is_err() {
+                        sim_assert(false, "raft log meta append failed after dual-write");
+                    }
+                }
             }
             Ok::<(), crate::error::OctopiiError>(())
         })?;
@@ -488,8 +685,18 @@ impl WalStorage {
         // Persist to BOTH regular and recovery topics
         // Regular topic can be used for optimization, recovery topic ensures correct recovery
         tokio::task::block_in_place(|| {
-            self.wal.walrus.append_for_topic(TOPIC_HARD_STATE, &bytes)?;
-            self.wal.walrus.append_for_topic(TOPIC_HARD_STATE_RECOVERY, &bytes)?;
+            let main_res = self.wal.walrus.append_for_topic(TOPIC_HARD_STATE, &bytes);
+            if let Err(e) = main_res {
+                return Err(e.into());
+            }
+            let recovery_res = self
+                .wal
+                .walrus
+                .append_for_topic(TOPIC_HARD_STATE_RECOVERY, &bytes);
+            if let Err(e) = recovery_res {
+                sim_assert(false, "hard_state dual-write failed between main and recovery");
+                return Err(e.into());
+            }
             Ok::<(), crate::error::OctopiiError>(())
         })
         .expect("Failed to persist hard state");
@@ -515,8 +722,18 @@ impl WalStorage {
         // Persist to BOTH regular and recovery topics
         // Regular topic can be used for optimization, recovery topic ensures correct recovery
         tokio::task::block_in_place(|| {
-            self.wal.walrus.append_for_topic(TOPIC_CONF_STATE, &bytes)?;
-            self.wal.walrus.append_for_topic(TOPIC_CONF_STATE_RECOVERY, &bytes)?;
+            let main_res = self.wal.walrus.append_for_topic(TOPIC_CONF_STATE, &bytes);
+            if let Err(e) = main_res {
+                return Err(e.into());
+            }
+            let recovery_res = self
+                .wal
+                .walrus
+                .append_for_topic(TOPIC_CONF_STATE_RECOVERY, &bytes);
+            if let Err(e) = recovery_res {
+                sim_assert(false, "conf_state dual-write failed between main and recovery");
+                return Err(e.into());
+            }
             Ok::<(), crate::error::OctopiiError>(())
         })
         .expect("Failed to persist conf state");

@@ -1,6 +1,7 @@
 pub mod wal;
 
 use crate::error::{OctopiiError, Result};
+use crate::invariants::sim_assert;
 use bytes::Bytes;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -27,6 +28,8 @@ static WAL_CREATION_LOCK: Mutex<()> = Mutex::new(());
 /// - Configurable fsync schedule
 /// - Zero-copy I/O via mmap
 /// - Crash recovery
+const WAL_META_TOPIC: &str = "wal_meta_count";
+
 pub struct WriteAheadLog {
     pub walrus: Arc<Walrus>,
     topic: String,
@@ -111,8 +114,17 @@ impl WriteAheadLog {
         let data_vec = data.to_vec();
 
         // Use block_in_place for hard thread cap (Walrus ops are non-blocking)
-        tokio::task::block_in_place(|| walrus.append_for_topic(&topic, &data_vec))
-            .map_err(|e| OctopiiError::Wal(format!("Failed to append: {}", e)))?;
+        tokio::task::block_in_place(|| {
+            walrus.append_for_topic(&topic, &data_vec)?;
+            #[cfg(feature = "simulation")]
+            {
+                if walrus.append_for_topic(WAL_META_TOPIC, b"1").is_err() {
+                    sim_assert(false, "wal meta append failed after data append");
+                }
+            }
+            Ok::<(), std::io::Error>(())
+        })
+        .map_err(|e| OctopiiError::Wal(format!("Failed to append: {}", e)))?;
 
         // Increment write counter for read_all tracking
         self.write_counter.fetch_add(1, Ordering::SeqCst);
@@ -174,6 +186,35 @@ impl WriteAheadLog {
                         // Error reading - stop here
                         break;
                     }
+                }
+            }
+
+            #[cfg(feature = "simulation")]
+            {
+                let _ = walrus.reset_read_offset_for_topic(WAL_META_TOPIC);
+                let mut meta_count = 0usize;
+                let mut empty_reads = 0usize;
+                loop {
+                    match walrus.batch_read_for_topic(WAL_META_TOPIC, 1024 * 1024, true) {
+                        Ok(batch) => {
+                            if batch.is_empty() {
+                                empty_reads += 1;
+                                if empty_reads >= 2 {
+                                    break;
+                                }
+                                continue;
+                            }
+                            empty_reads = 0;
+                            meta_count += batch.len();
+                        }
+                        Err(_) => break,
+                    }
+                }
+                if meta_count > 0 {
+                    sim_assert(
+                        all_entries.len() == meta_count,
+                        "wal read_all count mismatches meta topic count",
+                    );
                 }
             }
 

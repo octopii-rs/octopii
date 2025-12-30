@@ -1,5 +1,6 @@
 use crate::wal::wal::paths::WalPathManager;
 use crate::wal::wal::vfs as fs;
+use crate::invariants::sim_assert;
 use rkyv::{Archive, Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -44,6 +45,7 @@ impl WalIndex {
     }
 
     pub fn set(&mut self, key: String, idx: u64, offset: u64) -> std::io::Result<()> {
+        sim_assert(!key.is_empty(), "wal index set with empty key");
         self.store.insert(
             key,
             BlockPos {

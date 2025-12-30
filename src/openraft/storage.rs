@@ -478,8 +478,28 @@ impl WalLogStore {
     async fn recover_from_wal(&self) -> Result<(), OctopiiError> {
         let entries = self.wal.read_all().await.unwrap_or_else(|_| Vec::new());
         let mut inner = self.inner.lock().await;
+        Self::apply_wal_entries(&entries, &mut inner)?;
+        Self::sim_assert_log_store_state(&inner);
+        #[cfg(feature = "simulation")]
+        {
+            let snapshot = LogStoreSnapshot::from_inner(&inner);
+            let mut fresh = MemLogStoreInner::default();
+            Self::apply_wal_entries(&entries, &mut fresh)?;
+            Self::sim_assert_log_store_state(&fresh);
+            crate::invariants::sim_assert(
+                snapshot == LogStoreSnapshot::from_inner(&fresh),
+                "wal log store recovery not idempotent",
+            );
+        }
+        Ok(())
+    }
+
+    fn apply_wal_entries(
+        entries: &[Bytes],
+        inner: &mut MemLogStoreInner,
+    ) -> Result<(), OctopiiError> {
         for raw in entries {
-            let record: WalLogRecord = bincode::deserialize(&raw)
+            let record: WalLogRecord = bincode::deserialize(raw)
                 .map_err(|e| OctopiiError::Wal(format!("Failed to deserialize WAL record: {e}")))?;
             match record {
                 WalLogRecord::LogEntry(entry) => {
@@ -514,7 +534,6 @@ impl WalLogStore {
                 }
             }
         }
-        Self::sim_assert_log_store_state(&inner);
         Ok(())
     }
 
@@ -526,6 +545,27 @@ impl WalLogStore {
             .await
             .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
         Ok(())
+    }
+}
+
+#[cfg(feature = "simulation")]
+#[derive(Debug, PartialEq)]
+struct LogStoreSnapshot {
+    last_purged_log_id: Option<LogId<AppTypeConfig>>,
+    log: BTreeMap<u64, Entry<AppTypeConfig>>,
+    committed: Option<LogId<AppTypeConfig>>,
+    vote: Option<openraft::Vote<AppTypeConfig>>,
+}
+
+#[cfg(feature = "simulation")]
+impl LogStoreSnapshot {
+    fn from_inner(inner: &MemLogStoreInner) -> Self {
+        Self {
+            last_purged_log_id: inner.last_purged_log_id.clone(),
+            log: inner.log.clone(),
+            committed: inner.committed,
+            vote: inner.vote.clone(),
+        }
     }
 }
 

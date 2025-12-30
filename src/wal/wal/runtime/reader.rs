@@ -1,5 +1,6 @@
 use crate::wal::wal::block::Block;
 use crate::wal::wal::config::debug_print;
+use crate::invariants::sim_assert;
 use std::collections::HashMap;
 use std::io;
 use std::sync::{Arc, RwLock};
@@ -41,6 +42,11 @@ impl Reader {
                 io::Error::new(io::ErrorKind::Other, "col info write lock poisoned")
             })?;
             let before = info.chain.len();
+            sim_assert(block.used <= block.limit, "sealed block used exceeds limit");
+            sim_assert(block.used > 0, "sealed block has zero used bytes");
+            if let Some(last) = info.chain.last() {
+                sim_assert(last.id < block.id, "block chain out of order");
+            }
             info.chain.push(block.clone());
             // If we were reading this as the active tail, carry over progress to sealed chain
             let new_idx = info.chain.len().saturating_sub(1);
@@ -80,6 +86,11 @@ impl Reader {
         let mut info = info_arc
             .write()
             .map_err(|_| io::Error::new(io::ErrorKind::Other, "col info write lock poisoned"))?;
+        sim_assert(block.used <= block.limit, "sealed block used exceeds limit");
+        sim_assert(block.used > 0, "sealed block has zero used bytes");
+        if let Some(last) = info.chain.last() {
+            sim_assert(last.id < block.id, "block chain out of order");
+        }
         info.chain.push(block.clone());
         // If we were reading this as the active tail, carry over progress to sealed chain
         let new_idx = info.chain.len().saturating_sub(1);

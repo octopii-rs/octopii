@@ -6,6 +6,7 @@ use crate::wal::wal::config::{
     checksum64, debug_print, is_io_uring_enabled, ENTRY_TRAILER_MAGIC, ENTRY_TRAILER_SIZE,
     MAX_BATCH_ENTRIES, PREFIX_META_SIZE,
 };
+use crate::invariants::sim_assert;
 use std::io;
 use std::sync::{Arc, RwLock};
 
@@ -161,6 +162,7 @@ impl Walrus {
                 let idx = info.cur_block_idx;
                 let off = info.cur_block_offset;
                 let block = info.chain[idx].clone();
+                sim_assert(off <= block.used, "sealed read offset beyond block.used");
 
                 // Detailed debug for orders topic
                 #[cfg(feature = "simulation")]
@@ -189,6 +191,9 @@ impl Walrus {
                     Ok((entry, consumed)) => {
                         // Compute new offset and decide whether to commit progress
                         let new_off = off + consumed as u64;
+                        sim_assert(consumed > 0, "sealed read consumed zero bytes");
+                        sim_assert(new_off >= off, "sealed read cursor regressed");
+                        sim_assert(new_off <= block.used, "sealed read advanced past block.used");
                         let mut maybe_persist = None;
                         if checkpoint {
                             info.cur_block_offset = new_off;
@@ -327,6 +332,9 @@ impl Walrus {
                 match active_block.read(tail_off) {
                     Ok((entry, consumed)) => {
                         let new_off = tail_off + consumed as u64;
+                        sim_assert(consumed > 0, "tail read consumed zero bytes");
+                        sim_assert(new_off >= tail_off, "tail read cursor regressed");
+                        sim_assert(new_off <= written, "tail read advanced past written");
                         // Reacquire column lock to update in-memory progress, then decide persistence
                         let mut info = info_arc.write().map_err(|_| {
                             io::Error::new(io::ErrorKind::Other, "col info write lock poisoned")
@@ -370,6 +378,10 @@ impl Walrus {
                     }
                 }
             } else {
+                sim_assert(
+                    tail_off <= written,
+                    "tail read offset beyond written but not caught by planner",
+                );
                 debug_print!(
                     "[reader] read_next: tail caught up col={}, block_id={}, off={}, written={}",
                     col_name,
@@ -549,6 +561,7 @@ impl Walrus {
 
         while cur_idx < info.chain.len() && planned_bytes < max_bytes {
             let block = info.chain[cur_idx].clone();
+            sim_assert(cur_off <= block.used, "batch plan offset beyond block.used");
             if cur_off >= block.used {
                 BlockStateTracker::set_checkpointed_true(block.id as usize);
                 cur_idx += 1;
@@ -819,6 +832,11 @@ impl Walrus {
 
                 let data_size = meta.read_size;
                 let entry_consumed = PREFIX_META_SIZE + data_size + ENTRY_TRAILER_SIZE;
+                let entry_end = read_plan.start + buf_offset as u64 + entry_consumed as u64;
+                sim_assert(
+                    entry_end <= read_plan.blk.limit,
+                    "batch read entry exceeds block limit",
+                );
 
                 // Check if we have enough buffer space for the data
                 if buf_offset + entry_consumed > buffer.len() {
@@ -850,6 +868,7 @@ impl Walrus {
                 let data_start = buf_offset + PREFIX_META_SIZE;
                 let data_end = data_start + data_size;
                 let data_slice = &buffer[data_start..data_end];
+                sim_assert(data_end <= buffer.len(), "batch read returned truncated payload");
 
                 // Verify checksum; treat mismatches as incomplete tail
                 if checksum64(data_slice) != meta.checksum {
@@ -860,6 +879,7 @@ impl Walrus {
                 let trailer_start = data_end;
                 let trailer_end = trailer_start + ENTRY_TRAILER_SIZE;
                 let trailer_slice = &buffer[trailer_start..trailer_end];
+                sim_assert(trailer_end <= buffer.len(), "batch read trailer out of bounds");
                 let magic = u64::from_le_bytes(
                     trailer_slice[0..8]
                         .try_into()
@@ -919,11 +939,17 @@ impl Walrus {
                 // We still hold the original write guard here
                 let mut info = info_opt.take().expect("column lock should be held");
                 if checkpoint {
+                    let prev_idx = info.cur_block_idx;
+                    let prev_off = info.cur_block_offset;
                     if saw_tail {
                         info.cur_block_idx = chain_len_at_plan;
                         info.cur_block_offset = 0;
                         info.tail_block_id = final_tail_block_id;
                         info.tail_offset = final_tail_offset;
+                        sim_assert(info.cur_block_idx >= prev_idx, "tail batch read regressed block index");
+                        if let Some((_, written)) = writer_snapshot {
+                            sim_assert(final_tail_offset <= written, "tail batch read advanced past written");
+                        }
                         target = PersistTarget::Tail {
                             blk_id: final_tail_block_id,
                             off: final_tail_offset,
@@ -931,6 +957,17 @@ impl Walrus {
                     } else {
                         info.cur_block_idx = final_block_idx;
                         info.cur_block_offset = final_block_offset;
+                        sim_assert(
+                            info.cur_block_idx > prev_idx
+                                || info.cur_block_offset >= prev_off,
+                            "sealed batch read regressed cursor",
+                        );
+                        if final_block_idx < info.chain.len() {
+                            sim_assert(
+                                final_block_offset <= info.chain[final_block_idx].used,
+                                "sealed batch read advanced past block.used",
+                            );
+                        }
                         target = PersistTarget::Sealed {
                             idx: final_block_idx as u64,
                             off: final_block_offset,
@@ -944,11 +981,17 @@ impl Walrus {
                     io::Error::new(io::ErrorKind::Other, "col info write lock poisoned")
                 })?;
                 if checkpoint {
+                    let prev_idx = info2.cur_block_idx;
+                    let prev_off = info2.cur_block_offset;
                     if saw_tail {
                         info2.cur_block_idx = chain_len_at_plan;
                         info2.cur_block_offset = 0;
                         info2.tail_block_id = final_tail_block_id;
                         info2.tail_offset = final_tail_offset;
+                        sim_assert(info2.cur_block_idx >= prev_idx, "tail batch read regressed block index");
+                        if let Some((_, written)) = writer_snapshot {
+                            sim_assert(final_tail_offset <= written, "tail batch read advanced past written");
+                        }
                         if let ReadConsistency::AtLeastOnce { persist_every } =
                             self.read_consistency
                         {
@@ -964,6 +1007,17 @@ impl Walrus {
                     } else {
                         info2.cur_block_idx = final_block_idx;
                         info2.cur_block_offset = final_block_offset;
+                        sim_assert(
+                            info2.cur_block_idx > prev_idx
+                                || info2.cur_block_offset >= prev_off,
+                            "sealed batch read regressed cursor",
+                        );
+                        if final_block_idx < info2.chain.len() {
+                            sim_assert(
+                                final_block_offset <= info2.chain[final_block_idx].used,
+                                "sealed batch read advanced past block.used",
+                            );
+                        }
                         if let ReadConsistency::AtLeastOnce { persist_every } =
                             self.read_consistency
                         {
