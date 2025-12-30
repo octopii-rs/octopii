@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::time::Duration;
+use crate::wal::wal::vfs;
 
 pub use wal::{FsyncSchedule, Walrus};
 
@@ -59,7 +60,7 @@ impl WriteAheadLog {
         };
 
         // Ensure the WAL root directory exists (Walrus will create per-key dirs)
-        std::fs::create_dir_all(parent_dir).map_err(|e| {
+        vfs::create_dir_all(parent_dir).map_err(|e| {
             OctopiiError::Wal(format!(
                 "Failed to create WAL parent directory {}: {}",
                 parent_dir.display(),

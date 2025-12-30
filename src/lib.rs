@@ -10,6 +10,8 @@ pub mod shipping_lane;
 pub mod state_machine;
 pub mod transport;
 pub mod wal;
+#[cfg(feature = "simulation")]
+pub mod simulation;
 
 // Re-export main types
 pub use chunk::{ChunkSource, TransferResult};

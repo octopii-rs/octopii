@@ -1,6 +1,12 @@
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
+
+#[cfg(not(feature = "simulation"))]
+use std::sync::atomic::AtomicU64;
 use crate::wal::wal::vfs::now;
+
+#[cfg(feature = "simulation")]
+use std::cell::RefCell;
 
 // Global flag to choose backend
 pub(crate) static USE_FD_BACKEND: AtomicBool = AtomicBool::new(true);
@@ -69,7 +75,13 @@ pub(crate) const MAX_FILE_SIZE: u64 = DEFAULT_BLOCK_SIZE * BLOCKS_PER_FILE;
 pub(crate) const MAX_BATCH_ENTRIES: usize = 2000;
 pub(crate) const MAX_BATCH_BYTES: u64 = 10 * 1024 * 1024 * 1024; // 10 GiB total payload limit
 
+#[cfg(not(feature = "simulation"))]
 static LAST_MILLIS: AtomicU64 = AtomicU64::new(0);
+
+#[cfg(feature = "simulation")]
+thread_local! {
+    static LAST_MILLIS: std::cell::Cell<u64> = std::cell::Cell::new(0);
+}
 
 pub(crate) fn now_millis_str() -> String {
     // Use vfs::now() for deterministic time in simulation mode
@@ -78,20 +90,42 @@ pub(crate) fn now_millis_str() -> String {
         .unwrap_or_else(|_| std::time::Duration::from_secs(0))
         .as_millis();
 
-    let mut observed = LAST_MILLIS.load(Ordering::Relaxed);
-    loop {
-        let system_ms_u64 = system_ms.try_into().unwrap_or(u64::MAX);
-        let candidate = if system_ms_u64 <= observed {
-            observed.saturating_add(1)
-        } else {
-            system_ms_u64
-        };
+    #[cfg(not(feature = "simulation"))]
+    {
+        let mut observed = LAST_MILLIS.load(Ordering::Relaxed);
+        loop {
+            let system_ms_u64 = system_ms.try_into().unwrap_or(u64::MAX);
+            let candidate = if system_ms_u64 <= observed {
+                observed.saturating_add(1)
+            } else {
+                system_ms_u64
+            };
 
-        match LAST_MILLIS.compare_exchange(observed, candidate, Ordering::AcqRel, Ordering::Acquire)
-        {
-            Ok(_) => return candidate.to_string(),
-            Err(actual) => observed = actual,
+            match LAST_MILLIS.compare_exchange(
+                observed,
+                candidate,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => return candidate.to_string(),
+                Err(actual) => observed = actual,
+            }
         }
+    }
+
+    #[cfg(feature = "simulation")]
+    {
+        LAST_MILLIS.with(|last| {
+            let mut observed = last.get();
+            let system_ms_u64 = system_ms.try_into().unwrap_or(u64::MAX);
+            if system_ms_u64 <= observed {
+                observed = observed.saturating_add(1);
+            } else {
+                observed = system_ms_u64;
+            }
+            last.set(observed);
+            observed.to_string()
+        })
     }
 }
 
@@ -108,9 +142,39 @@ pub(crate) fn checksum64(data: &[u8]) -> u64 {
 }
 
 pub(crate) fn wal_data_dir() -> PathBuf {
+    #[cfg(feature = "simulation")]
+    {
+        if let Some(path) = thread_wal_data_dir_override() {
+            return path;
+        }
+    }
     std::env::var_os("WALRUS_DATA_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("_octopii_wal_files"))
+}
+
+#[cfg(feature = "simulation")]
+thread_local! {
+    static THREAD_WAL_DATA_DIR: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
+}
+
+#[cfg(feature = "simulation")]
+fn thread_wal_data_dir_override() -> Option<PathBuf> {
+    THREAD_WAL_DATA_DIR.with(|tls| tls.borrow().clone())
+}
+
+#[cfg(feature = "simulation")]
+pub(crate) fn set_thread_wal_data_dir_for_tests(path: PathBuf) {
+    THREAD_WAL_DATA_DIR.with(|tls| {
+        *tls.borrow_mut() = Some(path);
+    });
+}
+
+#[cfg(feature = "simulation")]
+pub(crate) fn clear_thread_wal_data_dir_for_tests() {
+    THREAD_WAL_DATA_DIR.with(|tls| {
+        tls.borrow_mut().take();
+    });
 }
 
 pub(crate) fn sanitize_namespace(key: &str) -> String {

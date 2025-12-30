@@ -23,8 +23,7 @@ impl WalIndex {
     pub(super) fn new_in(paths: &WalPathManager, file_name: &str) -> std::io::Result<Self> {
         paths.ensure_root()?;
         let path = paths.index_path(file_name);
-        let store = path
-            .exists()
+        let store = fs::exists(&path)
             .then(|| fs::read(&path).ok())
             .flatten()
             .and_then(|bytes| {

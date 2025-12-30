@@ -162,10 +162,8 @@ impl Walrus {
                 Err(_) => continue,
             };
             let path = entry.path();
-            if let Ok(ft) = entry.file_type() {
-                if ft.is_dir() {
-                    continue;
-                }
+            if entry.is_dir().unwrap_or(false) {
+                continue;
             }
             if let Some(s) = path.to_str() {
                 // skip index files and temp files

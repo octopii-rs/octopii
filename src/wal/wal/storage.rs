@@ -3,7 +3,16 @@ use crate::wal::wal::vfs::{now, File, OpenOptions};
 use memmap2::MmapMut;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, OnceLock, RwLock};
+use std::sync::Arc;
+
+#[cfg(not(feature = "simulation"))]
+use std::sync::RwLock;
+
+#[cfg(not(feature = "simulation"))]
+use std::sync::OnceLock;
+
+#[cfg(feature = "simulation")]
+use std::cell::{Cell, RefCell};
 
 #[derive(Debug)]
 pub(crate) struct FdBackend {
@@ -23,8 +32,7 @@ impl FdBackend {
         }
 
         let file = opts.open(path)?;
-        let metadata = file.metadata()?;
-        let len = metadata.len() as usize;
+        let len = file.len()? as usize;
 
         Ok(Self { file, len })
     }
@@ -125,13 +133,29 @@ impl StorageImpl {
     }
 }
 
+#[cfg(not(feature = "simulation"))]
 static GLOBAL_FSYNC_SCHEDULE: OnceLock<FsyncSchedule> = OnceLock::new();
 
+#[cfg(feature = "simulation")]
+thread_local! {
+    static GLOBAL_FSYNC_SCHEDULE: Cell<Option<FsyncSchedule>> = Cell::new(None);
+}
+
 fn should_use_o_sync() -> bool {
-    GLOBAL_FSYNC_SCHEDULE
-        .get()
-        .map(|s| matches!(s, FsyncSchedule::SyncEach))
-        .unwrap_or(false)
+    #[cfg(feature = "simulation")]
+    {
+        GLOBAL_FSYNC_SCHEDULE
+            .with(|s| s.get())
+            .map(|s| matches!(s, FsyncSchedule::SyncEach))
+            .unwrap_or(false)
+    }
+    #[cfg(not(feature = "simulation"))]
+    {
+        GLOBAL_FSYNC_SCHEDULE
+            .get()
+            .map(|s| matches!(s, FsyncSchedule::SyncEach))
+            .unwrap_or(false)
+    }
 }
 
 fn create_storage_impl(path: &str) -> std::io::Result<StorageImpl> {
@@ -215,8 +239,14 @@ pub(crate) struct SharedMmapKeeper {
     data: HashMap<String, Arc<SharedMmap>>,
 }
 
-// Global keeper instance - must be the same across all accessor functions
+// Global keeper instance - process-wide in production, thread-local in simulation
+#[cfg(not(feature = "simulation"))]
 static MMAP_KEEPER: OnceLock<RwLock<SharedMmapKeeper>> = OnceLock::new();
+
+#[cfg(feature = "simulation")]
+thread_local! {
+    static MMAP_KEEPER: RefCell<SharedMmapKeeper> = RefCell::new(SharedMmapKeeper::new());
+}
 
 impl SharedMmapKeeper {
     fn new() -> Self {
@@ -225,6 +255,7 @@ impl SharedMmapKeeper {
         }
     }
 
+    #[cfg(not(feature = "simulation"))]
     fn get_keeper() -> &'static RwLock<SharedMmapKeeper> {
         MMAP_KEEPER.get_or_init(|| RwLock::new(SharedMmapKeeper::new()))
     }
@@ -232,24 +263,37 @@ impl SharedMmapKeeper {
     // Clear all cached storage instances (used for simulation crash testing)
     #[cfg(feature = "simulation")]
     pub(crate) fn clear_all() {
-        if let Some(keeper_lock) = MMAP_KEEPER.get() {
-            if let Ok(mut keeper) = keeper_lock.write() {
-                // Flush all storage instances before clearing to ensure data is on disk
-                for (_, arc) in keeper.data.iter() {
-                    let _ = arc.flush();
-                }
-                keeper.data.clear();
+        MMAP_KEEPER.with(|keeper| {
+            let mut keeper = keeper.borrow_mut();
+            for (_, arc) in keeper.data.iter() {
+                let _ = arc.flush();
             }
-        }
+            keeper.data.clear();
+        });
     }
 
-    // Fast path: many readers concurrently
+    // Fast path: many readers concurrently (production only)
+    #[cfg(not(feature = "simulation"))]
     fn get_mmap_arc_read(path: &str) -> Option<Arc<SharedMmap>> {
         let keeper = Self::get_keeper().read().ok()?;
         keeper.data.get(path).cloned()
     }
 
     // Read-mostly accessor that escalates to write lock only on miss
+    #[cfg(feature = "simulation")]
+    pub(crate) fn get_mmap_arc(path: &str) -> std::io::Result<Arc<SharedMmap>> {
+        MMAP_KEEPER.with(|keeper| {
+            let mut keeper = keeper.borrow_mut();
+            if let Some(existing) = keeper.data.get(path) {
+                return Ok(existing.clone());
+            }
+            let arc = SharedMmap::new(path)?;
+            keeper.data.insert(path.to_string(), arc.clone());
+            Ok(arc)
+        })
+    }
+
+    #[cfg(not(feature = "simulation"))]
     pub(crate) fn get_mmap_arc(path: &str) -> std::io::Result<Arc<SharedMmap>> {
         if let Some(existing) = Self::get_mmap_arc_read(path) {
             return Ok(existing);
@@ -281,7 +325,14 @@ impl SharedMmapKeeper {
 }
 
 pub(crate) fn set_fsync_schedule(schedule: FsyncSchedule) {
-    let _ = GLOBAL_FSYNC_SCHEDULE.set(schedule);
+    #[cfg(feature = "simulation")]
+    {
+        GLOBAL_FSYNC_SCHEDULE.with(|s| s.set(Some(schedule)));
+    }
+    #[cfg(not(feature = "simulation"))]
+    {
+        let _ = GLOBAL_FSYNC_SCHEDULE.set(schedule);
+    }
 }
 
 pub(crate) fn open_storage_for_path(path: &str) -> std::io::Result<StorageImpl> {

@@ -5,8 +5,18 @@ use crate::wal::wal::storage::{SharedMmap, SharedMmapKeeper};
 use std::cell::UnsafeCell;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
-use std::sync::{Arc, OnceLock, RwLock};
+use std::sync::Arc;
 
+#[cfg(not(feature = "simulation"))]
+use std::sync::RwLock;
+
+#[cfg(not(feature = "simulation"))]
+use std::sync::OnceLock;
+
+#[cfg(feature = "simulation")]
+use std::cell::RefCell;
+
+#[cfg(not(feature = "simulation"))]
 use super::DELETION_TX;
 
 pub(super) struct BlockAllocator {
@@ -174,11 +184,20 @@ pub(super) fn flush_check(file_path: String) {
     {
         let ready_to_delete = fully_allocated && locked == 0 && total > 0 && checkpointed >= total;
         if ready_to_delete {
+        #[cfg(feature = "simulation")]
+        {
+            if let Some(tx) = crate::wal::wal::runtime::get_deletion_tx() {
+                let _ = tx.send(file_path);
+            }
+        }
+        #[cfg(not(feature = "simulation"))]
+        {
             if let Some(tx) = DELETION_TX.get() {
                 let _ = tx.send(file_path);
             }
         }
     }
+}
 }
 
 struct BlockState {
@@ -189,28 +208,58 @@ struct BlockState {
 pub(super) struct BlockStateTracker {}
 
 impl BlockStateTracker {
-    fn map() -> &'static RwLock<HashMap<usize, BlockState>> {
-        static MAP: OnceLock<RwLock<HashMap<usize, BlockState>>> = OnceLock::new();
-        MAP.get_or_init(|| RwLock::new(HashMap::new()))
-    }
-
     pub(super) fn register_block(block_id: usize, file_path: &str) {
-        let map = Self::map();
-        if let Ok(mut w) = map.write() {
-            w.entry(block_id).or_insert_with(|| BlockState {
-                is_checkpointed: AtomicBool::new(false),
-                file_path: file_path.to_string(),
+        #[cfg(feature = "simulation")]
+        {
+            BLOCK_STATE_MAP.with(|map| {
+                let mut map = map.borrow_mut();
+                map.entry(block_id).or_insert_with(|| BlockState {
+                    is_checkpointed: AtomicBool::new(false),
+                    file_path: file_path.to_string(),
+                });
             });
+        }
+        #[cfg(not(feature = "simulation"))]
+        {
+            let map = Self::map();
+            if let Ok(mut w) = map.write() {
+                w.entry(block_id).or_insert_with(|| BlockState {
+                    is_checkpointed: AtomicBool::new(false),
+                    file_path: file_path.to_string(),
+                });
+            }
         }
     }
 
     pub(super) fn get_file_path_for_block(block_id: usize) -> Option<String> {
-        let map = Self::map();
-        let r = map.read().ok()?;
-        r.get(&block_id).map(|b| b.file_path.clone())
+        #[cfg(feature = "simulation")]
+        {
+            return BLOCK_STATE_MAP.with(|map| {
+                let map = map.borrow();
+                map.get(&block_id).map(|b| b.file_path.clone())
+            });
+        }
+        #[cfg(not(feature = "simulation"))]
+        {
+            let map = Self::map();
+            let r = map.read().ok()?;
+            r.get(&block_id).map(|b| b.file_path.clone())
+        }
     }
 
     pub(super) fn set_checkpointed_true(block_id: usize) {
+        #[cfg(feature = "simulation")]
+        let path_opt = BLOCK_STATE_MAP.with(|map| {
+            let map = map.borrow();
+            if let Some(b) = map.get(&block_id) {
+                b.is_checkpointed.store(true, Ordering::Release);
+                Some(b.file_path.clone())
+            } else {
+                None
+            }
+        });
+
+        #[cfg(not(feature = "simulation"))]
         let path_opt = {
             let map = Self::map();
             if let Ok(r) = map.read() {
@@ -234,9 +283,7 @@ impl BlockStateTracker {
     /// Clear all tracked block state (used for simulation crash testing)
     #[cfg(feature = "simulation")]
     pub(crate) fn clear_all() {
-        if let Ok(mut w) = Self::map().write() {
-            w.clear();
-        }
+        BLOCK_STATE_MAP.with(|map| map.borrow_mut().clear());
     }
 }
 
@@ -250,38 +297,72 @@ struct FileState {
 pub(super) struct FileStateTracker {}
 
 impl FileStateTracker {
-    fn map() -> &'static RwLock<HashMap<String, FileState>> {
-        static MAP: OnceLock<RwLock<HashMap<String, FileState>>> = OnceLock::new();
-        MAP.get_or_init(|| RwLock::new(HashMap::new()))
-    }
-
     pub(super) fn register_file_if_absent(file_path: &str) {
-        let map = Self::map();
-        let mut w = map.write().expect("file state map write lock poisoned");
-        w.entry(file_path.to_string()).or_insert_with(|| FileState {
-            locked_block_ctr: AtomicU16::new(0),
-            checkpoint_block_ctr: AtomicU16::new(0),
-            total_blocks: AtomicU16::new(0),
-            is_fully_allocated: AtomicBool::new(false),
-        });
+        #[cfg(feature = "simulation")]
+        {
+            FILE_STATE_MAP.with(|map| {
+                let mut map = map.borrow_mut();
+                map.entry(file_path.to_string()).or_insert_with(|| FileState {
+                    locked_block_ctr: AtomicU16::new(0),
+                    checkpoint_block_ctr: AtomicU16::new(0),
+                    total_blocks: AtomicU16::new(0),
+                    is_fully_allocated: AtomicBool::new(false),
+                });
+            });
+        }
+        #[cfg(not(feature = "simulation"))]
+        {
+            let map = Self::map();
+            let mut w = map.write().expect("file state map write lock poisoned");
+            w.entry(file_path.to_string()).or_insert_with(|| FileState {
+                locked_block_ctr: AtomicU16::new(0),
+                checkpoint_block_ctr: AtomicU16::new(0),
+                total_blocks: AtomicU16::new(0),
+                is_fully_allocated: AtomicBool::new(false),
+            });
+        }
     }
 
     pub(super) fn add_block_to_file_state(file_path: &str) {
         Self::register_file_if_absent(file_path);
-        let map = Self::map();
-        if let Ok(r) = map.read() {
-            if let Some(st) = r.get(file_path) {
-                st.total_blocks.fetch_add(1, Ordering::AcqRel);
+        #[cfg(feature = "simulation")]
+        {
+            FILE_STATE_MAP.with(|map| {
+                let map = map.borrow();
+                if let Some(st) = map.get(file_path) {
+                    st.total_blocks.fetch_add(1, Ordering::AcqRel);
+                }
+            });
+        }
+        #[cfg(not(feature = "simulation"))]
+        {
+            let map = Self::map();
+            if let Ok(r) = map.read() {
+                if let Some(st) = r.get(file_path) {
+                    st.total_blocks.fetch_add(1, Ordering::AcqRel);
+                }
             }
         }
     }
 
     pub(super) fn set_fully_allocated(file_path: String) {
         Self::register_file_if_absent(&file_path);
-        let map = Self::map();
-        if let Ok(r) = map.read() {
-            if let Some(st) = r.get(&file_path) {
-                st.is_fully_allocated.store(true, Ordering::Release);
+        #[cfg(feature = "simulation")]
+        {
+            FILE_STATE_MAP.with(|map| {
+                let map = map.borrow();
+                if let Some(st) = map.get(&file_path) {
+                    st.is_fully_allocated.store(true, Ordering::Release);
+                }
+            });
+        }
+        #[cfg(not(feature = "simulation"))]
+        {
+            let map = Self::map();
+            if let Ok(r) = map.read() {
+                if let Some(st) = r.get(&file_path) {
+                    st.is_fully_allocated.store(true, Ordering::Release);
+                }
             }
         }
         flush_check(file_path);
@@ -289,10 +370,22 @@ impl FileStateTracker {
 
     pub(super) fn set_block_locked(block_id: usize) {
         if let Some(path) = BlockStateTracker::get_file_path_for_block(block_id) {
-            let map = Self::map();
-            if let Ok(r) = map.read() {
-                if let Some(st) = r.get(&path) {
-                    st.locked_block_ctr.fetch_add(1, Ordering::AcqRel);
+            #[cfg(feature = "simulation")]
+            {
+                FILE_STATE_MAP.with(|map| {
+                    let map = map.borrow();
+                    if let Some(st) = map.get(&path) {
+                        st.locked_block_ctr.fetch_add(1, Ordering::AcqRel);
+                    }
+                });
+            }
+            #[cfg(not(feature = "simulation"))]
+            {
+                let map = Self::map();
+                if let Ok(r) = map.read() {
+                    if let Some(st) = r.get(&path) {
+                        st.locked_block_ctr.fetch_add(1, Ordering::AcqRel);
+                    }
                 }
             }
         }
@@ -300,10 +393,22 @@ impl FileStateTracker {
 
     pub(super) fn set_block_unlocked(block_id: usize) {
         if let Some(path) = BlockStateTracker::get_file_path_for_block(block_id) {
-            let map = Self::map();
-            if let Ok(r) = map.read() {
-                if let Some(st) = r.get(&path) {
-                    st.locked_block_ctr.fetch_sub(1, Ordering::AcqRel);
+            #[cfg(feature = "simulation")]
+            {
+                FILE_STATE_MAP.with(|map| {
+                    let map = map.borrow();
+                    if let Some(st) = map.get(&path) {
+                        st.locked_block_ctr.fetch_sub(1, Ordering::AcqRel);
+                    }
+                });
+            }
+            #[cfg(not(feature = "simulation"))]
+            {
+                let map = Self::map();
+                if let Ok(r) = map.read() {
+                    if let Some(st) = r.get(&path) {
+                        st.locked_block_ctr.fetch_sub(1, Ordering::AcqRel);
+                    }
                 }
             }
             flush_check(path);
@@ -311,30 +416,77 @@ impl FileStateTracker {
     }
 
     pub(super) fn inc_checkpoint_for_file(file_path: &str) {
-        let map = Self::map();
-        if let Ok(r) = map.read() {
-            if let Some(st) = r.get(file_path) {
-                st.checkpoint_block_ctr.fetch_add(1, Ordering::AcqRel);
+        #[cfg(feature = "simulation")]
+        {
+            FILE_STATE_MAP.with(|map| {
+                let map = map.borrow();
+                if let Some(st) = map.get(file_path) {
+                    st.checkpoint_block_ctr.fetch_add(1, Ordering::AcqRel);
+                }
+            });
+        }
+        #[cfg(not(feature = "simulation"))]
+        {
+            let map = Self::map();
+            if let Ok(r) = map.read() {
+                if let Some(st) = r.get(file_path) {
+                    st.checkpoint_block_ctr.fetch_add(1, Ordering::AcqRel);
+                }
             }
         }
     }
 
     pub(super) fn get_state_snapshot(file_path: &str) -> Option<(u16, u16, u16, bool)> {
-        let map = Self::map();
-        let r = map.read().ok()?;
-        let st = r.get(file_path)?;
-        let locked = st.locked_block_ctr.load(Ordering::Acquire);
-        let checkpointed = st.checkpoint_block_ctr.load(Ordering::Acquire);
-        let total = st.total_blocks.load(Ordering::Acquire);
-        let fully = st.is_fully_allocated.load(Ordering::Acquire);
-        Some((locked, checkpointed, total, fully))
+        #[cfg(feature = "simulation")]
+        {
+            return FILE_STATE_MAP.with(|map| {
+                let map = map.borrow();
+                let st = map.get(file_path)?;
+                let locked = st.locked_block_ctr.load(Ordering::Acquire);
+                let checkpointed = st.checkpoint_block_ctr.load(Ordering::Acquire);
+                let total = st.total_blocks.load(Ordering::Acquire);
+                let fully = st.is_fully_allocated.load(Ordering::Acquire);
+                Some((locked, checkpointed, total, fully))
+            });
+        }
+        #[cfg(not(feature = "simulation"))]
+        {
+            let map = Self::map();
+            let r = map.read().ok()?;
+            let st = r.get(file_path)?;
+            let locked = st.locked_block_ctr.load(Ordering::Acquire);
+            let checkpointed = st.checkpoint_block_ctr.load(Ordering::Acquire);
+            let total = st.total_blocks.load(Ordering::Acquire);
+            let fully = st.is_fully_allocated.load(Ordering::Acquire);
+            Some((locked, checkpointed, total, fully))
+        }
     }
 
     /// Clear all tracked file state (used for simulation crash testing)
     #[cfg(feature = "simulation")]
     pub(crate) fn clear_all() {
-        if let Ok(mut w) = Self::map().write() {
-            w.clear();
-        }
+        FILE_STATE_MAP.with(|map| map.borrow_mut().clear());
     }
+}
+
+#[cfg(not(feature = "simulation"))]
+impl BlockStateTracker {
+    fn map() -> &'static RwLock<HashMap<usize, BlockState>> {
+        static MAP: OnceLock<RwLock<HashMap<usize, BlockState>>> = OnceLock::new();
+        MAP.get_or_init(|| RwLock::new(HashMap::new()))
+    }
+}
+
+#[cfg(not(feature = "simulation"))]
+impl FileStateTracker {
+    fn map() -> &'static RwLock<HashMap<String, FileState>> {
+        static MAP: OnceLock<RwLock<HashMap<String, FileState>>> = OnceLock::new();
+        MAP.get_or_init(|| RwLock::new(HashMap::new()))
+    }
+}
+
+#[cfg(feature = "simulation")]
+thread_local! {
+    static BLOCK_STATE_MAP: RefCell<HashMap<usize, BlockState>> = RefCell::new(HashMap::new());
+    static FILE_STATE_MAP: RefCell<HashMap<String, FileState>> = RefCell::new(HashMap::new());
 }

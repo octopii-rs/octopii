@@ -2,13 +2,15 @@ use crate::wal::wal::config::{debug_print, is_io_uring_enabled, FsyncSchedule};
 use crate::wal::wal::storage::{open_storage_for_path, StorageImpl};
 use crate::wal::wal::vfs as fs;
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
+#[cfg(not(feature = "simulation"))]
 use super::DELETION_TX;
+#[cfg(feature = "simulation")]
+use super::set_deletion_tx;
 
 #[cfg(target_os = "linux")]
 use std::os::unix::io::AsRawFd;
@@ -68,7 +70,7 @@ impl BackgroundWorker {
         // Phase 2: Open/map files if needed
         for path in unique.iter() {
             // Skip if file doesn't exist
-            if !Path::new(&path).exists() {
+            if !fs::exists(&path) {
                 debug_print!("[flush] file does not exist, skipping: {}", path);
                 continue;
             }
@@ -237,7 +239,14 @@ pub(super) fn start_background_workers(fsync_schedule: FsyncSchedule) -> Backgro
     let tx_arc = Arc::new(tx);
     let (del_tx, del_rx) = mpsc::channel::<String>();
     let del_tx_arc = Arc::new(del_tx);
-    let _ = DELETION_TX.set(del_tx_arc.clone());
+    #[cfg(feature = "simulation")]
+    {
+        set_deletion_tx(del_tx_arc.clone());
+    }
+    #[cfg(not(feature = "simulation"))]
+    {
+        let _ = DELETION_TX.set(del_tx_arc.clone());
+    }
 
     let sleep_millis = match fsync_schedule {
         FsyncSchedule::Milliseconds(ms) => ms.max(1),

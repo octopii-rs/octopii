@@ -594,6 +594,7 @@ pub fn new_mem_state_machine(sm: StateMachine) -> Arc<MemStateMachine> {
 mod tests {
     use super::*;
     use crate::wal::wal::vfs::sim::{self, SimConfig};
+    use crate::wal::wal::vfs;
     use crate::wal::WriteAheadLog;
     use openraft::type_config::alias::CommittedLeaderIdOf;
     use openraft::vote::RaftLeaderId;
@@ -627,8 +628,8 @@ mod tests {
 
             let root_dir = std::env::temp_dir()
                 .join(format!("walrus_strict_wal_log_store_{scenario}"));
-            let _ = std::fs::remove_dir_all(&root_dir);
-            std::fs::create_dir_all(&root_dir).expect("Failed to create walrus test dir");
+            let _ = vfs::remove_dir_all(&root_dir);
+            vfs::create_dir_all(&root_dir).expect("Failed to create walrus test dir");
 
             let wal_path = root_dir.join("wal_log_store.log");
             let mut rng = sim::XorShift128::new(scenario_seed ^ 0xd1b5_4a32_1a2b_3c4d);
@@ -800,7 +801,7 @@ mod tests {
             sim::set_io_error_rate(prev_rate);
             sim::set_partial_writes_enabled(prev_partial);
 
-            let _ = std::fs::remove_dir_all(&root_dir);
+            let _ = vfs::remove_dir_all(&root_dir);
             sim::teardown();
         }
     }

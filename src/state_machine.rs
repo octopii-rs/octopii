@@ -143,6 +143,7 @@ impl StateMachineTrait for WalBackedStateMachine {
 mod tests {
     use super::*;
     use crate::wal::wal::vfs::sim::{self, SimConfig};
+    use crate::wal::wal::vfs;
     use crate::wal::WriteAheadLog;
     use std::collections::HashMap;
     use std::sync::Arc;
@@ -174,8 +175,8 @@ mod tests {
 
             let root_dir = std::env::temp_dir()
                 .join(format!("walrus_strict_state_machine_{scenario}"));
-            let _ = std::fs::remove_dir_all(&root_dir);
-            std::fs::create_dir_all(&root_dir).expect("Failed to create walrus test dir");
+            let _ = vfs::remove_dir_all(&root_dir);
+            vfs::create_dir_all(&root_dir).expect("Failed to create walrus test dir");
 
             let wal_path = root_dir.join("state_machine.log");
             let mut rng = sim::XorShift128::new(scenario_seed ^ 0xa5a5_a5a5_5a5a_5a5a);
@@ -245,7 +246,7 @@ mod tests {
                 sim::advance_time(std::time::Duration::from_secs(1));
             }
 
-            let _ = std::fs::remove_dir_all(&root_dir);
+            let _ = vfs::remove_dir_all(&root_dir);
             sim::teardown();
         }
     }
