@@ -13,4 +13,4 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - name: Run stress simulation tests
-        run: cargo test --features simulation --test simulation --no-fail-fast stress_ -- --test-threads=5
+        run: cargo test --features simulation --test simulation --no-fail-fast stress_ -- --test-threads=2
