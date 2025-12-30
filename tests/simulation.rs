@@ -14,6 +14,7 @@ mod sim_tests {
     use octopii::wal::wal::vfs::sim::{self, SimConfig};
     use octopii::wal::wal::vfs;
     use octopii::wal::wal::{FsyncSchedule, ReadConsistency, Walrus};
+    use octopii::wal::WriteAheadLog;
     use std::collections::HashMap;
     use std::path::PathBuf;
 
@@ -527,6 +528,82 @@ mod sim_tests {
         .expect("Failed to initialize Walrus")
     }
 
+    fn encode_u64(value: u64, out: &mut Vec<u8>) {
+        out.extend_from_slice(&value.to_le_bytes());
+    }
+
+    fn decode_u64(input: &[u8], offset: &mut usize) -> u64 {
+        let mut buf = [0u8; 8];
+        buf.copy_from_slice(&input[*offset..*offset + 8]);
+        *offset += 8;
+        u64::from_le_bytes(buf)
+    }
+
+    fn encode_hard_state(term: u64, vote: u64, commit: u64) -> Vec<u8> {
+        let mut buf = Vec::with_capacity(24);
+        encode_u64(term, &mut buf);
+        encode_u64(vote, &mut buf);
+        encode_u64(commit, &mut buf);
+        buf
+    }
+
+    fn decode_hard_state(data: &[u8]) -> (u64, u64, u64) {
+        let mut offset = 0;
+        let term = decode_u64(data, &mut offset);
+        let vote = decode_u64(data, &mut offset);
+        let commit = decode_u64(data, &mut offset);
+        (term, vote, commit)
+    }
+
+    fn encode_conf_state(voters: &[u64]) -> Vec<u8> {
+        let mut buf = Vec::with_capacity(8 + voters.len() * 8);
+        encode_u64(voters.len() as u64, &mut buf);
+        for voter in voters {
+            encode_u64(*voter, &mut buf);
+        }
+        buf
+    }
+
+    fn decode_conf_state(data: &[u8]) -> Vec<u64> {
+        let mut offset = 0;
+        let count = decode_u64(data, &mut offset) as usize;
+        let mut voters = Vec::with_capacity(count);
+        for _ in 0..count {
+            voters.push(decode_u64(data, &mut offset));
+        }
+        voters
+    }
+
+    fn encode_snapshot(index: u64, term: u64, payload: &[u8]) -> Vec<u8> {
+        let mut buf = Vec::with_capacity(16 + payload.len());
+        encode_u64(index, &mut buf);
+        encode_u64(term, &mut buf);
+        buf.extend_from_slice(payload);
+        buf
+    }
+
+    fn decode_snapshot(data: &[u8]) -> (u64, u64, Vec<u8>) {
+        let mut offset = 0;
+        let index = decode_u64(data, &mut offset);
+        let term = decode_u64(data, &mut offset);
+        (index, term, data[offset..].to_vec())
+    }
+
+    fn encode_log_entry(index: u64, term: u64, payload: &[u8]) -> Vec<u8> {
+        let mut buf = Vec::with_capacity(16 + payload.len());
+        encode_u64(index, &mut buf);
+        encode_u64(term, &mut buf);
+        buf.extend_from_slice(payload);
+        buf
+    }
+
+    fn decode_log_entry(data: &[u8]) -> (u64, u64, Vec<u8>) {
+        let mut offset = 0;
+        let index = decode_u64(data, &mut offset);
+        let term = decode_u64(data, &mut offset);
+        (index, term, data[offset..].to_vec())
+    }
+
     // ------------------------------------------------------------------------
     // Phase 4 Tests: No fault injection (verify basic correctness)
     // ------------------------------------------------------------------------
@@ -850,6 +927,283 @@ mod sim_tests {
         assert_eq!(recovered, entries);
 
         octopii::wal::wal::__clear_thread_wal_data_dir_for_tests();
+        let _ = vfs::remove_dir_all(&root_dir);
+        sim::teardown();
+    }
+
+    // ------------------------------------------------------------------------
+    // Octopii Walrus coverage (StrictlyAtOnce + SyncEach)
+    // ------------------------------------------------------------------------
+
+    #[test]
+    fn raft_hard_conf_state_recovery_latest_wins() {
+        sim::setup(SimConfig {
+            seed: 9101,
+            io_error_rate: 0.0,
+            initial_time_ns: 1700000000_000_000_000,
+            enable_partial_writes: false,
+        });
+
+        let root_dir = std::env::temp_dir().join("walrus_raft_hard_conf_recovery");
+        let _ = vfs::remove_dir_all(&root_dir);
+        vfs::create_dir_all(&root_dir).expect("Failed to create walrus test dir");
+
+        let key = "raft_hard_conf_key";
+        let wal = init_strict_walrus(&root_dir, key);
+        // Short aliases: Walrus metadata caps topic names to keep entries small.
+        let topic_hs = "hs_rec";
+        let topic_cs = "cs_rec";
+        let hs1 = encode_hard_state(1, 10, 5);
+        let hs2 = encode_hard_state(3, 11, 9);
+        wal.append_for_topic(topic_hs, &hs1)
+            .expect("append hard state 1");
+        wal.append_for_topic(topic_hs, &hs2)
+            .expect("append hard state 2");
+
+        let cs1 = encode_conf_state(&[1, 2]);
+        let cs2 = encode_conf_state(&[3, 4, 5]);
+        wal.append_for_topic(topic_cs, &cs1)
+            .expect("append conf state 1");
+        wal.append_for_topic(topic_cs, &cs2)
+            .expect("append conf state 2");
+
+        drop(wal);
+        octopii::wal::wal::__clear_storage_cache_for_tests();
+
+        let wal = init_strict_walrus(&root_dir, key);
+        let hs_batch = wal
+            .batch_read_for_topic(topic_hs, 1024 * 1024, false)
+            .expect("batch read hard state");
+        let latest_hs = hs_batch
+            .last()
+            .expect("missing hard state")
+            .data
+            .clone();
+        let (term, vote, commit) = decode_hard_state(&latest_hs);
+        assert_eq!(term, 3);
+        assert_eq!(vote, 11);
+        assert_eq!(commit, 9);
+
+        let cs_batch = wal
+            .batch_read_for_topic(topic_cs, 1024 * 1024, false)
+            .expect("batch read conf state");
+        let latest_cs = cs_batch
+            .last()
+            .expect("missing conf state")
+            .data
+            .clone();
+        let voters = decode_conf_state(&latest_cs);
+        assert_eq!(voters, vec![3, 4, 5]);
+
+        octopii::wal::wal::__clear_thread_wal_data_dir_for_tests();
+        let _ = vfs::remove_dir_all(&root_dir);
+        sim::teardown();
+    }
+
+    #[test]
+    fn raft_snapshot_recovery_latest_wins() {
+        sim::setup(SimConfig {
+            seed: 9102,
+            io_error_rate: 0.0,
+            initial_time_ns: 1700000000_000_000_000,
+            enable_partial_writes: false,
+        });
+
+        let root_dir = std::env::temp_dir().join("walrus_raft_snapshot_recovery");
+        let _ = vfs::remove_dir_all(&root_dir);
+        vfs::create_dir_all(&root_dir).expect("Failed to create walrus test dir");
+
+        let key = "raft_snapshot_key";
+        let wal = init_strict_walrus(&root_dir, key);
+        let topic_snapshot = "snap";
+        let snap1 = encode_snapshot(5, 1, b"snap-one");
+        let snap2 = encode_snapshot(9, 2, b"snap-two");
+        wal.append_for_topic(topic_snapshot, &snap1)
+            .expect("append snapshot 1");
+        wal.append_for_topic(topic_snapshot, &snap2)
+            .expect("append snapshot 2");
+
+        drop(wal);
+        octopii::wal::wal::__clear_storage_cache_for_tests();
+
+        let wal = init_strict_walrus(&root_dir, key);
+        let mut last = None;
+        while let Ok(Some(entry)) = wal.read_next(topic_snapshot, true) {
+            last = Some(entry.data);
+        }
+        let (index, term, payload) = decode_snapshot(&last.expect("missing snapshot"));
+        assert_eq!(index, 9);
+        assert_eq!(term, 2);
+        assert_eq!(payload, b"snap-two".to_vec());
+
+        octopii::wal::wal::__clear_thread_wal_data_dir_for_tests();
+        let _ = vfs::remove_dir_all(&root_dir);
+        sim::teardown();
+    }
+
+    #[test]
+    fn raft_log_recovery_discards_before_snapshot() {
+        sim::setup(SimConfig {
+            seed: 9103,
+            io_error_rate: 0.0,
+            initial_time_ns: 1700000000_000_000_000,
+            enable_partial_writes: false,
+        });
+
+        let root_dir = std::env::temp_dir().join("walrus_raft_log_recovery");
+        let _ = vfs::remove_dir_all(&root_dir);
+        vfs::create_dir_all(&root_dir).expect("Failed to create walrus test dir");
+
+        let key = "raft_log_recovery_key";
+        let wal = init_strict_walrus(&root_dir, key);
+        let topic_log_recovery = "log_rec";
+        let topic_snapshot = "snap";
+        for idx in 1..=10 {
+            let entry = encode_log_entry(idx, 1, format!("e-{idx}").as_bytes());
+            wal.append_for_topic(topic_log_recovery, &entry)
+                .expect("append log recovery entry");
+        }
+        let snap = encode_snapshot(7, 1, b"raft-snap");
+        wal.append_for_topic(topic_snapshot, &snap)
+            .expect("append snapshot");
+
+        drop(wal);
+        octopii::wal::wal::__clear_storage_cache_for_tests();
+
+        let wal = init_strict_walrus(&root_dir, key);
+        let mut snapshot_index = 0u64;
+        while let Ok(Some(entry)) = wal.read_next(topic_snapshot, true) {
+            let (index, _term, _payload) = decode_snapshot(&entry.data);
+            snapshot_index = index;
+        }
+
+        let batch = wal
+            .batch_read_for_topic(topic_log_recovery, 1024 * 1024, true)
+            .expect("batch read log recovery");
+        let mut recovered_indexes = Vec::new();
+        for entry in batch {
+            let (index, _term, _payload) = decode_log_entry(&entry.data);
+            if index > snapshot_index {
+                recovered_indexes.push(index);
+            }
+        }
+        assert_eq!(recovered_indexes, vec![8, 9, 10]);
+
+        octopii::wal::wal::__clear_thread_wal_data_dir_for_tests();
+        let _ = vfs::remove_dir_all(&root_dir);
+        sim::teardown();
+    }
+
+    #[test]
+    fn state_machine_snapshot_and_replay_recovery() {
+        sim::setup(SimConfig {
+            seed: 9104,
+            io_error_rate: 0.0,
+            initial_time_ns: 1700000000_000_000_000,
+            enable_partial_writes: false,
+        });
+
+        let root_dir = std::env::temp_dir().join("walrus_state_machine_recovery");
+        let _ = vfs::remove_dir_all(&root_dir);
+        vfs::create_dir_all(&root_dir).expect("Failed to create walrus test dir");
+
+        let key = "state_machine_key";
+        let wal = init_strict_walrus(&root_dir, key);
+        let topic_snapshot = "sm_snap";
+        let topic_log = "sm_log";
+
+        let mut snapshot_data = HashMap::new();
+        snapshot_data.insert("a".to_string(), b"1".to_vec());
+        snapshot_data.insert("b".to_string(), b"2".to_vec());
+        let snapshot_bytes =
+            bincode::serialize(&snapshot_data).expect("serialize snapshot");
+        wal.append_for_topic(topic_snapshot, &snapshot_bytes)
+            .expect("append snapshot");
+
+        let op_a = bincode::serialize(&("a".to_string(), Some(b"3".to_vec())))
+            .expect("serialize op");
+        let op_b = bincode::serialize(&("b".to_string(), None::<Vec<u8>>))
+            .expect("serialize op");
+        let op_c = bincode::serialize(&("c".to_string(), Some(b"4".to_vec())))
+            .expect("serialize op");
+        wal.append_for_topic(topic_log, &op_a)
+            .expect("append op");
+        wal.append_for_topic(topic_log, &op_b)
+            .expect("append op");
+        wal.append_for_topic(topic_log, &op_c)
+            .expect("append op");
+
+        drop(wal);
+        octopii::wal::wal::__clear_storage_cache_for_tests();
+
+        let wal = init_strict_walrus(&root_dir, key);
+        let mut state = HashMap::new();
+        while let Ok(Some(entry)) = wal.read_next(topic_snapshot, true) {
+            state = bincode::deserialize(&entry.data).expect("deserialize snapshot");
+        }
+
+        while let Ok(Some(entry)) = wal.read_next(topic_log, true) {
+            let (key, value): (String, Option<Vec<u8>>) =
+                bincode::deserialize(&entry.data).expect("deserialize op");
+            match value {
+                Some(v) => {
+                    state.insert(key, v);
+                }
+                None => {
+                    state.remove(&key);
+                }
+            }
+        }
+
+        assert_eq!(state.get("a").unwrap().as_slice(), b"3");
+        assert_eq!(state.get("c").unwrap().as_slice(), b"4");
+        assert!(state.get("b").is_none());
+
+        octopii::wal::wal::__clear_thread_wal_data_dir_for_tests();
+        let _ = vfs::remove_dir_all(&root_dir);
+        sim::teardown();
+    }
+
+    #[test]
+    fn write_ahead_log_read_all_returns_entries() {
+        sim::setup(SimConfig {
+            seed: 9105,
+            io_error_rate: 0.0,
+            initial_time_ns: 1700000000_000_000_000,
+            enable_partial_writes: false,
+        });
+
+        let root_dir = std::env::temp_dir().join("walrus_read_all_recovery");
+        let _ = vfs::remove_dir_all(&root_dir);
+        vfs::create_dir_all(&root_dir).expect("Failed to create walrus test dir");
+
+        let wal_path = root_dir.join("wal_read_all.log");
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let wal = runtime
+            .block_on(WriteAheadLog::new(
+                wal_path.clone(),
+                10,
+                tokio::time::Duration::from_millis(0),
+            ))
+            .expect("wal init");
+
+        runtime
+            .block_on(wal.append(bytes::Bytes::from_static(b"alpha")))
+            .expect("append");
+        runtime
+            .block_on(wal.append(bytes::Bytes::from_static(b"beta")))
+            .expect("append");
+        runtime
+            .block_on(wal.append(bytes::Bytes::from_static(b"gamma")))
+            .expect("append");
+
+        let entries = runtime.block_on(wal.read_all()).expect("read_all");
+        let recovered: Vec<Vec<u8>> = entries.iter().map(|b| b.to_vec()).collect();
+        assert_eq!(
+            recovered,
+            vec![b"alpha".to_vec(), b"beta".to_vec(), b"gamma".to_vec()]
+        );
+
         let _ = vfs::remove_dir_all(&root_dir);
         sim::teardown();
     }
