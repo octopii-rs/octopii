@@ -45,6 +45,7 @@ pub mod sim {
     #[derive(Debug, Default)]
     struct SimFile {
         data: Vec<u8>,
+        len: usize,
     }
 
     #[derive(Debug, Default)]
@@ -76,7 +77,7 @@ pub mod sim {
         }
 
         fn file_len(&self, path: &Path) -> Option<usize> {
-            self.files.get(path).map(|f| f.data.len())
+            self.files.get(path).map(|f| f.len)
         }
 
         fn create_file(&mut self, path: &Path, truncate: bool) {
@@ -84,6 +85,7 @@ pub mod sim {
             let entry = self.files.entry(path.to_path_buf()).or_default();
             if truncate {
                 entry.data.clear();
+                entry.len = 0;
             }
         }
 
@@ -92,7 +94,10 @@ pub mod sim {
                 .files
                 .get_mut(path)
                 .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "file not found"))?;
-            file.data.resize(size, 0);
+            file.len = size;
+            if file.data.len() > size {
+                file.data.truncate(size);
+            }
             Ok(())
         }
 
@@ -101,12 +106,17 @@ pub mod sim {
                 .files
                 .get(path)
                 .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "file not found"))?;
-            if offset >= file.data.len() {
+            if offset >= file.len {
                 return Ok(0);
             }
-            let end = (offset + buf.len()).min(file.data.len());
+            let end = (offset + buf.len()).min(file.len);
             let len = end - offset;
-            buf[..len].copy_from_slice(&file.data[offset..end]);
+            buf[..len].fill(0);
+            if offset < file.data.len() {
+                let data_end = end.min(file.data.len());
+                let data_len = data_end - offset;
+                buf[..data_len].copy_from_slice(&file.data[offset..data_end]);
+            }
             Ok(len)
         }
 
@@ -120,6 +130,9 @@ pub mod sim {
                 file.data.resize(end, 0);
             }
             file.data[offset..end].copy_from_slice(buf);
+            if end > file.len {
+                file.len = end;
+            }
             Ok(buf.len())
         }
 
