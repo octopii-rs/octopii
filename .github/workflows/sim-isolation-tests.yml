@@ -14,6 +14,8 @@ jobs:
         with:
           toolchain: stable
           cache: true
+      - name: Set vendored protoc
+        run: echo "PROTOC=$(cargo run --quiet --bin protoc_path)" >> "$GITHUB_ENV"
       - name: Run simulator isolation tests
         run: cargo test --features simulation --test sim_isolation_tests -- --test-threads=1
       - if: always()

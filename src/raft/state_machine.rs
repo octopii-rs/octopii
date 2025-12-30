@@ -282,6 +282,9 @@ impl KvStateMachine {
                 tracing::info!("No state machine entries to recover");
             }
 
+            #[cfg(feature = "simulation")]
+            let recovered_for_verify = recovered.clone();
+
             if !recovered.is_empty() {
                 *self.data.write().unwrap() = recovered;
             }
@@ -290,7 +293,7 @@ impl KvStateMachine {
             {
                 let verify = recover_state_machine_map(wal);
                 sim_assert(
-                    verify == recovered,
+                    verify == recovered_for_verify,
                     "state machine recovery not idempotent across replay",
                 );
             }

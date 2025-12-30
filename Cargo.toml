@@ -18,6 +18,8 @@ rustls = { version = "0.23", features = ["ring"] }
 rcgen = "0.13"
 slog = "2.8"
 protobuf = "2.28"
+raft = { version = "0.7", optional = true }
+protoc-bin-vendored = "3.0.0"
 sha2 = "0.10"
 futures = "0.3"
 rand = "0.8"
@@ -45,4 +47,4 @@ default = ["openraft"]
 openraft = ["dep:openraft"]
 openraft-filters = []
 # Deterministic simulation testing - enables VFS virtualization layer
-simulation = []
+simulation = ["dep:raft"]

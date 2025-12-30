@@ -248,11 +248,32 @@ impl WalStorage {
                 "conf_state topics diverged between main and recovery",
             );
 
+            let snapshot = self.snapshot.read().unwrap();
+            let snapshot_index = snapshot.get_metadata().index;
+            let snapshot_term = snapshot.get_metadata().term;
+            let hard_state = self.hard_state.read().unwrap();
+            let entries = self.entries.read().unwrap();
+
+            let mut log_pairs: Vec<(u64, u64)> = Vec::new();
+            for raw in &log_main {
+                let parse_result: protobuf::ProtobufResult<Entry> =
+                    protobuf::Message::parse_from_bytes(raw);
+                match parse_result {
+                    Ok(raft_entry) => {
+                        log_pairs.push((raft_entry.index, raft_entry.term));
+                    }
+                    Err(_) => {
+                        sim_assert(false, "failed to deserialize raft log entry for meta compare");
+                    }
+                }
+            }
+
             let meta_bytes = read_all_topic_bytes(walrus, TOPIC_LOG_META);
             let mut meta_last_index = 0u64;
             let mut meta_last_term = 0u64;
             let mut meta_snapshot_term: Option<u64> = None;
             let mut meta_expected_next: Option<u64> = None;
+            let mut meta_entries: Vec<LogMeta> = Vec::new();
             for raw in meta_bytes {
                 let archived = unsafe { rkyv::archived_root::<LogMeta>(&raw) };
                 let meta: LogMeta = match archived.deserialize(&mut rkyv::Infallible) {
@@ -262,6 +283,7 @@ impl WalStorage {
                         continue;
                     }
                 };
+                meta_entries.push(meta.clone());
                 if meta_last_index > 0 {
                     sim_assert(
                         meta.index > meta_last_index,
@@ -282,12 +304,32 @@ impl WalStorage {
                 meta_last_index = meta.index;
                 meta_last_term = meta.term;
             }
-
-            let snapshot = self.snapshot.read().unwrap();
-            let snapshot_index = snapshot.get_metadata().index;
-            let snapshot_term = snapshot.get_metadata().term;
-            let hard_state = self.hard_state.read().unwrap();
-            let entries = self.entries.read().unwrap();
+            if !meta_entries.is_empty() {
+                sim_assert(
+                    meta_entries.len() == log_pairs.len(),
+                    "raft log meta count mismatch with log entries",
+                );
+                for (meta, (idx, term)) in meta_entries.iter().zip(log_pairs.iter()) {
+                    sim_assert(
+                        meta.index == *idx,
+                        "raft log meta index mismatch with log entry",
+                    );
+                    sim_assert(
+                        meta.term == *term,
+                        "raft log meta term mismatch with log entry",
+                    );
+                }
+                if let Some((last_idx, last_term)) = log_pairs.last() {
+                    sim_assert(
+                        meta_last_index == *last_idx,
+                        "raft log meta last index mismatch with log entries",
+                    );
+                    sim_assert(
+                        meta_last_term == *last_term,
+                        "raft log meta last term mismatch with log entries",
+                    );
+                }
+            }
             let last_log_index = entries
                 .last()
                 .map(|e| e.index)

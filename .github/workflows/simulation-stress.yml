@@ -12,5 +12,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - name: Set vendored protoc
+        run: echo "PROTOC=$(cargo run --quiet --bin protoc_path)" >> "$GITHUB_ENV"
       - name: Run stress simulation tests
         run: cargo test --features simulation --test simulation --no-fail-fast stress_ -- --test-threads=2

@@ -13,6 +13,8 @@ jobs:
         with:
           toolchain: stable
           cache: true
+      - name: Set vendored protoc
+        run: echo "PROTOC=$(cargo run --quiet --bin protoc_path)" >> "$GITHUB_ENV"
       - name: Run deterministic simulation tests (exclude stress)
         run: cargo test --features simulation --test simulation --no-fail-fast -- --test-threads=15 --skip stress_
       - if: always()

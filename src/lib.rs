@@ -13,6 +13,8 @@ pub mod transport;
 pub mod wal;
 #[cfg(feature = "simulation")]
 pub mod simulation;
+#[cfg(feature = "simulation")]
+pub mod raft;
 
 // Re-export main types
 pub use chunk::{ChunkSource, TransferResult};

@@ -11,8 +11,10 @@
 
 #[cfg(feature = "simulation")]
 mod sim_tests {
+    use bytes::Bytes;
     use octopii::openraft::storage::WalLogStore;
     use octopii::openraft::types::{AppEntry, AppTypeConfig};
+    use octopii::raft::WalStorage;
     use octopii::state_machine::{KvStateMachine, StateMachine, StateMachineTrait, WalBackedStateMachine};
     use octopii::wal::wal::vfs::sim::{self, SimConfig};
     use octopii::wal::wal::vfs;
@@ -23,6 +25,12 @@ mod sim_tests {
     use openraft::type_config::alias::CommittedLeaderIdOf;
     use openraft::vote::RaftLeaderId;
     use openraft::{Entry, EntryPayload, LogId};
+    use raft::prelude::{
+        ConfState as RaftConfState, Entry as RaftEntry, HardState as RaftHardState,
+        Snapshot as RaftSnapshot,
+    };
+    use raft::storage::GetEntriesContext;
+    use raft::Storage as RaftStorageTrait;
     use std::collections::HashMap;
     use std::path::PathBuf;
     use std::sync::Arc;
@@ -540,6 +548,14 @@ mod sim_tests {
         .expect("Failed to initialize Walrus")
     }
 
+    fn make_raft_entry(index: u64, term: u64, data: &[u8]) -> RaftEntry {
+        let mut entry = RaftEntry::default();
+        entry.index = index;
+        entry.term = term;
+        entry.data = Bytes::from(data.to_vec());
+        entry
+    }
+
     // ------------------------------------------------------------------------
     // Phase 4 Tests: No fault injection (verify basic correctness)
     // ------------------------------------------------------------------------
@@ -1034,6 +1050,112 @@ mod sim_tests {
             .expect("log state");
         assert_eq!(log_state.last_purged_log_id, Some(entries[1].log_id));
         assert_eq!(log_state.last_log_id, Some(entries[2].log_id));
+
+        let _ = vfs::remove_dir_all(&root_dir);
+        sim::teardown();
+    }
+
+    #[test]
+    fn raft_storage_recovery_roundtrip_with_snapshot() {
+        sim::setup(SimConfig {
+            seed: 9107,
+            io_error_rate: 0.0,
+            initial_time_ns: 1700000000_000_000_000,
+            enable_partial_writes: false,
+        });
+
+        let root_dir = std::env::temp_dir().join("walrus_raft_storage_roundtrip");
+        let _ = vfs::remove_dir_all(&root_dir);
+        vfs::create_dir_all(&root_dir).expect("Failed to create walrus test dir");
+
+        let rt = Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .expect("tokio runtime");
+
+        let wal_path = root_dir.join("raft_storage.log");
+        let wal = rt
+            .block_on(WriteAheadLog::new(
+                wal_path.clone(),
+                0,
+                Duration::from_millis(0),
+            ))
+            .expect("wal init");
+        let storage = WalStorage::new(Arc::new(wal));
+
+        let mut conf_state1 = RaftConfState::default();
+        conf_state1.mut_voters().push(1);
+        storage.set_conf_state(conf_state1.clone());
+
+        let mut hs1 = RaftHardState::default();
+        hs1.set_term(1);
+        hs1.set_vote(1);
+        hs1.set_commit(1);
+        storage.set_hard_state(hs1);
+
+        let entries1 = vec![
+            make_raft_entry(1, 1, b"e1"),
+            make_raft_entry(2, 1, b"e2"),
+            make_raft_entry(3, 1, b"e3"),
+        ];
+        rt.block_on(storage.append_entries(&entries1))
+            .expect("append entries");
+
+        let mut snapshot = RaftSnapshot::default();
+        snapshot.data = Bytes::from_static(b"snap-2");
+        let metadata = snapshot.mut_metadata();
+        metadata.index = 2;
+        metadata.term = 1;
+        *metadata.mut_conf_state() = conf_state1.clone();
+        storage.apply_snapshot(snapshot).expect("apply snapshot");
+
+        let mut conf_state2 = RaftConfState::default();
+        conf_state2.mut_voters().extend(vec![1, 2]);
+        conf_state2.mut_learners().push(3);
+        storage.set_conf_state(conf_state2.clone());
+
+        let mut hs2 = RaftHardState::default();
+        hs2.set_term(2);
+        hs2.set_vote(2);
+        hs2.set_commit(3);
+        storage.set_hard_state(hs2.clone());
+
+        let entries2 = vec![
+            make_raft_entry(4, 2, b"e4"),
+            make_raft_entry(5, 2, b"e5"),
+        ];
+        rt.block_on(storage.append_entries(&entries2))
+            .expect("append entries 2");
+
+        drop(storage);
+        wal::__clear_storage_cache_for_tests();
+        sim::advance_time(std::time::Duration::from_secs(1));
+
+        let wal = rt
+            .block_on(WriteAheadLog::new(
+                wal_path.clone(),
+                0,
+                Duration::from_millis(0),
+            ))
+            .expect("wal restart");
+        let recovered = WalStorage::new(Arc::new(wal));
+
+        let raft_state = recovered.initial_state().expect("initial state");
+        assert_eq!(raft_state.hard_state, hs2);
+        assert_eq!(raft_state.conf_state, conf_state2);
+
+        let recovered_snapshot = recovered.snapshot(0, 0).expect("snapshot");
+        assert_eq!(recovered_snapshot.get_metadata().index, 2);
+        assert_eq!(recovered_snapshot.get_metadata().term, 1);
+
+        let first_index = recovered.first_index().expect("first_index");
+        let recovered_entries = recovered
+            .entries(first_index, 6, u64::MAX, GetEntriesContext::empty(false))
+            .expect("entries");
+        let recovered_indices: Vec<u64> =
+            recovered_entries.iter().map(|entry| entry.index).collect();
+        assert_eq!(recovered_indices, vec![3, 4, 5]);
 
         let _ = vfs::remove_dir_all(&root_dir);
         sim::teardown();
