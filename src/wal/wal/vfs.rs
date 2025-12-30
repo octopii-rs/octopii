@@ -378,6 +378,7 @@ pub mod sim {
         config: SimConfig,
         io_op_count: u64,
         io_fail_count: u64,
+        partial_write_count: u64,
         fs: SimFs,
     }
 
@@ -391,6 +392,7 @@ pub mod sim {
                 config,
                 io_op_count: 0,
                 io_fail_count: 0,
+                partial_write_count: 0,
                 fs: SimFs::new(),
             }
         }
@@ -535,6 +537,7 @@ pub mod sim {
 
     /// Determine how many bytes of a write should succeed before failure
     /// Returns None if the full write should succeed, Some(n) if only n bytes should be written
+    /// Increments partial_write_count when a partial write is triggered.
     pub(super) fn partial_write_amount(requested: usize) -> Option<usize> {
         CONTEXT.with(|ctx| {
             let mut ctx_ref = ctx.borrow_mut();
@@ -542,6 +545,7 @@ pub mod sim {
                 if c.config.enable_partial_writes && requested > 0 {
                     // 10% chance of partial write when enabled
                     if c.rng.next_f64() < 0.1 {
+                        c.partial_write_count += 1;
                         return Some(c.rng.next_usize(requested));
                     }
                 }
@@ -555,6 +559,7 @@ pub mod sim {
     pub struct SimStats {
         pub io_op_count: u64,
         pub io_fail_count: u64,
+        pub partial_write_count: u64,
         pub current_time_ns: u64,
     }
 
@@ -563,8 +568,33 @@ pub mod sim {
             ctx.borrow().as_ref().map(|c| SimStats {
                 io_op_count: c.io_op_count,
                 io_fail_count: c.io_fail_count,
+                partial_write_count: c.partial_write_count,
                 current_time_ns: c.clock_ns,
             })
+        })
+    }
+
+    /// Get the current partial write count
+    pub fn get_partial_write_count() -> u64 {
+        CONTEXT.with(|ctx| {
+            ctx.borrow()
+                .as_ref()
+                .map(|c| c.partial_write_count)
+                .unwrap_or(0)
+        })
+    }
+
+    /// Reset the partial write count to zero and return the old value
+    pub fn reset_partial_write_count() -> u64 {
+        CONTEXT.with(|ctx| {
+            let mut ctx_ref = ctx.borrow_mut();
+            if let Some(ref mut c) = *ctx_ref {
+                let old = c.partial_write_count;
+                c.partial_write_count = 0;
+                old
+            } else {
+                0
+            }
         })
     }
 

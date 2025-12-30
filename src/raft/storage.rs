@@ -673,46 +673,53 @@ impl WalStorage {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        // TWO-PHASE COMMIT:
-        // Phase 1: Write entries to both main and recovery topics
-        // Phase 2: Write commit marker to finalize the batch
+        // TWO-PHASE COMMIT with batch writes:
+        // Phase 1: Batch write entries to both main and recovery topics (2 fsyncs)
+        // Phase 2: Write commit marker to finalize the batch (1 fsync)
         //
+        // Total: 3 fsyncs regardless of batch size (vs 2N+1 with individual writes)
         // On recovery, only entries up to the last commit marker are considered valid.
-        // This ensures atomicity: either all entries in a batch are committed, or none are.
         let walrus = &self.wal.walrus;
         let last_entry = entries.last().unwrap();
         let last_index = last_entry.index;
         let last_term = last_entry.term;
 
+        // Convert to slice references for batch_append
+        let batch_refs: Vec<&[u8]> = serialized.iter().map(|v| v.as_slice()).collect();
+
         tokio::task::block_in_place(|| {
-            // Phase 1: Write entries to both topics
-            for (entry, data) in entries.iter().zip(serialized.iter()) {
-                let main_res = walrus.append_for_topic(TOPIC_LOG, data);
-                if let Err(e) = main_res {
-                    return Err(e.into());
-                }
-                let recovery_res = walrus.append_for_topic(TOPIC_LOG_RECOVERY, data);
-                if let Err(e) = recovery_res {
-                    // Entry write failed - don't write commit marker
-                    // On recovery, this entry won't be visible
-                    return Err(e.into());
-                }
-                #[cfg(feature = "simulation")]
-                {
+            // Phase 1a: Batch write entries to main topic (1 fsync)
+            let main_res = walrus.batch_append_for_topic(TOPIC_LOG, &batch_refs);
+            if let Err(e) = main_res {
+                return Err(e.into());
+            }
+
+            // Phase 1b: Batch write entries to recovery topic (1 fsync)
+            let recovery_res = walrus.batch_append_for_topic(TOPIC_LOG_RECOVERY, &batch_refs);
+            if let Err(e) = recovery_res {
+                // Recovery write failed - don't write commit marker
+                // Main has the entries but they won't be visible on recovery
+                return Err(e.into());
+            }
+
+            // Write metadata for simulation debugging (no fsync, errors ignored)
+            #[cfg(feature = "simulation")]
+            {
+                let prev_error_rate = vfs::sim::get_io_error_rate();
+                vfs::sim::set_io_error_rate(0.0);
+                for entry in entries.iter() {
                     let meta = LogMeta {
                         index: entry.index,
                         term: entry.term,
                     };
-                    let bytes = rkyv::to_bytes::<_, 64>(&meta)
-                        .map_err(|e| crate::error::OctopiiError::Wal(format!("{e:?}")))?;
-                    let prev_error_rate = vfs::sim::get_io_error_rate();
-                    vfs::sim::set_io_error_rate(0.0);
-                    let _meta_result = walrus.append_for_topic(TOPIC_LOG_META, &bytes);
-                    vfs::sim::set_io_error_rate(prev_error_rate);
+                    if let Ok(bytes) = rkyv::to_bytes::<_, 64>(&meta) {
+                        let _ = walrus.append_for_topic(TOPIC_LOG_META, &bytes);
+                    }
                 }
+                vfs::sim::set_io_error_rate(prev_error_rate);
             }
 
-            // Phase 2: Write commit marker to finalize the batch
+            // Phase 2: Write commit marker to finalize the batch (1 fsync)
             // Only entries up to this marker will be visible on recovery
             let commit_marker = LogCommitMarker {
                 last_committed_index: last_index,
@@ -731,7 +738,7 @@ impl WalStorage {
         })?;
 
         tracing::info!(
-            "✓ Appended {} entries to WAL with commit marker at index {}",
+            "✓ Appended {} entries to WAL with commit marker at index {} (3 fsyncs)",
             entries.len(),
             last_index
         );

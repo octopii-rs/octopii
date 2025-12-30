@@ -15,6 +15,7 @@ mod sim_tests {
     use octopii::openraft::storage::WalLogStore;
     use octopii::openraft::types::{AppEntry, AppTypeConfig};
     use octopii::raft::WalStorage;
+    use octopii::simulation::DurabilityOracle;
     use octopii::state_machine::{KvStateMachine, StateMachine, StateMachineTrait, WalBackedStateMachine};
     use octopii::wal::wal::vfs::sim::{self, SimConfig};
     use octopii::wal::wal::vfs;
@@ -1747,6 +1748,154 @@ mod sim_tests {
             // Cleanup
             let _ = vfs::remove_dir_all(&root_dir);
             sim::teardown();
+        }
+    }
+
+    /// Durability verification test for raw Walrus WAL operations.
+    ///
+    /// This test uses the DurabilityOracle to track which writes MUST survive
+    /// vs which MAY be lost due to partial writes. After each crash/recovery
+    /// cycle, it verifies that all "definitely durable" entries are present.
+    ///
+    /// A durability violation (missing definitely_durable entry) indicates a bug
+    /// in the WAL implementation that could cause data loss.
+    #[test]
+    fn walrus_durability_guarantee_verification() {
+        const SCENARIOS: usize = 8;
+        const CRASH_CYCLES: usize = 5;
+        const OPS_PER_CYCLE: usize = 100;
+        const BASE_SEED: u64 = 0xd5a3_71f8_c2e9_b046;
+        const ERROR_RATE: f64 = 0.18;
+
+        for scenario in 0..SCENARIOS {
+            let scenario_seed = BASE_SEED ^ (scenario as u64).wrapping_mul(0x6c62_272e_07bb_0142);
+            sim::setup(SimConfig {
+                seed: scenario_seed,
+                io_error_rate: ERROR_RATE,
+                initial_time_ns: 1_700_000_000_000_000_000,
+                enable_partial_writes: true,
+            });
+
+            // Create root directory with faults disabled
+            sim::set_io_error_rate(0.0);
+            sim::set_partial_writes_enabled(false);
+            let root_dir = std::env::temp_dir()
+                .join(format!("walrus_durability_verification_{scenario}"));
+            let _ = vfs::remove_dir_all(&root_dir);
+            vfs::create_dir_all(&root_dir).expect("Failed to create test dir");
+
+            let mut durability_oracle = DurabilityOracle::new();
+            let mut rng = sim::XorShift128::new(scenario_seed ^ 0x4a7d_c9f3_e182_b560);
+            let topic = "durability_test";
+            let mut total_writes: usize = 0;
+            let mut total_durable: usize = 0;
+
+            for cycle in 0..CRASH_CYCLES {
+                // Create WAL with faults disabled
+                sim::set_io_error_rate(0.0);
+                sim::set_partial_writes_enabled(false);
+
+                wal::__set_thread_wal_data_dir_for_tests(root_dir.clone());
+                let wal = Walrus::with_consistency_and_schedule_for_key(
+                    "durability_node",
+                    ReadConsistency::StrictlyAtOnce,
+                    FsyncSchedule::SyncEach,
+                )
+                .expect("Failed to create WAL");
+
+                // After recovery, sync oracle with actual state
+                if cycle > 0 {
+                    // Verify durability guarantee before syncing
+                    if let Err(e) = durability_oracle.verify_after_recovery(&wal) {
+                        let partial_count = sim::get_partial_write_count();
+                        panic!(
+                            "Scenario {scenario} Cycle {cycle}: {}\n\
+                             Partial writes: {partial_count}\n\
+                             Total writes: {total_writes}, Durable: {total_durable}",
+                            e
+                        );
+                    }
+                    // Sync oracle to match recovered state
+                    durability_oracle.sync_from_recovery(&wal);
+                }
+
+                // Re-enable faults for operations
+                sim::set_io_error_rate(ERROR_RATE);
+                sim::set_partial_writes_enabled(true);
+
+                // Perform random writes
+                for op in 0..OPS_PER_CYCLE {
+                    let data_len = 10 + rng.next_usize(100);
+                    let mut data = vec![0u8; data_len];
+                    for byte in &mut data {
+                        *byte = rng.next_u64() as u8;
+                    }
+
+                    // Track partial write count before/after
+                    let partial_before = sim::get_partial_write_count();
+                    let result = wal.append_for_topic(topic, &data);
+                    let partial_after = sim::get_partial_write_count();
+
+                    if result.is_ok() {
+                        // Record this write in durability oracle
+                        durability_oracle.record_write(
+                            topic,
+                            data.clone(),
+                            partial_before,
+                            partial_after,
+                        );
+                        total_writes += 1;
+                        if partial_after == partial_before {
+                            total_durable += 1;
+                        }
+                    }
+                }
+
+                let (durable_count, maybe_count) = durability_oracle.stats();
+                if scenario == 0 {
+                    eprintln!(
+                        "Scenario {} Cycle {}: {} writes ({} durable, {} maybe_lost)",
+                        scenario, cycle, total_writes, durable_count, maybe_count
+                    );
+                }
+
+                // Crash
+                drop(wal);
+                wal::__clear_storage_cache_for_tests();
+                sim::advance_time(std::time::Duration::from_secs(1));
+            }
+
+            // Final verification
+            sim::set_io_error_rate(0.0);
+            sim::set_partial_writes_enabled(false);
+            wal::__set_thread_wal_data_dir_for_tests(root_dir.clone());
+            let wal = Walrus::with_consistency_and_schedule_for_key(
+                "durability_node",
+                ReadConsistency::StrictlyAtOnce,
+                FsyncSchedule::SyncEach,
+            )
+            .expect("Failed to create WAL for final verification");
+
+            if let Err(e) = durability_oracle.verify_after_recovery(&wal) {
+                let partial_count = sim::get_partial_write_count();
+                panic!(
+                    "Scenario {scenario} FINAL: {}\n\
+                     Partial writes: {partial_count}\n\
+                     Total writes: {total_writes}, Durable: {total_durable}",
+                    e
+                );
+            }
+
+            // Cleanup
+            let _ = vfs::remove_dir_all(&root_dir);
+            sim::teardown();
+
+            if scenario == 0 {
+                eprintln!(
+                    "Scenario {} PASSED: {} total writes, {} definitely durable",
+                    scenario, total_writes, total_durable
+                );
+            }
         }
     }
 
