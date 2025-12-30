@@ -1,0 +1,15 @@
+name: simulation-stress
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 3 * * *"
+
+jobs:
+  simulation-stress:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Run stress simulation tests
+        run: cargo test --features simulation --test simulation --no-fail-fast stress_ -- --test-threads=5
