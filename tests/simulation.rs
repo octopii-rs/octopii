@@ -59,7 +59,7 @@ mod sim_tests {
         }
 
         pub fn gen_payload(&mut self) -> Vec<u8> {
-            let len = self.range(10, 100);
+            let len = self.range(1, 21);
             let mut buf = Vec::with_capacity(len);
             for _ in 0..len {
                 buf.push(self.next() as u8);
