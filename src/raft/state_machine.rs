@@ -114,6 +114,7 @@ pub struct StateMachineSnapshot {
     pub entries: Vec<(String, Vec<u8>)>,
 }
 
+
 /// Simple key-value state machine implementation (NOW DURABLE!)
 ///
 /// This is the default state machine that implements a basic key-value store

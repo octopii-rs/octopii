@@ -11,12 +11,23 @@
 
 #[cfg(feature = "simulation")]
 mod sim_tests {
+    use octopii::openraft::storage::WalLogStore;
+    use octopii::openraft::types::{AppEntry, AppTypeConfig};
+    use octopii::state_machine::{KvStateMachine, StateMachine, StateMachineTrait, WalBackedStateMachine};
     use octopii::wal::wal::vfs::sim::{self, SimConfig};
     use octopii::wal::wal::vfs;
+    use octopii::wal::wal;
     use octopii::wal::wal::{FsyncSchedule, ReadConsistency, Walrus};
     use octopii::wal::WriteAheadLog;
+    use openraft::storage::{RaftLogReader, RaftLogStorage, RaftLogStorageExt};
+    use openraft::type_config::alias::CommittedLeaderIdOf;
+    use openraft::vote::RaftLeaderId;
+    use openraft::{Entry, EntryPayload, LogId};
     use std::collections::HashMap;
     use std::path::PathBuf;
+    use std::sync::Arc;
+    use std::time::Duration;
+    use tokio::runtime::Builder;
 
     // ========================================================================
     // 1. Local Deterministic RNG (Xorshift)
@@ -528,82 +539,6 @@ mod sim_tests {
         .expect("Failed to initialize Walrus")
     }
 
-    fn encode_u64(value: u64, out: &mut Vec<u8>) {
-        out.extend_from_slice(&value.to_le_bytes());
-    }
-
-    fn decode_u64(input: &[u8], offset: &mut usize) -> u64 {
-        let mut buf = [0u8; 8];
-        buf.copy_from_slice(&input[*offset..*offset + 8]);
-        *offset += 8;
-        u64::from_le_bytes(buf)
-    }
-
-    fn encode_hard_state(term: u64, vote: u64, commit: u64) -> Vec<u8> {
-        let mut buf = Vec::with_capacity(24);
-        encode_u64(term, &mut buf);
-        encode_u64(vote, &mut buf);
-        encode_u64(commit, &mut buf);
-        buf
-    }
-
-    fn decode_hard_state(data: &[u8]) -> (u64, u64, u64) {
-        let mut offset = 0;
-        let term = decode_u64(data, &mut offset);
-        let vote = decode_u64(data, &mut offset);
-        let commit = decode_u64(data, &mut offset);
-        (term, vote, commit)
-    }
-
-    fn encode_conf_state(voters: &[u64]) -> Vec<u8> {
-        let mut buf = Vec::with_capacity(8 + voters.len() * 8);
-        encode_u64(voters.len() as u64, &mut buf);
-        for voter in voters {
-            encode_u64(*voter, &mut buf);
-        }
-        buf
-    }
-
-    fn decode_conf_state(data: &[u8]) -> Vec<u64> {
-        let mut offset = 0;
-        let count = decode_u64(data, &mut offset) as usize;
-        let mut voters = Vec::with_capacity(count);
-        for _ in 0..count {
-            voters.push(decode_u64(data, &mut offset));
-        }
-        voters
-    }
-
-    fn encode_snapshot(index: u64, term: u64, payload: &[u8]) -> Vec<u8> {
-        let mut buf = Vec::with_capacity(16 + payload.len());
-        encode_u64(index, &mut buf);
-        encode_u64(term, &mut buf);
-        buf.extend_from_slice(payload);
-        buf
-    }
-
-    fn decode_snapshot(data: &[u8]) -> (u64, u64, Vec<u8>) {
-        let mut offset = 0;
-        let index = decode_u64(data, &mut offset);
-        let term = decode_u64(data, &mut offset);
-        (index, term, data[offset..].to_vec())
-    }
-
-    fn encode_log_entry(index: u64, term: u64, payload: &[u8]) -> Vec<u8> {
-        let mut buf = Vec::with_capacity(16 + payload.len());
-        encode_u64(index, &mut buf);
-        encode_u64(term, &mut buf);
-        buf.extend_from_slice(payload);
-        buf
-    }
-
-    fn decode_log_entry(data: &[u8]) -> (u64, u64, Vec<u8>) {
-        let mut offset = 0;
-        let index = decode_u64(data, &mut offset);
-        let term = decode_u64(data, &mut offset);
-        (index, term, data[offset..].to_vec())
-    }
-
     // ------------------------------------------------------------------------
     // Phase 4 Tests: No fault injection (verify basic correctness)
     // ------------------------------------------------------------------------
@@ -932,11 +867,11 @@ mod sim_tests {
     }
 
     // ------------------------------------------------------------------------
-    // Octopii Walrus coverage (StrictlyAtOnce + SyncEach)
+    // Octopii Walrus coverage (StrictlyAtOnce + SyncEach) using production code
     // ------------------------------------------------------------------------
 
     #[test]
-    fn raft_hard_conf_state_recovery_latest_wins() {
+    fn openraft_wal_log_store_recovery_roundtrip() {
         sim::setup(SimConfig {
             seed: 9101,
             io_error_rate: 0.0,
@@ -944,64 +879,89 @@ mod sim_tests {
             enable_partial_writes: false,
         });
 
-        let root_dir = std::env::temp_dir().join("walrus_raft_hard_conf_recovery");
+        let root_dir = std::env::temp_dir().join("walrus_openraft_log_store_roundtrip");
         let _ = vfs::remove_dir_all(&root_dir);
         vfs::create_dir_all(&root_dir).expect("Failed to create walrus test dir");
 
-        let key = "raft_hard_conf_key";
-        let wal = init_strict_walrus(&root_dir, key);
-        // Short aliases: Walrus metadata caps topic names to keep entries small.
-        let topic_hs = "hs_rec";
-        let topic_cs = "cs_rec";
-        let hs1 = encode_hard_state(1, 10, 5);
-        let hs2 = encode_hard_state(3, 11, 9);
-        wal.append_for_topic(topic_hs, &hs1)
-            .expect("append hard state 1");
-        wal.append_for_topic(topic_hs, &hs2)
-            .expect("append hard state 2");
+        let rt = Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .expect("tokio runtime");
 
-        let cs1 = encode_conf_state(&[1, 2]);
-        let cs2 = encode_conf_state(&[3, 4, 5]);
-        wal.append_for_topic(topic_cs, &cs1)
-            .expect("append conf state 1");
-        wal.append_for_topic(topic_cs, &cs2)
-            .expect("append conf state 2");
+        let wal_path = root_dir.join("wal_log_store.log");
+        let wal = Arc::new(
+            rt.block_on(WriteAheadLog::new(
+                wal_path.clone(),
+                0,
+                Duration::from_millis(0),
+            ))
+            .expect("wal init"),
+        );
+        let mut store = rt
+            .block_on(WalLogStore::new(Arc::clone(&wal)))
+            .expect("log store init");
 
-        drop(wal);
+        let leader = CommittedLeaderIdOf::<AppTypeConfig>::new(1, 7);
+        let entry1 = Entry::<AppTypeConfig> {
+            log_id: LogId::new(leader, 1),
+            payload: EntryPayload::Normal(AppEntry(b"e1".to_vec())),
+        };
+        let entry2 = Entry::<AppTypeConfig> {
+            log_id: LogId::new(leader, 2),
+            payload: EntryPayload::Normal(AppEntry(b"e2".to_vec())),
+        };
+
+        rt.block_on(store.blocking_append(vec![entry1.clone(), entry2.clone()]))
+            .expect("append entries");
+
+        let vote = openraft::Vote::<AppTypeConfig>::new(2, 9);
+        rt.block_on(store.save_vote(&vote)).expect("save vote");
+
+        let committed = Some(entry2.log_id);
+        rt.block_on(store.save_committed(committed))
+            .expect("save committed");
+
+        drop(store);
         octopii::wal::wal::__clear_storage_cache_for_tests();
+        sim::advance_time(std::time::Duration::from_secs(1));
 
-        let wal = init_strict_walrus(&root_dir, key);
-        let hs_batch = wal
-            .batch_read_for_topic(topic_hs, 1024 * 1024, false)
-            .expect("batch read hard state");
-        let latest_hs = hs_batch
-            .last()
-            .expect("missing hard state")
-            .data
-            .clone();
-        let (term, vote, commit) = decode_hard_state(&latest_hs);
-        assert_eq!(term, 3);
-        assert_eq!(vote, 11);
-        assert_eq!(commit, 9);
+        let wal = Arc::new(
+            rt.block_on(WriteAheadLog::new(
+                wal_path.clone(),
+                0,
+                Duration::from_millis(0),
+            ))
+            .expect("wal restart"),
+        );
+        let mut recovered = rt
+            .block_on(WalLogStore::new(Arc::clone(&wal)))
+            .expect("log store restart");
 
-        let cs_batch = wal
-            .batch_read_for_topic(topic_cs, 1024 * 1024, false)
-            .expect("batch read conf state");
-        let latest_cs = cs_batch
-            .last()
-            .expect("missing conf state")
-            .data
-            .clone();
-        let voters = decode_conf_state(&latest_cs);
-        assert_eq!(voters, vec![3, 4, 5]);
+        let recovered_logs = rt
+            .block_on(recovered.try_get_log_entries(1..=2))
+            .expect("read logs");
+        assert_eq!(recovered_logs, vec![entry1, entry2]);
 
-        octopii::wal::wal::__clear_thread_wal_data_dir_for_tests();
+        let recovered_vote = rt.block_on(recovered.read_vote()).expect("read vote");
+        assert_eq!(recovered_vote, Some(vote));
+
+        let recovered_committed = rt
+            .block_on(recovered.read_committed())
+            .expect("read committed");
+        assert_eq!(recovered_committed, committed);
+
+        let log_state = rt
+            .block_on(recovered.get_log_state())
+            .expect("log state");
+        assert_eq!(log_state.last_log_id, committed);
+
         let _ = vfs::remove_dir_all(&root_dir);
         sim::teardown();
     }
 
     #[test]
-    fn raft_snapshot_recovery_latest_wins() {
+    fn openraft_wal_log_store_truncate_and_purge_recovery() {
         sim::setup(SimConfig {
             seed: 9102,
             io_error_rate: 0.0,
@@ -1009,159 +969,198 @@ mod sim_tests {
             enable_partial_writes: false,
         });
 
-        let root_dir = std::env::temp_dir().join("walrus_raft_snapshot_recovery");
+        let root_dir = std::env::temp_dir().join("walrus_openraft_log_store_truncate");
         let _ = vfs::remove_dir_all(&root_dir);
         vfs::create_dir_all(&root_dir).expect("Failed to create walrus test dir");
 
-        let key = "raft_snapshot_key";
-        let wal = init_strict_walrus(&root_dir, key);
-        let topic_snapshot = "snap";
-        let snap1 = encode_snapshot(5, 1, b"snap-one");
-        let snap2 = encode_snapshot(9, 2, b"snap-two");
-        wal.append_for_topic(topic_snapshot, &snap1)
-            .expect("append snapshot 1");
-        wal.append_for_topic(topic_snapshot, &snap2)
-            .expect("append snapshot 2");
+        let rt = Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .expect("tokio runtime");
 
-        drop(wal);
+        let wal_path = root_dir.join("wal_log_store.log");
+        let wal = Arc::new(
+            rt.block_on(WriteAheadLog::new(
+                wal_path.clone(),
+                0,
+                Duration::from_millis(0),
+            ))
+            .expect("wal init"),
+        );
+        let mut store = rt
+            .block_on(WalLogStore::new(Arc::clone(&wal)))
+            .expect("log store init");
+
+        let leader = CommittedLeaderIdOf::<AppTypeConfig>::new(2, 3);
+        let entries: Vec<Entry<AppTypeConfig>> = (1..=5)
+            .map(|idx| Entry::<AppTypeConfig> {
+                log_id: LogId::new(leader, idx),
+                payload: EntryPayload::Normal(AppEntry(vec![idx as u8])),
+            })
+            .collect();
+
+        rt.block_on(store.blocking_append(entries.clone()))
+            .expect("append entries");
+        rt.block_on(store.truncate(entries[3].log_id))
+            .expect("truncate");
+        rt.block_on(store.purge(entries[1].log_id))
+            .expect("purge");
+
+        drop(store);
         octopii::wal::wal::__clear_storage_cache_for_tests();
+        sim::advance_time(std::time::Duration::from_secs(1));
 
-        let wal = init_strict_walrus(&root_dir, key);
-        let mut last = None;
-        while let Ok(Some(entry)) = wal.read_next(topic_snapshot, true) {
-            last = Some(entry.data);
-        }
-        let (index, term, payload) = decode_snapshot(&last.expect("missing snapshot"));
-        assert_eq!(index, 9);
-        assert_eq!(term, 2);
-        assert_eq!(payload, b"snap-two".to_vec());
+        let wal = Arc::new(
+            rt.block_on(WriteAheadLog::new(
+                wal_path.clone(),
+                0,
+                Duration::from_millis(0),
+            ))
+            .expect("wal restart"),
+        );
+        let mut recovered = rt
+            .block_on(WalLogStore::new(Arc::clone(&wal)))
+            .expect("log store restart");
 
-        octopii::wal::wal::__clear_thread_wal_data_dir_for_tests();
+        let recovered_logs = rt
+            .block_on(recovered.try_get_log_entries(1..=5))
+            .expect("read logs");
+        assert_eq!(recovered_logs, vec![entries[2].clone()]);
+
+        let log_state = rt
+            .block_on(recovered.get_log_state())
+            .expect("log state");
+        assert_eq!(log_state.last_purged_log_id, Some(entries[1].log_id));
+        assert_eq!(log_state.last_log_id, Some(entries[2].log_id));
+
         let _ = vfs::remove_dir_all(&root_dir);
         sim::teardown();
     }
 
     #[test]
-    fn raft_log_recovery_discards_before_snapshot() {
-        sim::setup(SimConfig {
-            seed: 9103,
-            io_error_rate: 0.0,
-            initial_time_ns: 1700000000_000_000_000,
-            enable_partial_writes: false,
-        });
+    fn wal_backed_state_machine_recovery_roundtrip() {
+        const SCENARIOS: usize = 10;
+        const CRASH_CYCLES: usize = 4;
+        const OPS_PER_CYCLE: usize = 200;
+        const BASE_SEED: u64 = 0x3c6e_f372_fe94_f82b;
+        const WAL_CREATE_RETRIES: usize = 32;
 
-        let root_dir = std::env::temp_dir().join("walrus_raft_log_recovery");
-        let _ = vfs::remove_dir_all(&root_dir);
-        vfs::create_dir_all(&root_dir).expect("Failed to create walrus test dir");
+        let rt = Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .expect("Failed to create tokio runtime");
 
-        let key = "raft_log_recovery_key";
-        let wal = init_strict_walrus(&root_dir, key);
-        let topic_log_recovery = "log_rec";
-        let topic_snapshot = "snap";
-        for idx in 1..=10 {
-            let entry = encode_log_entry(idx, 1, format!("e-{idx}").as_bytes());
-            wal.append_for_topic(topic_log_recovery, &entry)
-                .expect("append log recovery entry");
-        }
-        let snap = encode_snapshot(7, 1, b"raft-snap");
-        wal.append_for_topic(topic_snapshot, &snap)
-            .expect("append snapshot");
+        for scenario in 0..SCENARIOS {
+            let scenario_seed = BASE_SEED ^ (scenario as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15);
+            sim::setup(SimConfig {
+                seed: scenario_seed,
+                io_error_rate: 0.18,
+                initial_time_ns: 1_700_000_000_000_000_000,
+                enable_partial_writes: true,
+            });
 
-        drop(wal);
-        octopii::wal::wal::__clear_storage_cache_for_tests();
+            let prev_rate = sim::get_io_error_rate();
+            let prev_partial = sim::get_partial_writes_enabled();
+            sim::set_io_error_rate(0.0);
+            sim::set_partial_writes_enabled(false);
+            let root_dir = std::env::temp_dir()
+                .join(format!("walrus_strict_state_machine_{scenario}"));
+            let _ = vfs::remove_dir_all(&root_dir);
+            vfs::create_dir_all(&root_dir).expect("Failed to create walrus test dir");
+            sim::set_io_error_rate(prev_rate);
+            sim::set_partial_writes_enabled(prev_partial);
 
-        let wal = init_strict_walrus(&root_dir, key);
-        let mut snapshot_index = 0u64;
-        while let Ok(Some(entry)) = wal.read_next(topic_snapshot, true) {
-            let (index, _term, _payload) = decode_snapshot(&entry.data);
-            snapshot_index = index;
-        }
+            let wal_path = root_dir.join("state_machine.log");
+            let mut rng = sim::XorShift128::new(scenario_seed ^ 0xa5a5_a5a5_5a5a_5a5a);
+            let mut oracle: HashMap<Vec<u8>, Vec<u8>> = HashMap::new();
 
-        let batch = wal
-            .batch_read_for_topic(topic_log_recovery, 1024 * 1024, true)
-            .expect("batch read log recovery");
-        let mut recovered_indexes = Vec::new();
-        for entry in batch {
-            let (index, _term, _payload) = decode_log_entry(&entry.data);
-            if index > snapshot_index {
-                recovered_indexes.push(index);
+            for _cycle in 0..CRASH_CYCLES {
+                let prev_rate = sim::get_io_error_rate();
+                let prev_partial = sim::get_partial_writes_enabled();
+                sim::set_io_error_rate(0.0);
+                sim::set_partial_writes_enabled(false);
+                let wal = create_wal_with_retry(&rt, wal_path.clone(), WAL_CREATE_RETRIES);
+                let (inner, wal, sm) = rt.block_on(async {
+                    let inner: StateMachine = Arc::new(KvStateMachine::in_memory());
+                    let sm = WalBackedStateMachine::with_inner(Arc::clone(&inner), Arc::clone(&wal));
+                    (inner, wal, sm)
+                });
+
+                let recovered = inner.snapshot();
+                let recovered_map: HashMap<Vec<u8>, Vec<u8>> =
+                    bincode::deserialize(&recovered).expect("snapshot deserialize failed");
+                assert_eq!(recovered_map, oracle);
+                sim::set_io_error_rate(prev_rate);
+                sim::set_partial_writes_enabled(prev_partial);
+
+                let keys: [&[u8]; 6] = [
+                    b"alpha".as_slice(),
+                    b"beta".as_slice(),
+                    b"gamma".as_slice(),
+                    b"delta".as_slice(),
+                    b"epsilon".as_slice(),
+                    b"zeta".as_slice(),
+                ];
+                let _guard = rt.enter();
+                for _ in 0..OPS_PER_CYCLE {
+                    let key = keys[rng.next_usize(keys.len())];
+                    let action = rng.next_usize(3);
+                    let (command, value) = if action < 2 {
+                        let value = (rng.next_u64() % 1000).to_string();
+                        (
+                            format!("SET {} {}", std::str::from_utf8(key).unwrap(), value),
+                            Some(value),
+                        )
+                    } else {
+                        (
+                            format!("DELETE {}", std::str::from_utf8(key).unwrap()),
+                            None,
+                        )
+                    };
+                    if sm.apply(command.as_bytes()).is_ok() {
+                        if let Some(value) = value {
+                            oracle.insert(key.to_vec(), value.into_bytes());
+                        } else {
+                            oracle.remove(key);
+                        }
+                    }
+                }
+
+                drop(sm);
+                drop(inner);
+                drop(wal);
+                wal::__clear_storage_cache_for_tests();
+                sim::advance_time(std::time::Duration::from_secs(1));
             }
-        }
-        assert_eq!(recovered_indexes, vec![8, 9, 10]);
 
-        octopii::wal::wal::__clear_thread_wal_data_dir_for_tests();
-        let _ = vfs::remove_dir_all(&root_dir);
-        sim::teardown();
+            let _ = vfs::remove_dir_all(&root_dir);
+            sim::teardown();
+        }
     }
 
-    #[test]
-    fn state_machine_snapshot_and_replay_recovery() {
-        sim::setup(SimConfig {
-            seed: 9104,
-            io_error_rate: 0.0,
-            initial_time_ns: 1700000000_000_000_000,
-            enable_partial_writes: false,
-        });
-
-        let root_dir = std::env::temp_dir().join("walrus_state_machine_recovery");
-        let _ = vfs::remove_dir_all(&root_dir);
-        vfs::create_dir_all(&root_dir).expect("Failed to create walrus test dir");
-
-        let key = "state_machine_key";
-        let wal = init_strict_walrus(&root_dir, key);
-        let topic_snapshot = "sm_snap";
-        let topic_log = "sm_log";
-
-        let mut snapshot_data = HashMap::new();
-        snapshot_data.insert("a".to_string(), b"1".to_vec());
-        snapshot_data.insert("b".to_string(), b"2".to_vec());
-        let snapshot_bytes =
-            bincode::serialize(&snapshot_data).expect("serialize snapshot");
-        wal.append_for_topic(topic_snapshot, &snapshot_bytes)
-            .expect("append snapshot");
-
-        let op_a = bincode::serialize(&("a".to_string(), Some(b"3".to_vec())))
-            .expect("serialize op");
-        let op_b = bincode::serialize(&("b".to_string(), None::<Vec<u8>>))
-            .expect("serialize op");
-        let op_c = bincode::serialize(&("c".to_string(), Some(b"4".to_vec())))
-            .expect("serialize op");
-        wal.append_for_topic(topic_log, &op_a)
-            .expect("append op");
-        wal.append_for_topic(topic_log, &op_b)
-            .expect("append op");
-        wal.append_for_topic(topic_log, &op_c)
-            .expect("append op");
-
-        drop(wal);
-        octopii::wal::wal::__clear_storage_cache_for_tests();
-
-        let wal = init_strict_walrus(&root_dir, key);
-        let mut state = HashMap::new();
-        while let Ok(Some(entry)) = wal.read_next(topic_snapshot, true) {
-            state = bincode::deserialize(&entry.data).expect("deserialize snapshot");
-        }
-
-        while let Ok(Some(entry)) = wal.read_next(topic_log, true) {
-            let (key, value): (String, Option<Vec<u8>>) =
-                bincode::deserialize(&entry.data).expect("deserialize op");
-            match value {
-                Some(v) => {
-                    state.insert(key, v);
-                }
-                None => {
-                    state.remove(&key);
+    fn create_wal_with_retry(
+        rt: &tokio::runtime::Runtime,
+        wal_path: std::path::PathBuf,
+        retries: usize,
+    ) -> Arc<WriteAheadLog> {
+        for attempt in 0..retries {
+            match rt.block_on(WriteAheadLog::new(
+                wal_path.clone(),
+                0,
+                Duration::from_millis(0),
+            )) {
+                Ok(wal) => return Arc::new(wal),
+                Err(_) => {
+                    sim::advance_time(Duration::from_millis(1));
+                    if attempt + 1 == retries {
+                        break;
+                    }
                 }
             }
         }
-
-        assert_eq!(state.get("a").unwrap().as_slice(), b"3");
-        assert_eq!(state.get("c").unwrap().as_slice(), b"4");
-        assert!(state.get("b").is_none());
-
-        octopii::wal::wal::__clear_thread_wal_data_dir_for_tests();
-        let _ = vfs::remove_dir_all(&root_dir);
-        sim::teardown();
+        panic!("Failed to create WriteAheadLog after {} retries", retries);
     }
 
     #[test]
