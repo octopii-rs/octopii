@@ -268,25 +268,33 @@ impl BlockStateTracker {
 
     pub(super) fn set_checkpointed_true(block_id: usize) {
         #[cfg(feature = "simulation")]
-        let path_opt = BLOCK_STATE_MAP.with(|map| {
+        let (path_opt, registered) = BLOCK_STATE_MAP.with(|map| {
             let map = map.borrow();
             if let Some(b) = map.get(&block_id) {
-                b.is_checkpointed.store(true, Ordering::Release);
-                Some(b.file_path.clone())
+                let was = b.is_checkpointed.swap(true, Ordering::AcqRel);
+                if was {
+                    (None, true)
+                } else {
+                    (Some(b.file_path.clone()), true)
+                }
             } else {
-                None
+                (None, false)
             }
         });
         #[cfg(feature = "simulation")]
-        sim_assert(path_opt.is_some(), "checkpointed block not registered");
+        sim_assert(registered, "checkpointed block not registered");
 
         #[cfg(not(feature = "simulation"))]
         let path_opt = {
             let map = Self::map();
             if let Ok(r) = map.read() {
                 if let Some(b) = r.get(&block_id) {
-                    b.is_checkpointed.store(true, Ordering::Release);
-                    Some(b.file_path.clone())
+                    let was = b.is_checkpointed.swap(true, Ordering::AcqRel);
+                    if was {
+                        None
+                    } else {
+                        Some(b.file_path.clone())
+                    }
                 } else {
                     None
                 }

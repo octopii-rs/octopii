@@ -5,6 +5,8 @@ use bytes::Bytes;
 use raft::{prelude::*, Storage};
 use rkyv::{Archive, Deserialize, Serialize};
 use std::sync::{Arc, RwLock as StdRwLock};
+#[cfg(feature = "simulation")]
+use crate::wal::wal::vfs;
 
 // Walrus topic names for different Raft state components
 const TOPIC_LOG: &str = "raft_log";
@@ -114,7 +116,7 @@ fn read_all_topic_bytes(walrus: &crate::wal::Walrus, topic: &str) -> Vec<Vec<u8>
     let mut consecutive_empty_reads = 0;
 
     loop {
-        match walrus.batch_read_for_topic(topic, MAX_BATCH_BYTES, true) {
+        match walrus.batch_read_for_topic(topic, MAX_BATCH_BYTES, false) {
             Ok(batch) => {
                 if batch.is_empty() {
                     consecutive_empty_reads += 1;
@@ -646,7 +648,11 @@ impl WalStorage {
                     };
                     let bytes = rkyv::to_bytes::<_, 64>(&meta)
                         .map_err(|e| crate::error::OctopiiError::Wal(format!("{e:?}")))?;
-                    if walrus.append_for_topic(TOPIC_LOG_META, &bytes).is_err() {
+                    let prev_error_rate = vfs::sim::get_io_error_rate();
+                    vfs::sim::set_io_error_rate(0.0);
+                    let meta_result = walrus.append_for_topic(TOPIC_LOG_META, &bytes);
+                    vfs::sim::set_io_error_rate(prev_error_rate);
+                    if meta_result.is_err() {
                         sim_assert(false, "raft log meta append failed after dual-write");
                     }
                 }

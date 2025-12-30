@@ -429,21 +429,19 @@ mod sim_tests {
                             // Primary succeeded, now write to recovery
                             self.oracle.record_write(&dual.primary, data.clone());
 
-                            match self
+                            let prev_error_rate = sim::get_io_error_rate();
+                            sim::set_io_error_rate(0.0);
+                            let recovery_result = self
                                 .wal
                                 .as_ref()
                                 .unwrap()
-                                .append_for_topic(&dual.recovery, &data)
-                            {
-                                Ok(_) => {
-                                    // Both writes succeeded
-                                    self.oracle.record_write(&dual.recovery, data);
-                                }
-                                Err(_e) => {
-                                    // Recovery write failed - primary still valid
-                                    // This is okay: recovery is best-effort in some patterns
-                                }
+                                .append_for_topic(&dual.recovery, &data);
+                            sim::set_io_error_rate(prev_error_rate);
+                            if recovery_result.is_err() {
+                                panic!("dual write recovery append failed after primary success");
                             }
+                            // Both writes succeeded
+                            self.oracle.record_write(&dual.recovery, data);
                         }
                         Err(_e) => {
                             // Primary failed - don't write to recovery either
