@@ -7,12 +7,13 @@
 // and I/O failures.
 //
 // IMPORTANT: These tests MUST run serially (not in parallel) because:
-// 1. They use process-wide environment variables (WALRUS_DATA_DIR)
-// 2. The VFS simulation context is thread-local but tests may interfere
+// 1. They mutate thread-local simulation context and per-thread WAL roots.
+// 2. The harness assumes a single-threaded execution model per seed.
 
 #[cfg(feature = "simulation")]
 mod sim_tests {
     use octopii::wal::wal::vfs::sim::{self, SimConfig};
+    use octopii::wal::wal::vfs;
     use octopii::wal::wal::{FsyncSchedule, ReadConsistency, Walrus};
     use std::collections::HashMap;
     use std::path::PathBuf;
@@ -214,11 +215,11 @@ mod sim_tests {
         fn new(seed: u64, error_rate: f64) -> Self {
             let root_dir = std::env::temp_dir().join(format!("walrus_sim_{}", seed));
             // Ensure clean start (using standard fs to clean up BEFORE sim starts)
-            let _ = std::fs::remove_dir_all(&root_dir);
-            let _ = std::fs::create_dir_all(&root_dir);
+            let _ = vfs::remove_dir_all(&root_dir);
+            let _ = vfs::create_dir_all(&root_dir);
 
-            // Set env var for Walrus to find the dir
-            std::env::set_var("WALRUS_DATA_DIR", root_dir.to_str().unwrap());
+            // Set per-thread WAL root for simulation isolation
+            octopii::wal::wal::__set_thread_wal_data_dir_for_tests(root_dir.clone());
 
             Self {
                 rng: SimRng::new(seed),
@@ -295,12 +296,12 @@ mod sim_tests {
 
             // 4. Clear the WalIndex files to test DATA durability (not cursor persistence)
             let key_dir = self.root_dir.join(&self.current_key);
-            if let Ok(entries) = std::fs::read_dir(&key_dir) {
+            if let Ok(entries) = vfs::read_dir(&key_dir) {
                 for entry in entries.flatten() {
                     let path = entry.path();
                     if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
                         if name.ends_with("_index.db") {
-                            let _ = std::fs::remove_file(&path);
+                            let _ = vfs::remove_file(&path);
                         }
                     }
                 }
@@ -314,6 +315,13 @@ mod sim_tests {
 
             // 6. Re-initialize (simulates recovery/startup scan)
             self.init_wal();
+
+            // 7. Ensure read offsets are fully reset in Walrus too (durability-only check)
+            if let Some(wal) = self.wal.as_ref() {
+                for topic in self.all_readable_topics() {
+                    let _ = wal.reset_read_offset_for_topic(&topic);
+                }
+            }
         }
 
         fn run(&mut self, iterations: usize) {
@@ -476,7 +484,8 @@ mod sim_tests {
     impl Drop for Simulation {
         fn drop(&mut self) {
             // Clean up the simulation directory
-            let _ = std::fs::remove_dir_all(&self.root_dir);
+            let _ = vfs::remove_dir_all(&self.root_dir);
+            octopii::wal::wal::__clear_thread_wal_data_dir_for_tests();
         }
     }
 
@@ -508,7 +517,7 @@ mod sim_tests {
     }
 
     fn init_strict_walrus(root_dir: &PathBuf, key: &str) -> Walrus {
-        std::env::set_var("WALRUS_DATA_DIR", root_dir.to_string_lossy().to_string());
+        octopii::wal::wal::__set_thread_wal_data_dir_for_tests(root_dir.clone());
         Walrus::with_consistency_and_schedule_for_key(
             key,
             ReadConsistency::StrictlyAtOnce,
@@ -722,8 +731,8 @@ mod sim_tests {
         });
 
         let root_dir = std::env::temp_dir().join("walrus_strict_checkpoint_read_next");
-        let _ = std::fs::remove_dir_all(&root_dir);
-        std::fs::create_dir_all(&root_dir).expect("Failed to create walrus test dir");
+        let _ = vfs::remove_dir_all(&root_dir);
+        vfs::create_dir_all(&root_dir).expect("Failed to create walrus test dir");
 
         let key = "strict_node";
         let topic = "strict_topic";
@@ -752,8 +761,8 @@ mod sim_tests {
         }
         assert_eq!(recovered, entries[2..].to_vec());
 
-        std::env::remove_var("WALRUS_DATA_DIR");
-        let _ = std::fs::remove_dir_all(&root_dir);
+        octopii::wal::wal::__clear_thread_wal_data_dir_for_tests();
+        let _ = vfs::remove_dir_all(&root_dir);
         sim::teardown();
     }
 
@@ -768,8 +777,8 @@ mod sim_tests {
         });
 
         let root_dir = std::env::temp_dir().join("walrus_strict_checkpoint_false");
-        let _ = std::fs::remove_dir_all(&root_dir);
-        std::fs::create_dir_all(&root_dir).expect("Failed to create walrus test dir");
+        let _ = vfs::remove_dir_all(&root_dir);
+        vfs::create_dir_all(&root_dir).expect("Failed to create walrus test dir");
 
         let key = "strict_node";
         let topic = "strict_topic";
@@ -795,8 +804,8 @@ mod sim_tests {
         let first = wal.read_next(topic, true).unwrap().expect("Missing entry");
         assert_eq!(first.data, entries[0]);
 
-        std::env::remove_var("WALRUS_DATA_DIR");
-        let _ = std::fs::remove_dir_all(&root_dir);
+        octopii::wal::wal::__clear_thread_wal_data_dir_for_tests();
+        let _ = vfs::remove_dir_all(&root_dir);
         sim::teardown();
     }
 
@@ -811,8 +820,8 @@ mod sim_tests {
         });
 
         let root_dir = std::env::temp_dir().join("walrus_strict_checkpoint_false_batch");
-        let _ = std::fs::remove_dir_all(&root_dir);
-        std::fs::create_dir_all(&root_dir).expect("Failed to create walrus test dir");
+        let _ = vfs::remove_dir_all(&root_dir);
+        vfs::create_dir_all(&root_dir).expect("Failed to create walrus test dir");
 
         let key = "strict_node";
         let topic = "strict_topic";
@@ -842,8 +851,8 @@ mod sim_tests {
         }
         assert_eq!(recovered, entries);
 
-        std::env::remove_var("WALRUS_DATA_DIR");
-        let _ = std::fs::remove_dir_all(&root_dir);
+        octopii::wal::wal::__clear_thread_wal_data_dir_for_tests();
+        let _ = vfs::remove_dir_all(&root_dir);
         sim::teardown();
     }
 
