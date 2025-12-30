@@ -23,5 +23,7 @@ jobs:
           cargo test --features simulation --test simulation openraft_wal_log_store_truncate_and_purge_recovery -- --test-threads=1
           cargo test --features simulation --test simulation wal_backed_state_machine_recovery_roundtrip -- --test-threads=1
           cargo test --features simulation --test simulation openraft_peer_addr_wal_recovery_roundtrip -- --test-threads=1
+          cargo test --features simulation --test simulation deterministic_random_seeds_smoke_8 -- --test-threads=1
+          cargo test --features simulation --test simulation fault_injection_random_seeds_8 -- --test-threads=1
       - if: always()
         run: rm -rf /tmp/walrus_strict_* /tmp/walrus_sim_* || true

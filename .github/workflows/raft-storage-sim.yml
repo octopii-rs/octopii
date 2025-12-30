@@ -1,11 +1,11 @@
-name: Simulator Isolation Tests
+name: Raft Storage Simulation
 
 on:
   push:
   workflow_dispatch:
 
 jobs:
-  sim-isolation-tests:
+  raft-storage-sim:
     runs-on: self-hosted
     timeout-minutes: 10
     steps:
@@ -16,9 +16,7 @@ jobs:
           cache: true
       - name: Set vendored protoc
         run: echo "PROTOC=$(cargo run --quiet --bin protoc_path)" >> "$GITHUB_ENV"
-      - name: Run simulator isolation tests
-        run: |
-          cargo test --features simulation --test sim_isolation_tests -- --test-threads=1
-          cargo test --features simulation --test simulation deterministic_random_seeds_smoke_8 -- --test-threads=1
+      - name: Run Raft storage recovery simulation
+        run: cargo test --features simulation --test simulation raft_storage_recovery_roundtrip_with_snapshot -- --test-threads=1
       - if: always()
-        run: rm -rf /tmp/sim_* /tmp/walrus_sim_* || true
+        run: rm -rf /tmp/walrus_raft_storage_* /tmp/walrus_sim_* || true

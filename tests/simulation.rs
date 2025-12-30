@@ -529,6 +529,8 @@ mod sim_tests {
 
         let mut simulation = Simulation::new(seed, error_rate);
         simulation.run(iterations);
+        drop(simulation);
+        wal::__clear_storage_cache_for_tests();
 
         sim::teardown();
 
@@ -580,6 +582,18 @@ mod sim_tests {
         run_simulation_with_config(314159, 5000, 0.0, false);
     }
 
+    #[test]
+    fn deterministic_random_seeds_smoke_8() {
+        let mut s = 0x9e3779b97f4a7c15u64;
+        for _ in 0..8 {
+            s ^= s >> 12;
+            s ^= s << 25;
+            s ^= s >> 27;
+            let seed = s.wrapping_mul(0x2545f4914f6cdd1d);
+            run_simulation_with_config(seed, 1000, 0.0, false);
+        }
+    }
+
     // ------------------------------------------------------------------------
     // Phase 5 Tests: With fault injection
     // ------------------------------------------------------------------------
@@ -592,6 +606,18 @@ mod sim_tests {
     fn fault_injection_seed_999() {
         // 5% I/O error rate - significant but not overwhelming
         run_simulation_with_config(999, 2000, 0.05, false);
+    }
+
+    #[test]
+    fn fault_injection_random_seeds_8() {
+        let mut s = 0xd1b54a32d192ed03u64;
+        for _ in 0..8 {
+            s ^= s >> 12;
+            s ^= s << 25;
+            s ^= s >> 27;
+            let seed = s.wrapping_mul(0x2545f4914f6cdd1d);
+            run_simulation_with_config(seed, 1200, 0.05, false);
+        }
     }
 
     #[test]
