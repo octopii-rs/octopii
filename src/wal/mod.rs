@@ -119,6 +119,11 @@ impl WriteAheadLog {
 
         // Return incrementing offset
         let offset = self.offset_counter.fetch_add(1, Ordering::SeqCst);
+        crate::invariants::sim_assert(
+            self.offset_counter.load(Ordering::SeqCst)
+                == self.write_counter.load(Ordering::SeqCst),
+            "wal counters diverged after append",
+        );
         Ok(offset)
     }
 

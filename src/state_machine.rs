@@ -99,7 +99,11 @@ impl WalBackedStateMachine {
             tokio::runtime::Handle::current().block_on(async move {
                 if let Ok(entries) = wal.read_all().await {
                     for entry in entries {
-                        let _ = inner.apply(&entry);
+                        let result = inner.apply(&entry);
+                        crate::invariants::sim_assert(
+                            result.is_ok(),
+                            "wal replay apply failed",
+                        );
                     }
                 }
             })
@@ -123,7 +127,9 @@ impl WalBackedStateMachine {
 impl StateMachineTrait for WalBackedStateMachine {
     fn apply(&self, command: &[u8]) -> std::result::Result<Bytes, String> {
         self.append_entry(command)?;
-        self.inner.apply(command)
+        let result = self.inner.apply(command);
+        crate::invariants::sim_assert(result.is_ok(), "state machine apply failed");
+        result
     }
 
     fn snapshot(&self) -> Vec<u8> {

@@ -119,6 +119,20 @@ impl Writer {
                         block.id,
                         write_offset
                     );
+                    #[cfg(feature = "simulation")]
+                    {
+                        let prev_rate = sim::get_io_error_rate();
+                        let prev_partial = sim::get_partial_writes_enabled();
+                        sim::set_io_error_rate(0.0);
+                        sim::set_partial_writes_enabled(false);
+                        let _ = block.invalidate_entry(write_offset, data.len());
+                        sim::set_io_error_rate(prev_rate);
+                        sim::set_partial_writes_enabled(prev_partial);
+                    }
+                    #[cfg(not(feature = "simulation"))]
+                    {
+                        let _ = block.invalidate_entry(write_offset, data.len());
+                    }
                     *cur = write_offset;
                     return Err(e);
                 }
@@ -129,6 +143,20 @@ impl Writer {
                 );
 
                 if let Err(e) = block.write_trailer(write_offset, data.len(), checksum) {
+                    #[cfg(feature = "simulation")]
+                    {
+                        let prev_rate = sim::get_io_error_rate();
+                        let prev_partial = sim::get_partial_writes_enabled();
+                        sim::set_io_error_rate(0.0);
+                        sim::set_partial_writes_enabled(false);
+                        let _ = block.invalidate_entry(write_offset, data.len());
+                        sim::set_io_error_rate(prev_rate);
+                        sim::set_partial_writes_enabled(prev_partial);
+                    }
+                    #[cfg(not(feature = "simulation"))]
+                    {
+                        let _ = block.invalidate_entry(write_offset, data.len());
+                    }
                     *cur = write_offset;
                     return Err(e);
                 }
@@ -140,6 +168,20 @@ impl Writer {
                             block.id,
                             write_offset
                         );
+                        #[cfg(feature = "simulation")]
+                        {
+                            let prev_rate = sim::get_io_error_rate();
+                            let prev_partial = sim::get_partial_writes_enabled();
+                            sim::set_io_error_rate(0.0);
+                            sim::set_partial_writes_enabled(false);
+                            let _ = block.invalidate_entry(write_offset, data.len());
+                            sim::set_io_error_rate(prev_rate);
+                            sim::set_partial_writes_enabled(prev_partial);
+                        }
+                        #[cfg(not(feature = "simulation"))]
+                        {
+                            let _ = block.invalidate_entry(write_offset, data.len());
+                        }
                         *cur = write_offset;
                         return Err(e);
                     }
@@ -345,6 +387,24 @@ impl Writer {
                 for block_id in revert_info.allocated_block_ids {
                     FileStateTracker::set_block_unlocked(block_id as usize);
                 }
+                #[cfg(feature = "simulation")]
+                {
+                    let prev_rate = sim::get_io_error_rate();
+                    let prev_partial = sim::get_partial_writes_enabled();
+                    sim::set_io_error_rate(0.0);
+                    sim::set_partial_writes_enabled(false);
+                    for (blk, offset, data_idx) in write_plan.iter() {
+                        let _ = blk.invalidate_entry(*offset, batch[*data_idx].len());
+                    }
+                    sim::set_io_error_rate(prev_rate);
+                    sim::set_partial_writes_enabled(prev_partial);
+                }
+                #[cfg(not(feature = "simulation"))]
+                {
+                    for (blk, offset, data_idx) in write_plan.iter() {
+                        let _ = blk.invalidate_entry(*offset, batch[*data_idx].len());
+                    }
+                }
                 return Err(e);
             }
         }
@@ -362,6 +422,24 @@ impl Writer {
                     for block_id in &revert_info.allocated_block_ids {
                         FileStateTracker::set_block_unlocked(*block_id as usize);
                     }
+                    #[cfg(feature = "simulation")]
+                    {
+                        let prev_rate = sim::get_io_error_rate();
+                        let prev_partial = sim::get_partial_writes_enabled();
+                        sim::set_io_error_rate(0.0);
+                        sim::set_partial_writes_enabled(false);
+                        for (blk, offset, data_idx) in write_plan.iter() {
+                            let _ = blk.invalidate_entry(*offset, batch[*data_idx].len());
+                        }
+                        sim::set_io_error_rate(prev_rate);
+                        sim::set_partial_writes_enabled(prev_partial);
+                    }
+                    #[cfg(not(feature = "simulation"))]
+                    {
+                        for (blk, offset, data_idx) in write_plan.iter() {
+                            let _ = blk.invalidate_entry(*offset, batch[*data_idx].len());
+                        }
+                    }
                     return Err(e);
                 }
                 fsynced.insert(blk.file_path.clone());
@@ -374,6 +452,24 @@ impl Writer {
                 let data = batch[*data_idx];
                 let checksum = checksum64(data);
                 if let Err(e) = blk.write_trailer(*offset, data.len(), checksum) {
+                    #[cfg(feature = "simulation")]
+                    {
+                        let prev_rate = sim::get_io_error_rate();
+                        let prev_partial = sim::get_partial_writes_enabled();
+                        sim::set_io_error_rate(0.0);
+                        sim::set_partial_writes_enabled(false);
+                        for (blk, offset, data_idx) in write_plan.iter() {
+                            let _ = blk.invalidate_entry(*offset, batch[*data_idx].len());
+                        }
+                        sim::set_io_error_rate(prev_rate);
+                        sim::set_partial_writes_enabled(prev_partial);
+                    }
+                    #[cfg(not(feature = "simulation"))]
+                    {
+                        for (blk, offset, data_idx) in write_plan.iter() {
+                            let _ = blk.invalidate_entry(*offset, batch[*data_idx].len());
+                        }
+                    }
                     *cur_offset = revert_info.original_offset;
                     for block_id in &revert_info.allocated_block_ids {
                         FileStateTracker::set_block_unlocked(*block_id as usize);
@@ -396,6 +492,24 @@ impl Writer {
                         *cur_offset = revert_info.original_offset;
                         for block_id in &revert_info.allocated_block_ids {
                             FileStateTracker::set_block_unlocked(*block_id as usize);
+                        }
+                        #[cfg(feature = "simulation")]
+                        {
+                            let prev_rate = sim::get_io_error_rate();
+                            let prev_partial = sim::get_partial_writes_enabled();
+                            sim::set_io_error_rate(0.0);
+                            sim::set_partial_writes_enabled(false);
+                            for (blk, offset, data_idx) in write_plan.iter() {
+                                let _ = blk.invalidate_entry(*offset, batch[*data_idx].len());
+                            }
+                            sim::set_io_error_rate(prev_rate);
+                            sim::set_partial_writes_enabled(prev_partial);
+                        }
+                        #[cfg(not(feature = "simulation"))]
+                        {
+                            for (blk, offset, data_idx) in write_plan.iter() {
+                                let _ = blk.invalidate_entry(*offset, batch[*data_idx].len());
+                            }
                         }
                         return Err(e);
                     }

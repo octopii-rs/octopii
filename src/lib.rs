@@ -3,6 +3,7 @@ pub mod runtime;
 pub mod chunk;
 pub mod config;
 pub mod error;
+mod invariants;
 #[cfg(feature = "openraft")]
 pub mod openraft;
 pub mod rpc;

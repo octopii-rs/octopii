@@ -164,6 +164,22 @@ impl Block {
         Ok(())
     }
 
+    pub(crate) fn invalidate_entry(
+        &self,
+        in_block_offset: u64,
+        data_len: usize,
+    ) -> std::io::Result<()> {
+        let header_offset = self.offset + in_block_offset;
+        let mut zero_header = [0u8; HEADER_CHECKSUM_SIZE];
+        self.mmap.write(header_offset as usize, &zero_header)?;
+
+        let trailer_offset =
+            self.offset + in_block_offset + PREFIX_META_SIZE as u64 + data_len as u64;
+        let zero_trailer = [0u8; ENTRY_TRAILER_SIZE];
+        self.mmap.write(trailer_offset as usize, &zero_trailer)?;
+        Ok(())
+    }
+
     pub(crate) fn read(&self, in_block_offset: u64) -> std::io::Result<(Entry, usize)> {
         let mut meta_buffer = vec![0; PREFIX_META_SIZE];
         let file_offset = self.offset + in_block_offset;

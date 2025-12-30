@@ -18,6 +18,10 @@ pub fn enable_fd_backend() {
 
 // Public function to disable FD backend (use mmap instead)
 pub fn disable_fd_backend() {
+    #[cfg(feature = "simulation")]
+    {
+        panic!("mmap backend is forbidden in simulation; use FD backend only");
+    }
     USE_FD_BACKEND.store(false, Ordering::Relaxed);
 }
 
@@ -25,8 +29,9 @@ pub fn disable_fd_backend() {
 pub(crate) fn is_fd_backend_enabled() -> bool {
     #[cfg(feature = "simulation")]
     {
-        // Memory mapped I/O cannot be fault-injected easily, so we force
-        // the FD backend which uses pwrite/pread through our VFS layer.
+        // WARNING: mmap backend is forbidden in simulation because it bypasses
+        // fault-injection semantics and can expose uncommitted data.
+        // Always enforce the FD backend (pwrite/pread through VFS).
         return true;
     }
     #[cfg(not(feature = "simulation"))]

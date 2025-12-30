@@ -435,6 +435,46 @@ impl WalLogStore {
         Ok(store)
     }
 
+    fn sim_assert_log_store_state(inner: &MemLogStoreInner) {
+        let last_log_id = inner.log.iter().next_back().map(|(_, entry)| entry.log_id);
+        if let Some(purged) = inner.last_purged_log_id.clone() {
+            crate::invariants::sim_assert(
+                last_log_id.map_or(true, |last| purged <= last),
+                "last purged log id is after last log id",
+            );
+            for (idx, entry) in inner.log.iter() {
+                crate::invariants::sim_assert(
+                    entry.log_id.index == *idx,
+                    "log entry index mismatches map key",
+                );
+                crate::invariants::sim_assert(
+                    *idx > purged.index,
+                    "log entry is not strictly after last purged log id",
+                );
+            }
+        } else {
+            for (idx, entry) in inner.log.iter() {
+                crate::invariants::sim_assert(
+                    entry.log_id.index == *idx,
+                    "log entry index mismatches map key",
+                );
+            }
+        }
+
+        if let Some(committed) = inner.committed {
+            crate::invariants::sim_assert(
+                last_log_id.map_or(false, |last| committed <= last),
+                "committed log id is after last log id",
+            );
+            if let Some(purged) = inner.last_purged_log_id.clone() {
+                crate::invariants::sim_assert(
+                    committed.index >= purged.index,
+                    "committed log id is before last purged log id",
+                );
+            }
+        }
+    }
+
     async fn recover_from_wal(&self) -> Result<(), OctopiiError> {
         let entries = self.wal.read_all().await.unwrap_or_else(|_| Vec::new());
         let mut inner = self.inner.lock().await;
@@ -474,6 +514,7 @@ impl WalLogStore {
                 }
             }
         }
+        Self::sim_assert_log_store_state(&inner);
         Ok(())
     }
 
@@ -518,6 +559,7 @@ impl RaftLogStorage<AppTypeConfig> for WalLogStore {
         {
             let mut inner = self.inner.lock().await;
             inner.committed = committed;
+            Self::sim_assert_log_store_state(&inner);
         }
         self.persist_record(&WalLogRecord::Committed(committed))
             .await
@@ -532,6 +574,7 @@ impl RaftLogStorage<AppTypeConfig> for WalLogStore {
         {
             let mut inner = self.inner.lock().await;
             inner.vote = Some(vote.clone());
+            Self::sim_assert_log_store_state(&inner);
         }
         self.persist_record(&WalLogRecord::Vote(vote.clone())).await
     }
@@ -552,6 +595,7 @@ impl RaftLogStorage<AppTypeConfig> for WalLogStore {
                 to_persist.push(entry.clone());
                 inner.log.insert(entry.log_id.index, entry);
             }
+            Self::sim_assert_log_store_state(&inner);
         }
         for entry in to_persist {
             self.persist_record(&WalLogRecord::LogEntry(entry)).await?;
@@ -564,6 +608,7 @@ impl RaftLogStorage<AppTypeConfig> for WalLogStore {
         {
             let mut inner = self.inner.lock().await;
             inner.truncate(log_id).await?;
+            Self::sim_assert_log_store_state(&inner);
         }
         self.persist_record(&WalLogRecord::Truncated(log_id)).await
     }
@@ -572,6 +617,7 @@ impl RaftLogStorage<AppTypeConfig> for WalLogStore {
         {
             let mut inner = self.inner.lock().await;
             inner.purge(log_id).await?;
+            Self::sim_assert_log_store_state(&inner);
         }
         self.persist_record(&WalLogRecord::Purged(log_id)).await
     }

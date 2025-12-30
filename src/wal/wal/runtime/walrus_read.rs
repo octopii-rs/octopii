@@ -833,6 +833,19 @@ impl Walrus {
                     break;
                 }
 
+                // Verify header checksum (detects partial/torn writes)
+                let stored_header = u64::from_le_bytes(
+                    buffer[buf_offset..buf_offset + 8]
+                        .try_into()
+                        .expect("slice is exactly 8 bytes"),
+                );
+                let computed_header = checksum64(
+                    &buffer[buf_offset + 8..buf_offset + PREFIX_META_SIZE],
+                );
+                if stored_header != computed_header {
+                    break;
+                }
+
                 // Extract and verify data
                 let data_start = buf_offset + PREFIX_META_SIZE;
                 let data_end = data_start + data_size;

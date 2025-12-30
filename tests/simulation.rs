@@ -1207,4 +1207,92 @@ mod sim_tests {
         sim::teardown();
     }
 
+    #[test]
+    fn openraft_peer_addr_wal_recovery_roundtrip() {
+        #[derive(serde::Serialize, serde::Deserialize)]
+        struct PeerAddrRecord {
+            peer_id: u64,
+            addr: std::net::SocketAddr,
+        }
+
+        sim::setup(SimConfig {
+            seed: 9106,
+            io_error_rate: 0.0,
+            initial_time_ns: 1700000000_000_000_000,
+            enable_partial_writes: false,
+        });
+
+        let root_dir = std::env::temp_dir().join("walrus_peer_addrs_recovery");
+        let _ = vfs::remove_dir_all(&root_dir);
+        vfs::create_dir_all(&root_dir).expect("Failed to create walrus test dir");
+
+        let rt = Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .expect("tokio runtime");
+
+        let wal_path = root_dir.join("peer_addrs.log");
+        let wal = rt
+            .block_on(WriteAheadLog::new(
+                wal_path.clone(),
+                0,
+                Duration::from_millis(0),
+            ))
+            .expect("wal init");
+
+        let addr1: std::net::SocketAddr = "127.0.0.1:5001".parse().unwrap();
+        let addr2: std::net::SocketAddr = "127.0.0.1:5002".parse().unwrap();
+        let addr3: std::net::SocketAddr = "127.0.0.1:5003".parse().unwrap();
+
+        let records = vec![
+            PeerAddrRecord {
+                peer_id: 1,
+                addr: addr1,
+            },
+            PeerAddrRecord {
+                peer_id: 2,
+                addr: addr2,
+            },
+            PeerAddrRecord {
+                peer_id: 1,
+                addr: addr3,
+            },
+        ];
+
+        for record in &records {
+            let bytes = bincode::serialize(record).expect("peer addr serialize");
+            rt.block_on(wal.append(bytes::Bytes::from(bytes)))
+                .expect("append peer addr");
+        }
+
+        drop(wal);
+        wal::__clear_storage_cache_for_tests();
+        sim::advance_time(std::time::Duration::from_secs(1));
+
+        let wal = rt
+            .block_on(WriteAheadLog::new(
+                wal_path.clone(),
+                0,
+                Duration::from_millis(0),
+            ))
+            .expect("wal restart");
+
+        let entries = rt.block_on(wal.read_all()).expect("read_all");
+        let mut recovered = std::collections::HashMap::new();
+        for raw in entries {
+            let record: PeerAddrRecord = bincode::deserialize(&raw).expect("peer addr decode");
+            recovered.insert(record.peer_id, record.addr);
+        }
+
+        let mut expected = std::collections::HashMap::new();
+        expected.insert(1, addr3);
+        expected.insert(2, addr2);
+
+        assert_eq!(recovered, expected);
+
+        let _ = vfs::remove_dir_all(&root_dir);
+        sim::teardown();
+    }
+
 }
