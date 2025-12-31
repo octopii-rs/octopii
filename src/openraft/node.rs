@@ -10,13 +10,14 @@ use crate::openraft::storage::new_wal_log_store;
 use crate::openraft::types::{AppEntry, AppNodeId, AppResponse, AppTypeConfig};
 use crate::runtime::OctopiiRuntime;
 use crate::state_machine::{KvStateMachine, StateMachine};
+use crate::transport::Transport;
 use crate::wal::WriteAheadLog;
 use crate::invariants::sim_assert;
 use bytes::Bytes;
 use once_cell::sync::Lazy;
 use openraft::impls::BasicNode;
 use openraft::metrics::RaftMetrics;
-use openraft::{Config as RaftConfig, Raft};
+use openraft::{Config as RaftConfig, Raft, ServerState};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::net::SocketAddr;
@@ -112,7 +113,8 @@ pub struct OpenRaftNode {
     runtime: OctopiiRuntime,
     config: Config,
     rpc: Arc<crate::rpc::RpcHandler>,
-    transport: Arc<crate::transport::QuicTransport>,
+    transport: Arc<dyn Transport>,
+    quic_transport: Option<Arc<crate::transport::QuicTransport>>,
     raft: Arc<Raft<AppTypeConfig>>,
     state_machine: StateMachine,
     peer_addrs: Arc<RwLock<std::collections::HashMap<u64, SocketAddr>>>,
@@ -129,8 +131,12 @@ pub struct ConfStateCompat {
 }
 
 impl OpenRaftNode {
-    pub async fn new(config: Config, runtime: OctopiiRuntime) -> Result<Self> {
-        let transport = Arc::new(crate::transport::QuicTransport::new(config.bind_addr).await?);
+    async fn new_with_transport(
+        config: Config,
+        runtime: OctopiiRuntime,
+        transport: Arc<dyn Transport>,
+        quic_transport: Option<Arc<crate::transport::QuicTransport>>,
+    ) -> Result<Self> {
         let rpc = Arc::new(crate::rpc::RpcHandler::new(Arc::clone(&transport)));
 
         std::fs::create_dir_all(&config.wal_dir).map_err(|e| crate::error::OctopiiError::Io(e))?;
@@ -234,7 +240,11 @@ impl OpenRaftNode {
                         // This can happen during normal operation (e.g., connection refused, handshake failures)
                         tracing::debug!("Failed to accept connection: {}", e);
                         // Small delay to avoid tight loop on persistent errors
-                        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+                        if cfg!(feature = "simulation") {
+                            tokio::task::yield_now().await;
+                        } else {
+                            tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+                        }
                     }
                 }
             }
@@ -291,6 +301,7 @@ impl OpenRaftNode {
             config,
             rpc,
             transport,
+            quic_transport,
             raft: Arc::new(raft),
             state_machine,
             peer_addrs,
@@ -299,6 +310,22 @@ impl OpenRaftNode {
             #[cfg(feature = "openraft-filters")]
             filters,
         })
+    }
+
+    pub async fn new(config: Config, runtime: OctopiiRuntime) -> Result<Self> {
+        let quic_transport =
+            Arc::new(crate::transport::QuicTransport::new(config.bind_addr).await?);
+        let transport: Arc<dyn Transport> = quic_transport.clone();
+        Self::new_with_transport(config, runtime, transport, Some(quic_transport)).await
+    }
+
+    #[cfg(feature = "simulation")]
+    pub async fn new_sim(
+        config: Config,
+        runtime: OctopiiRuntime,
+        transport: Arc<dyn Transport>,
+    ) -> Result<Self> {
+        Self::new_with_transport(config, runtime, transport, None).await
     }
 
     pub fn new_blocking(config: Config) -> Result<Self> {
@@ -400,76 +427,73 @@ impl OpenRaftNode {
         self.rpc
             .set_request_handler(move |req| {
                 let raft = raft_clone.clone();
-
-                match req.payload {
-                    crate::rpc::RequestPayload::OpenRaft { kind, data } => {
-                        tracing::info!(
-                            "Node {}: OpenRaft RPC handler received: kind={}",
-                            node_id,
-                            kind
-                        );
-                        let response_data = tokio::task::block_in_place(|| {
-                            tokio::runtime::Handle::current().block_on(async {
-                                match kind.as_str() {
-                                    "append_entries" => {
-                                        if let Ok(req) =
-                                            bincode::deserialize::<
-                                                openraft::raft::AppendEntriesRequest<AppTypeConfig>,
-                                            >(&data)
-                                        {
-                                            if let Ok(resp) = raft.append_entries(req).await {
-                                                bincode::serialize(&resp).unwrap_or_default()
-                                            } else {
-                                                Vec::new()
-                                            }
+                async move {
+                    match req.payload {
+                        crate::rpc::RequestPayload::OpenRaft { kind, data } => {
+                            tracing::info!(
+                                "Node {}: OpenRaft RPC handler received: kind={}",
+                                node_id,
+                                kind
+                            );
+                            let kind_copy = kind.clone();
+                            let response_data = match kind.as_str() {
+                                "append_entries" => {
+                                    if let Ok(req) =
+                                        bincode::deserialize::<
+                                            openraft::raft::AppendEntriesRequest<AppTypeConfig>,
+                                        >(&data)
+                                    {
+                                        if let Ok(resp) = raft.append_entries(req).await {
+                                            bincode::serialize(&resp).unwrap_or_default()
                                         } else {
                                             Vec::new()
                                         }
+                                    } else {
+                                        Vec::new()
                                     }
-                                    "vote" => {
-                                        if let Ok(req) =
-                                            bincode::deserialize::<
-                                                openraft::raft::VoteRequest<AppTypeConfig>,
-                                            >(&data)
-                                        {
-                                            if let Ok(resp) = raft.vote(req).await {
-                                                bincode::serialize(&resp).unwrap_or_default()
-                                            } else {
-                                                Vec::new()
-                                            }
-                                        } else {
-                                            Vec::new()
-                                        }
-                                    }
-                                    "install_snapshot" => {
-                                        if let Ok(req) = bincode::deserialize::<
-                                            openraft::raft::InstallSnapshotRequest<AppTypeConfig>,
-                                        >(
-                                            &data
-                                        ) {
-                                            if let Ok(resp) = raft.install_snapshot(req).await {
-                                                bincode::serialize(&resp).unwrap_or_default()
-                                            } else {
-                                                Vec::new()
-                                            }
-                                        } else {
-                                            Vec::new()
-                                        }
-                                    }
-                                    _ => Vec::new(),
                                 }
-                            })
-                        });
+                                "vote" => {
+                                    if let Ok(req) =
+                                        bincode::deserialize::<
+                                            openraft::raft::VoteRequest<AppTypeConfig>,
+                                        >(&data)
+                                    {
+                                        if let Ok(resp) = raft.vote(req).await {
+                                            bincode::serialize(&resp).unwrap_or_default()
+                                        } else {
+                                            Vec::new()
+                                        }
+                                    } else {
+                                        Vec::new()
+                                    }
+                                }
+                                "install_snapshot" => {
+                                    if let Ok(req) = bincode::deserialize::<
+                                        openraft::raft::InstallSnapshotRequest<AppTypeConfig>,
+                                    >(&data)
+                                    {
+                                        if let Ok(resp) = raft.install_snapshot(req).await {
+                                            bincode::serialize(&resp).unwrap_or_default()
+                                        } else {
+                                            Vec::new()
+                                        }
+                                    } else {
+                                        Vec::new()
+                                    }
+                                }
+                                _ => Vec::new(),
+                            };
 
-                        crate::rpc::ResponsePayload::OpenRaft {
-                            kind,
-                            data: bytes::Bytes::from(response_data),
+                            crate::rpc::ResponsePayload::OpenRaft {
+                                kind: kind_copy,
+                                data: bytes::Bytes::from(response_data),
+                            }
                         }
+                        _ => crate::rpc::ResponsePayload::CustomResponse {
+                            success: false,
+                            data: bytes::Bytes::new(),
+                        },
                     }
-                    _ => crate::rpc::ResponsePayload::CustomResponse {
-                        success: false,
-                        data: bytes::Bytes::new(),
-                    },
                 }
             })
             .await;
@@ -528,6 +552,18 @@ impl OpenRaftNode {
     }
 
     pub async fn propose(&self, command: Vec<u8>) -> Result<Bytes> {
+        #[cfg(feature = "simulation")]
+        {
+            let metrics = self.raft.metrics().borrow().clone();
+            sim_assert(
+                metrics.state == ServerState::Leader,
+                "propose called when not leader",
+            );
+            sim_assert(
+                metrics.current_leader == Some(self.config.node_id),
+                "propose leader id mismatch",
+            );
+        }
         let resp = self
             .raft
             .client_write(AppEntry(command))
@@ -544,6 +580,15 @@ impl OpenRaftNode {
 
     pub async fn is_leader(&self) -> bool {
         let metrics = self.raft.metrics().borrow().clone();
+        #[cfg(feature = "simulation")]
+        {
+            let leader_matches = metrics.current_leader == Some(self.config.node_id);
+            let state_is_leader = metrics.state == ServerState::Leader;
+            sim_assert(
+                !(state_is_leader && !leader_matches),
+                "state leader without matching current_leader",
+            );
+        }
         tracing::debug!(
             "Node {}: is_leader check - current_leader={:?}, server_state={:?}, membership={:?}",
             self.config.node_id,
@@ -551,11 +596,21 @@ impl OpenRaftNode {
             metrics.state,
             metrics.membership_config.membership()
         );
-        metrics.current_leader == Some(self.config.node_id)
+        metrics.state == ServerState::Leader
     }
 
     pub async fn has_leader(&self) -> bool {
         let metrics = self.raft.metrics().borrow().clone();
+        #[cfg(feature = "simulation")]
+        {
+            if let Some(leader_id) = metrics.current_leader {
+                let membership = metrics.membership_config.membership();
+                sim_assert(
+                    membership.get_node(&leader_id).is_some(),
+                    "current_leader missing from membership",
+                );
+            }
+        }
         metrics.current_leader.is_some()
     }
 
@@ -577,6 +632,15 @@ impl OpenRaftNode {
     pub async fn read_index(&self, _ctx: Vec<u8>) -> Result<()> {
         // In OpenRaft 0.10, we check leadership via metrics
         let metrics = self.raft.metrics().borrow().clone();
+        #[cfg(feature = "simulation")]
+        {
+            if metrics.current_leader == Some(self.config.node_id) {
+                sim_assert(
+                    metrics.state == ServerState::Leader,
+                    "read_index leader id set but state not leader",
+                );
+            }
+        }
         if metrics.current_leader != Some(self.config.node_id) {
             return Err(crate::error::OctopiiError::Rpc("not leader".to_string()));
         }
@@ -629,6 +693,13 @@ impl OpenRaftNode {
             if let Some(replication) = metrics.replication {
                 if let Some(repl_log_id_opt) = replication.get(&peer_id) {
                     let matched = repl_log_id_opt.as_ref().map_or(0, |log_id| log_id.index);
+                    #[cfg(feature = "simulation")]
+                    {
+                        sim_assert(
+                            matched <= last_log,
+                            "replication matched index exceeds last_log_index",
+                        );
+                    }
                     let distance = last_log.saturating_sub(matched);
                     return Ok(distance <= self.raft.config().replication_lag_threshold);
                 }
@@ -665,6 +736,13 @@ impl OpenRaftNode {
             if let Some(replication) = metrics.replication {
                 if let Some(repl_log_id_opt) = replication.get(&peer_id) {
                     let matched = repl_log_id_opt.as_ref().map_or(0, |log_id| log_id.index);
+                    #[cfg(feature = "simulation")]
+                    {
+                        sim_assert(
+                            matched <= last_log,
+                            "peer progress matched index exceeds last_log_index",
+                        );
+                    }
                     return Some((matched, last_log));
                 }
             }
@@ -702,7 +780,11 @@ impl OpenRaftNode {
     }
 
     pub fn shipping_lane(&self) -> crate::shipping_lane::ShippingLane {
-        crate::shipping_lane::ShippingLane::new(Arc::clone(&self.transport))
+        let transport = self
+            .quic_transport
+            .as_ref()
+            .expect("shipping lane requires QUIC transport");
+        crate::shipping_lane::ShippingLane::new(Arc::clone(transport))
     }
 
     #[cfg(feature = "openraft-filters")]

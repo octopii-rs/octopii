@@ -18,5 +18,7 @@ jobs:
         run: echo "PROTOC=$(cargo run --quiet --bin protoc_path)" >> "$GITHUB_ENV"
       - name: Run Raft storage recovery simulation
         run: cargo test --features simulation --test simulation raft_storage_recovery_roundtrip_with_snapshot -- --test-threads=1
+      - name: Run cluster simulation
+        run: cargo test --features simulation,openraft --test cluster_simulation -- --test-threads=1
       - if: always()
-        run: rm -rf /tmp/walrus_raft_storage_* /tmp/walrus_sim_* || true
+        run: rm -rf /tmp/walrus_raft_storage_* /tmp/walrus_sim_* /tmp/octopii_sim_cluster_* || true

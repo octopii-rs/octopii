@@ -16,6 +16,8 @@ use std::sync::OnceLock;
 
 #[cfg(feature = "simulation")]
 use std::cell::RefCell;
+#[cfg(feature = "simulation")]
+use std::sync::atomic::AtomicUsize;
 
 #[cfg(not(feature = "simulation"))]
 use super::DELETION_TX;
@@ -36,9 +38,13 @@ impl BlockAllocator {
             MAX_FILE_SIZE,
             DEFAULT_BLOCK_SIZE
         );
+        #[cfg(feature = "simulation")]
+        let start_id = GLOBAL_BLOCK_ID.fetch_add(BLOCK_ID_STRIDE, Ordering::AcqRel);
+        #[cfg(not(feature = "simulation"))]
+        let start_id = 1;
         Ok(BlockAllocator {
             next_block: UnsafeCell::new(Block {
-                id: 1,
+                id: start_id as u64,
                 offset: 0,
                 limit: DEFAULT_BLOCK_SIZE,
                 file_path: file1,
@@ -525,3 +531,9 @@ thread_local! {
     static BLOCK_STATE_MAP: RefCell<HashMap<usize, BlockState>> = RefCell::new(HashMap::new());
     static FILE_STATE_MAP: RefCell<HashMap<String, FileState>> = RefCell::new(HashMap::new());
 }
+
+#[cfg(feature = "simulation")]
+const BLOCK_ID_STRIDE: usize = 1_000_000;
+
+#[cfg(feature = "simulation")]
+static GLOBAL_BLOCK_ID: AtomicUsize = AtomicUsize::new(1);

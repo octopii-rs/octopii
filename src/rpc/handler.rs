@@ -2,20 +2,24 @@ use super::{
     deserialize, serialize, MessageId, ResponsePayload, RpcMessage, RpcRequest, RpcResponse,
 };
 use crate::error::{OctopiiError, Result};
-use crate::transport::{PeerConnection, QuicTransport};
+use crate::transport::{Peer, Transport};
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::future::Future;
+use std::pin::Pin;
 use tokio::sync::{oneshot, Mutex, RwLock};
 use tokio::time::{timeout, Duration};
 
+pub type RequestHandlerFuture = Pin<Box<dyn Future<Output = ResponsePayload> + Send>>;
+
 /// Callback for handling incoming requests
-pub type RequestHandler = Arc<dyn Fn(RpcRequest) -> ResponsePayload + Send + Sync>;
+pub type RequestHandler = Arc<dyn Fn(RpcRequest) -> RequestHandlerFuture + Send + Sync>;
 
 /// RPC handler that manages request/response correlation
 pub struct RpcHandler {
-    transport: Arc<QuicTransport>,
+    transport: Arc<dyn Transport>,
     next_id: AtomicU64,
     pending_requests: Arc<RwLock<HashMap<MessageId, oneshot::Sender<RpcResponse>>>>,
     request_handler: Arc<RwLock<Option<RequestHandler>>>,
@@ -24,7 +28,7 @@ pub struct RpcHandler {
 
 impl RpcHandler {
     /// Create a new RPC handler
-    pub fn new(transport: Arc<QuicTransport>) -> Self {
+    pub fn new(transport: Arc<dyn Transport>) -> Self {
         Self {
             transport: Arc::clone(&transport),
             next_id: AtomicU64::new(1),
@@ -35,12 +39,13 @@ impl RpcHandler {
     }
 
     /// Set the request handler callback
-    pub async fn set_request_handler<F>(&self, handler: F)
+    pub async fn set_request_handler<F, Fut>(&self, handler: F)
     where
-        F: Fn(RpcRequest) -> ResponsePayload + Send + Sync + 'static,
+        F: Fn(RpcRequest) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = ResponsePayload> + Send + 'static,
     {
         let mut h = self.request_handler.write().await;
-        *h = Some(Arc::new(handler));
+        *h = Some(Arc::new(move |req| Box::pin(handler(req))));
     }
 
     /// Send a request and wait for response
@@ -156,7 +161,7 @@ impl RpcHandler {
         &self,
         addr: SocketAddr,
         msg: RpcMessage,
-        peer: Option<Arc<PeerConnection>>,
+        peer: Option<Arc<dyn Peer>>,
     ) {
         tracing::debug!(
             "RPC notify_message from {}: {:?}",
@@ -188,12 +193,12 @@ impl RpcHandler {
         &self,
         addr: SocketAddr,
         req: RpcRequest,
-        peer: Option<Arc<PeerConnection>>,
+        peer: Option<Arc<dyn Peer>>,
     ) {
         let handler = self.request_handler.read().await;
 
         let response_payload = match handler.as_ref() {
-            Some(h) => h(req.clone()),
+            Some(h) => h(req.clone()).await,
             None => ResponsePayload::Error {
                 message: "No request handler registered".to_string(),
             },
@@ -224,7 +229,7 @@ impl RpcHandler {
         }
     }
 
-    async fn ensure_peer_receiver(self: &Arc<Self>, addr: SocketAddr, peer: Arc<PeerConnection>) {
+    async fn ensure_peer_receiver(self: &Arc<Self>, addr: SocketAddr, peer: Arc<dyn Peer>) {
         let mut receivers = self.peer_receivers.lock().await;
         if receivers.contains(&addr) {
             return;

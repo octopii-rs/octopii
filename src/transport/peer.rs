@@ -1,5 +1,6 @@
 use crate::chunk::ChunkSource;
 use crate::error::{OctopiiError, Result};
+use super::{Peer, TransportFut};
 use bytes::{Bytes, BytesMut};
 use quinn::Connection;
 use sha2::{Digest, Sha256};
@@ -343,5 +344,19 @@ impl PeerConnection {
             .map_err(|e| OctopiiError::Transport(format!("Failed to send ACK: {}", e)))?;
 
         Ok(Some(received))
+    }
+}
+
+impl Peer for PeerConnection {
+    fn send(&self, data: Bytes) -> TransportFut<'_, ()> {
+        Box::pin(async move { PeerConnection::send(self, data).await })
+    }
+
+    fn recv(&self) -> TransportFut<'_, Option<Bytes>> {
+        Box::pin(async move { PeerConnection::recv(self).await })
+    }
+
+    fn is_closed(&self) -> bool {
+        PeerConnection::is_closed(self)
     }
 }

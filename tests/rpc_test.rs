@@ -2,7 +2,7 @@ use bytes::Bytes;
 use octopii::rpc::{
     deserialize, RequestPayload, ResponsePayload, RpcHandler, RpcMessage, RpcRequest,
 };
-use octopii::transport::QuicTransport;
+use octopii::transport::{QuicTransport, Transport};
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -24,13 +24,19 @@ async fn test_rpc_request_response() {
     let addr1 = transport1.local_addr().unwrap();
     let addr2 = transport2.local_addr().unwrap();
 
-    let rpc1 = Arc::new(RpcHandler::new(Arc::clone(&transport1)));
-    let rpc2 = Arc::new(RpcHandler::new(Arc::clone(&transport2)));
+    let rpc1 = Arc::new(RpcHandler::new(
+        Arc::clone(&transport1) as Arc<dyn Transport>
+    ));
+    let rpc2 = Arc::new(RpcHandler::new(
+        Arc::clone(&transport2) as Arc<dyn Transport>
+    ));
 
     // Set up handler on node 2
-    rpc2.set_request_handler(|_req: RpcRequest| ResponsePayload::CustomResponse {
-        success: true,
-        data: Bytes::from("response_data"),
+    rpc2.set_request_handler(|_req: RpcRequest| async {
+        ResponsePayload::CustomResponse {
+            success: true,
+            data: Bytes::from("response_data"),
+        }
     })
     .await;
 
@@ -136,8 +142,12 @@ async fn test_rpc_one_way_message() {
     let addr1 = transport1.local_addr().unwrap();
     let addr2 = transport2.local_addr().unwrap();
 
-    let rpc1 = Arc::new(RpcHandler::new(Arc::clone(&transport1)));
-    let rpc2 = Arc::new(RpcHandler::new(Arc::clone(&transport2)));
+    let rpc1 = Arc::new(RpcHandler::new(
+        Arc::clone(&transport1) as Arc<dyn Transport>
+    ));
+    let rpc2 = Arc::new(RpcHandler::new(
+        Arc::clone(&transport2) as Arc<dyn Transport>
+    ));
 
     // Spawn acceptor for transport2 to receive the one-way message
     let t2_clone = Arc::clone(&transport2);
@@ -199,8 +209,12 @@ async fn test_rpc_request_timeout_and_recovery() {
     let addr1 = transport1.local_addr().unwrap();
     let addr2 = transport2.local_addr().unwrap();
 
-    let rpc1 = Arc::new(RpcHandler::new(Arc::clone(&transport1)));
-    let rpc2 = Arc::new(RpcHandler::new(Arc::clone(&transport2)));
+    let rpc1 = Arc::new(RpcHandler::new(
+        Arc::clone(&transport1) as Arc<dyn Transport>
+    ));
+    let rpc2 = Arc::new(RpcHandler::new(
+        Arc::clone(&transport2) as Arc<dyn Transport>
+    ));
 
     let drop_first = Arc::new(AtomicBool::new(true));
 
@@ -276,9 +290,11 @@ async fn test_rpc_request_timeout_and_recovery() {
     );
 
     // Now install a real handler and ensure subsequent requests succeed.
-    rpc2.set_request_handler(|_req| ResponsePayload::CustomResponse {
-        success: true,
-        data: Bytes::from_static(b"ok"),
+    rpc2.set_request_handler(|_req| async {
+        ResponsePayload::CustomResponse {
+            success: true,
+            data: Bytes::from_static(b"ok"),
+        }
     })
     .await;
 

@@ -5,7 +5,7 @@ use bytes::Bytes;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
-use tokio::time::Instant;
+use crate::sim_time;
 
 /// High-level helper for orchestrating chunk transfers between peers.
 pub struct ShippingLane {
@@ -25,9 +25,9 @@ impl ShippingLane {
     ) -> Result<TransferResult> {
         let peer = self.transport.connect(addr).await?;
         let chunk = ChunkSource::File(path.as_ref().to_path_buf());
-        let start = Instant::now();
+        let start = sim_time::now();
         match peer.send_chunk_verified(&chunk).await {
-            Ok(bytes) => Ok(TransferResult::success(addr, bytes, start.elapsed())),
+            Ok(bytes) => Ok(TransferResult::success(addr, bytes, sim_time::elapsed(start))),
             Err(err) => Ok(TransferResult::failure(addr, err.to_string())),
         }
     }
@@ -39,9 +39,9 @@ impl ShippingLane {
         dest: P,
     ) -> Result<TransferResult> {
         let peer = self.transport.connect(addr).await?;
-        let start = Instant::now();
+        let start = sim_time::now();
         match peer.recv_chunk_to_path(dest).await? {
-            Some(bytes) => Ok(TransferResult::success(addr, bytes, start.elapsed())),
+            Some(bytes) => Ok(TransferResult::success(addr, bytes, sim_time::elapsed(start))),
             None => Ok(TransferResult::failure(
                 addr,
                 "connection closed before data transfer".to_string(),
@@ -53,9 +53,9 @@ impl ShippingLane {
     pub async fn send_memory(&self, addr: SocketAddr, payload: Bytes) -> Result<TransferResult> {
         let peer = self.transport.connect(addr).await?;
         let chunk = ChunkSource::Memory(payload);
-        let start = Instant::now();
+        let start = sim_time::now();
         match peer.send_chunk_verified(&chunk).await {
-            Ok(bytes) => Ok(TransferResult::success(addr, bytes, start.elapsed())),
+            Ok(bytes) => Ok(TransferResult::success(addr, bytes, sim_time::elapsed(start))),
             Err(err) => Ok(TransferResult::failure(addr, err.to_string())),
         }
     }
@@ -66,10 +66,11 @@ impl ShippingLane {
         addr: SocketAddr,
     ) -> Result<(TransferResult, Option<Bytes>)> {
         let peer = self.transport.connect(addr).await?;
-        let start = Instant::now();
+        let start = sim_time::now();
         match peer.recv_chunk_verified().await {
             Ok(Some(bytes)) => {
-                let result = TransferResult::success(addr, bytes.len() as u64, start.elapsed());
+                let result =
+                    TransferResult::success(addr, bytes.len() as u64, sim_time::elapsed(start));
                 Ok((result, Some(bytes)))
             }
             Ok(None) => Ok((

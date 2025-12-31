@@ -15,6 +15,7 @@ use std::io;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::time::Duration;
+use crate::sim_time;
 
 /// QUIC-backed network for OpenRaft messages
 pub struct QuinnNetwork {
@@ -116,7 +117,7 @@ impl QuinnNetwork {
                 .get(&(self.self_id, self.target))
                 .copied()
             {
-                tokio::time::sleep(d).await;
+                sim_time::sleep(d).await;
             }
         }
 

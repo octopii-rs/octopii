@@ -22,6 +22,13 @@ use std::io::{self, Cursor};
 use std::ops::RangeBounds;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+#[cfg(feature = "simulation")]
+use std::time::Duration;
+
+#[cfg(feature = "simulation")]
+use crate::openraft::sim_runtime;
+#[cfg(feature = "simulation")]
+use tokio::task::yield_now;
 
 // --- Log Store ---
 #[derive(Clone, Debug, Default)]
@@ -699,10 +706,29 @@ impl WalLogStore {
     async fn persist_record(&self, record: &WalLogRecord) -> Result<(), io::Error> {
         let data =
             bincode::serialize(record).map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
-        self.wal
-            .append(Bytes::from(data))
-            .await
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+        #[cfg(feature = "simulation")]
+        {
+            for attempt in 0..20 {
+                match self.wal.append(Bytes::from(data.clone())).await {
+                    Ok(_) => return Ok(()),
+                    Err(e) => {
+                        if attempt == 19 {
+                            return Err(io::Error::new(io::ErrorKind::Other, e.to_string()));
+                        }
+                        sim_runtime::advance_time(Duration::from_millis(10));
+                        yield_now().await;
+                    }
+                }
+            }
+            return Ok(());
+        }
+        #[cfg(not(feature = "simulation"))]
+        {
+            self.wal
+                .append(Bytes::from(data))
+                .await
+                .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+        }
         Ok(())
     }
 }

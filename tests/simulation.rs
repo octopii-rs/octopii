@@ -779,6 +779,11 @@ mod sim_tests {
 
     #[test]
     fn strictly_at_once_checkpoint_persists_read_next() {
+        let root_dir = std::env::temp_dir().join("walrus_strict_checkpoint_read_next");
+        let _ = std::fs::remove_dir_all(&root_dir);
+        octopii::wal::wal::__clear_thread_wal_data_dir_for_tests();
+        octopii::wal::wal::__clear_storage_cache_for_tests();
+
         sim::setup(SimConfig {
             seed: 4242,
             io_error_rate: 0.0,
@@ -786,7 +791,6 @@ mod sim_tests {
             enable_partial_writes: false,
         });
 
-        let root_dir = std::env::temp_dir().join("walrus_strict_checkpoint_read_next");
         let _ = vfs::remove_dir_all(&root_dir);
         vfs::create_dir_all(&root_dir).expect("Failed to create walrus test dir");
 

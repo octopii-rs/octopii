@@ -2,7 +2,7 @@ use bytes::Bytes;
 use octopii::rpc::{
     deserialize, RequestPayload, ResponsePayload, RpcHandler, RpcMessage, RpcRequest,
 };
-use octopii::transport::QuicTransport;
+use octopii::transport::{QuicTransport, Transport};
 use octopii::ShippingLane;
 use rand::Rng;
 use std::net::SocketAddr;
@@ -29,13 +29,17 @@ async fn test_rpc_storm_with_handler_flaps() {
     let addr1 = transport1.local_addr().unwrap();
     let addr2 = transport2.local_addr().unwrap();
 
-    let rpc1 = Arc::new(RpcHandler::new(Arc::clone(&transport1)));
-    let rpc2 = Arc::new(RpcHandler::new(Arc::clone(&transport2)));
+    let rpc1 = Arc::new(RpcHandler::new(
+        Arc::clone(&transport1) as Arc<dyn Transport>
+    ));
+    let rpc2 = Arc::new(RpcHandler::new(
+        Arc::clone(&transport2) as Arc<dyn Transport>
+    ));
 
     let drop_rate = Arc::new(AtomicBool::new(true));
     rpc2.set_request_handler({
         let drop_rate = Arc::clone(&drop_rate);
-        move |req: RpcRequest| {
+        move |req: RpcRequest| async move {
             if drop_rate.load(Ordering::SeqCst) {
                 ResponsePayload::CustomResponse {
                     success: false,

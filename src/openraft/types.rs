@@ -25,6 +25,16 @@ pub type AppSnapshot = Vec<u8>;
 pub type AppNodeId = u64;
 
 /// OpenRaft type configuration for Octopii.
+#[cfg(feature = "simulation")]
+openraft::declare_raft_types!(
+    pub AppTypeConfig:
+        D = AppEntry,
+        R = AppResponse,
+        NodeId = AppNodeId,
+        AsyncRuntime = crate::openraft::sim_runtime::SimRuntime,
+);
+
+#[cfg(not(feature = "simulation"))]
 openraft::declare_raft_types!(
     pub AppTypeConfig:
         D = AppEntry,

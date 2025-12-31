@@ -1019,7 +1019,7 @@ dependencies = [
  "protoc-bin-vendored",
  "quinn",
  "raft",
- "rand 0.8.5",
+ "rand 0.9.2",
  "rcgen",
  "rkyv",
  "rustls",

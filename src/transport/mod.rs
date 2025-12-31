@@ -1,15 +1,39 @@
 mod peer;
+#[cfg(feature = "simulation")]
+mod sim;
 mod tls;
 
 pub use peer::PeerConnection;
+#[cfg(feature = "simulation")]
+pub use sim::{SimConfig, SimRouter, SimTransport};
 
 use crate::error::{OctopiiError, Result};
 use bytes::Bytes;
 use quinn::Endpoint;
+use std::future::Future;
 use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::RwLock;
+
+pub type TransportFut<'a, T> = Pin<Box<dyn Future<Output = Result<T>> + Send + 'a>>;
+
+pub trait Transport: Send + Sync {
+    fn local_addr(&self) -> Result<SocketAddr>;
+    fn close(&self);
+    fn is_closed(&self) -> bool;
+    fn connect(&self, addr: SocketAddr) -> TransportFut<'_, Arc<dyn Peer>>;
+    fn accept(&self) -> TransportFut<'_, (SocketAddr, Arc<dyn Peer>)>;
+    fn send(&self, addr: SocketAddr, data: Bytes) -> TransportFut<'_, ()>;
+}
+
+pub trait Peer: Send + Sync {
+    fn send(&self, data: Bytes) -> TransportFut<'_, ()>;
+    fn recv(&self) -> TransportFut<'_, Option<Bytes>>;
+    fn is_closed(&self) -> bool;
+}
 
 /// QUIC-based transport layer
 ///
@@ -20,6 +44,7 @@ use tokio::sync::RwLock;
 pub struct QuicTransport {
     endpoint: Endpoint,
     peers: Arc<RwLock<HashMap<SocketAddr, Arc<PeerConnection>>>>,
+    closed: Arc<AtomicBool>,
 }
 
 impl QuicTransport {
@@ -39,6 +64,7 @@ impl QuicTransport {
         Ok(Self {
             endpoint,
             peers: Arc::new(RwLock::new(HashMap::new())),
+            closed: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -131,6 +157,7 @@ impl QuicTransport {
 
     /// Close the transport
     pub fn close(&self) {
+        self.closed.store(true, Ordering::SeqCst);
         self.endpoint.close(0u32.into(), b"shutdown");
     }
 
@@ -142,6 +169,38 @@ impl QuicTransport {
         } else {
             false
         }
+    }
+}
+
+impl Transport for QuicTransport {
+    fn local_addr(&self) -> Result<SocketAddr> {
+        QuicTransport::local_addr(self)
+    }
+
+    fn close(&self) {
+        QuicTransport::close(self);
+    }
+
+    fn is_closed(&self) -> bool {
+        self.closed.load(Ordering::SeqCst)
+    }
+
+    fn connect(&self, addr: SocketAddr) -> TransportFut<'_, Arc<dyn Peer>> {
+        Box::pin(async move {
+            let peer = QuicTransport::connect(self, addr).await?;
+            Ok(peer as Arc<dyn Peer>)
+        })
+    }
+
+    fn accept(&self) -> TransportFut<'_, (SocketAddr, Arc<dyn Peer>)> {
+        Box::pin(async move {
+            let (addr, peer) = QuicTransport::accept(self).await?;
+            Ok((addr, peer as Arc<dyn Peer>))
+        })
+    }
+
+    fn send(&self, addr: SocketAddr, data: Bytes) -> TransportFut<'_, ()> {
+        Box::pin(async move { QuicTransport::send(self, addr, data).await })
     }
 }
 

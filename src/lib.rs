@@ -11,6 +11,7 @@ pub mod shipping_lane;
 pub mod state_machine;
 pub mod transport;
 pub mod wal;
+mod sim_time;
 #[cfg(feature = "simulation")]
 pub mod simulation;
 #[cfg(feature = "simulation")]

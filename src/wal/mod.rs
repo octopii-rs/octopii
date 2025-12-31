@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::time::Duration;
+use crate::sim_time;
 use crate::wal::wal::vfs;
 
 pub use wal::{FsyncSchedule, Walrus};
@@ -73,29 +74,26 @@ impl WriteAheadLog {
 
         let root_dir_str = parent_dir.to_string_lossy().to_string();
 
-        // Create Walrus instance using block_in_place (enforces hard thread cap)
-        // We use a global lock to prevent race conditions when setting WALRUS_DATA_DIR
-        let walrus = tokio::task::block_in_place(move || {
-            // Acquire lock to serialize WAL creation with env var setting
+        // Create Walrus instance using block_in_place in production, direct call in simulation.
+        // We use a global lock to prevent race conditions when setting WALRUS_DATA_DIR.
+        let create_walrus = move || {
             let _guard = WAL_CREATION_LOCK.lock().unwrap();
 
-            // Temporarily set WALRUS_DATA_DIR to point to our unique directory
             std::env::set_var("WALRUS_DATA_DIR", &root_dir_str);
-
-            // Create Walrus with a keyed instance for additional isolation
             let result = wal::Walrus::with_consistency_and_schedule_for_key(
                 &wal_key,
                 wal::ReadConsistency::StrictlyAtOnce,
                 schedule,
             );
-
-            // Remove the environment variable after Walrus reads it
             std::env::remove_var("WALRUS_DATA_DIR");
-
-            // Lock is automatically released when _guard is dropped
-
             result
-        })
+        };
+
+        let walrus = if cfg!(feature = "simulation") {
+            create_walrus()
+        } else {
+            tokio::task::block_in_place(create_walrus)
+        }
         .map_err(|e| OctopiiError::Wal(format!("Failed to create Walrus: {}", e)))?;
 
         Ok(Self {
@@ -113,8 +111,7 @@ impl WriteAheadLog {
         let topic = self.topic.clone();
         let data_vec = data.to_vec();
 
-        // Use block_in_place for hard thread cap (Walrus ops are non-blocking)
-        tokio::task::block_in_place(|| {
+        let do_append = || {
             walrus.append_for_topic(&topic, &data_vec)?;
             #[cfg(feature = "simulation")]
             {
@@ -130,8 +127,14 @@ impl WriteAheadLog {
                 }
             }
             Ok::<(), std::io::Error>(())
-        })
-        .map_err(|e| OctopiiError::Wal(format!("Failed to append: {}", e)))?;
+        };
+
+        if cfg!(feature = "simulation") {
+            do_append().map_err(|e| OctopiiError::Wal(format!("Failed to append: {}", e)))?;
+        } else {
+            tokio::task::block_in_place(do_append)
+                .map_err(|e| OctopiiError::Wal(format!("Failed to append: {}", e)))?;
+        }
 
         // Increment write counter for read_all tracking
         self.write_counter.fetch_add(1, Ordering::SeqCst);
@@ -152,7 +155,7 @@ impl WriteAheadLog {
     pub async fn flush(&self) -> Result<()> {
         // Give Walrus's background fsync thread time to complete
         // The configured schedule is typically 100-200ms
-        tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
+        sim_time::sleep(tokio::time::Duration::from_millis(300)).await;
         Ok(())
     }
 
@@ -164,8 +167,7 @@ impl WriteAheadLog {
         let walrus = self.walrus.clone();
         let topic = self.topic.clone();
 
-        // Use block_in_place for hard thread cap (Walrus ops are non-blocking)
-        tokio::task::block_in_place(move || {
+        let do_read = move || {
             let _ = walrus.reset_read_offset_for_topic(&topic);
             let mut all_entries = Vec::new();
             let checkpoint = true;
@@ -227,7 +229,13 @@ impl WriteAheadLog {
             }
 
             Ok(all_entries)
-        })
+        };
+
+        if cfg!(feature = "simulation") {
+            do_read()
+        } else {
+            tokio::task::block_in_place(do_read)
+        }
     }
 }
 
