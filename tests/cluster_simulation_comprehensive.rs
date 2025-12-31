@@ -42,14 +42,19 @@ mod comprehensive_tests {
         std::env::var("CLUSTER_OPS")
             .ok()
             .and_then(|v| v.parse::<usize>().ok())
-            .unwrap_or(100)
+            .unwrap_or(1000)
     }
 
     fn stress_ops() -> usize {
         std::env::var("CLUSTER_STRESS_OPS")
             .ok()
             .and_then(|v| v.parse::<usize>().ok())
-            .unwrap_or(500)
+            .unwrap_or(5000)
+    }
+
+    /// Smaller ops count for tests with high overhead (membership, 7-node clusters)
+    fn small_ops_count() -> usize {
+        ops_count() / 4
     }
 
     // =========================================================================
@@ -95,7 +100,7 @@ mod comprehensive_tests {
         let leader = harness.wait_for_leader().await;
         assert!(leader.is_some(), "leader election failed");
 
-        harness.run_oracle_workload(50).await; // Smaller workload for 7 nodes
+        harness.run_oracle_workload(small_ops_count()).await; // Smaller workload for 7 nodes
 
         harness.cleanup();
     }
@@ -109,7 +114,7 @@ mod comprehensive_tests {
             let leader = harness.wait_for_leader().await;
             assert!(leader.is_some(), "leader election failed for seed {}", seed);
 
-            harness.run_oracle_workload(20).await;
+            harness.run_oracle_workload(small_ops_count()).await;
             harness.cleanup();
         }
     }
@@ -128,7 +133,7 @@ mod comprehensive_tests {
             let leader = harness.wait_for_leader().await;
             assert!(leader.is_some(), "leader election failed for seed {}", seed);
 
-            harness.run_oracle_workload(30).await;
+            harness.run_oracle_workload(small_ops_count()).await;
             harness.cleanup();
         }
     }
@@ -143,7 +148,7 @@ mod comprehensive_tests {
             let leader = harness.wait_for_leader().await;
             assert!(leader.is_some(), "leader election failed for seed {}", seed);
 
-            harness.run_oracle_workload(25).await;
+            harness.run_oracle_workload(small_ops_count()).await;
             harness.cleanup();
         }
     }
@@ -159,7 +164,52 @@ mod comprehensive_tests {
             let leader = harness.wait_for_leader().await;
             assert!(leader.is_some(), "leader election failed for seed {}", seed);
 
-            harness.run_oracle_workload(25).await;
+            harness.run_oracle_workload(small_ops_count()).await;
+            harness.cleanup();
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn io_faults_15pct_seed_sweep() {
+        let (start, count) = seed_range();
+        for seed in start..(start + count) {
+            let error_rate = walrus_error_rate(seed, 0.15);
+            let params = ClusterParams::new(3, seed, error_rate, FaultProfile::IoErrorsHeavy);
+            let mut harness = ClusterHarness::new(params).await;
+            let leader = harness.wait_for_leader().await;
+            assert!(leader.is_some(), "leader election failed for seed {}", seed);
+
+            harness.run_oracle_workload(small_ops_count()).await;
+            harness.cleanup();
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn io_faults_20pct_seed_sweep() {
+        let (start, count) = seed_range();
+        for seed in start..(start + count.min(10)) {
+            let error_rate = walrus_error_rate(seed, 0.20);
+            let params = ClusterParams::new(3, seed, error_rate, FaultProfile::IoErrorsHeavy);
+            let mut harness = ClusterHarness::new(params).await;
+            let leader = harness.wait_for_leader().await;
+            assert!(leader.is_some(), "leader election failed for seed {}", seed);
+
+            harness.run_oracle_workload(small_ops_count()).await;
+            harness.cleanup();
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn io_faults_25pct_seed_sweep() {
+        let (start, count) = seed_range();
+        for seed in start..(start + count.min(5)) {
+            let error_rate = walrus_error_rate(seed, 0.25);
+            let params = ClusterParams::new(3, seed, error_rate, FaultProfile::IoErrorsHeavy);
+            let mut harness = ClusterHarness::new(params).await;
+            let leader = harness.wait_for_leader().await;
+            assert!(leader.is_some(), "leader election failed for seed {}", seed);
+
+            harness.run_oracle_workload(small_ops_count()).await;
             harness.cleanup();
         }
     }
@@ -187,14 +237,14 @@ mod comprehensive_tests {
         assert!(leader.is_some(), "leader election failed");
 
         // Run some operations before partition
-        harness.run_oracle_workload(20).await;
+        harness.run_oracle_workload(small_ops_count()).await;
 
         // Isolate the leader
         harness.isolate_leader().await;
         harness.tick(100, 50).await; // Let new leader be elected
 
         // Run more operations (should succeed with new leader)
-        harness.run_oracle_workload(20).await;
+        harness.run_oracle_workload(small_ops_count()).await;
 
         // Heal and verify convergence
         harness.heal_partitions();
@@ -211,7 +261,7 @@ mod comprehensive_tests {
         let leader = harness.wait_for_leader().await;
         assert!(leader.is_some(), "leader election failed");
 
-        harness.run_oracle_workload(50).await;
+        harness.run_oracle_workload(small_ops_count()).await;
         harness.cleanup();
     }
 
@@ -224,7 +274,7 @@ mod comprehensive_tests {
             let leader = harness.wait_for_leader().await;
             assert!(leader.is_some(), "leader election failed for seed {}", seed);
 
-            harness.run_oracle_workload(30).await;
+            harness.run_oracle_workload(small_ops_count()).await;
             harness.cleanup();
         }
     }
@@ -243,7 +293,7 @@ mod comprehensive_tests {
             let leader = harness.wait_for_leader().await;
             assert!(leader.is_some(), "leader election failed for seed {}", seed);
 
-            harness.run_oracle_workload(30).await;
+            harness.run_oracle_workload(small_ops_count()).await;
             harness.cleanup();
         }
     }
@@ -259,7 +309,7 @@ mod comprehensive_tests {
             let leader = harness.wait_for_leader().await;
             assert!(leader.is_some(), "leader election failed for seed {}", seed);
 
-            harness.run_oracle_workload(25).await;
+            harness.run_oracle_workload(small_ops_count()).await;
             harness.cleanup();
         }
     }
@@ -277,7 +327,7 @@ mod comprehensive_tests {
         assert!(leader.is_some(), "leader election failed");
 
         // Run some operations
-        harness.run_oracle_workload(30).await;
+        harness.run_oracle_workload(small_ops_count()).await;
 
         // Crash a follower (not the leader)
         let leader_id = leader.unwrap();
@@ -288,7 +338,7 @@ mod comprehensive_tests {
 
         // Run more operations - give extra time for recovery
         harness.tick(100, 50).await;
-        harness.run_oracle_workload(30).await;
+        harness.run_oracle_workload(small_ops_count()).await;
 
         harness.cleanup();
     }
@@ -301,7 +351,7 @@ mod comprehensive_tests {
         assert!(leader.is_some(), "leader election failed");
 
         // Run some operations
-        harness.run_oracle_workload(30).await;
+        harness.run_oracle_workload(small_ops_count()).await;
 
         // Crash the leader
         let leader_id = leader.unwrap();
@@ -315,7 +365,7 @@ mod comprehensive_tests {
         assert!(new_leader.is_some(), "new leader election failed");
 
         // Run more operations
-        harness.run_oracle_workload(30).await;
+        harness.run_oracle_workload(small_ops_count()).await;
 
         harness.cleanup();
     }
@@ -329,7 +379,7 @@ mod comprehensive_tests {
             let leader = harness.wait_for_leader().await;
             assert!(leader.is_some(), "leader election failed in cycle {}", cycle);
 
-            harness.run_oracle_workload(20).await;
+            harness.run_oracle_workload(small_ops_count() / 2).await;
 
             // Crash a random node
             let crash_idx = (cycle % harness.nodes.len()) as usize;
@@ -339,8 +389,46 @@ mod comprehensive_tests {
         harness.cleanup();
     }
 
+    #[tokio::test(flavor = "current_thread")]
+    async fn crash_recovery_cycles_5() {
+        let params = ClusterParams::new(5, 300004, 0.05, FaultProfile::None);
+        let mut harness = ClusterHarness::new(params).await;
+
+        for cycle in 0..5 {
+            let leader = harness.wait_for_leader().await;
+            assert!(leader.is_some(), "leader election failed in cycle {}", cycle);
+
+            harness.run_oracle_workload(small_ops_count() / 2).await;
+
+            // Crash a random node
+            let crash_idx = ((cycle * 3) % harness.nodes.len()) as usize;
+            harness.crash_and_recover_node(crash_idx, CrashReason::Scheduled).await;
+        }
+
+        harness.cleanup();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn crash_recovery_cycles_8() {
+        let params = ClusterParams::new(5, 300005, 0.05, FaultProfile::None);
+        let mut harness = ClusterHarness::new(params).await;
+
+        for cycle in 0..8 {
+            let leader = harness.wait_for_leader().await;
+            assert!(leader.is_some(), "leader election failed in cycle {}", cycle);
+
+            harness.run_oracle_workload(small_ops_count() / 3).await;
+
+            // Crash a random node
+            let crash_idx = ((cycle * 7) % harness.nodes.len()) as usize;
+            harness.crash_and_recover_node(crash_idx, CrashReason::Scheduled).await;
+        }
+
+        harness.cleanup();
+    }
+
     // =========================================================================
-    // 4.6 Crash Recovery (Aggressive - Nightly)
+    // 4.6 Crash Recovery (Aggressive)
     // =========================================================================
 
     #[tokio::test(flavor = "current_thread")]
@@ -350,21 +438,21 @@ mod comprehensive_tests {
         let leader = harness.wait_for_leader().await;
         assert!(leader.is_some(), "leader election failed");
 
-        harness.run_oracle_workload(30).await;
+        harness.run_oracle_workload(small_ops_count()).await;
 
         // Crash 2 nodes (still have quorum with 3)
         harness.crash_multiple(&[1, 2], CrashReason::Scheduled);
         harness.tick(50, 50).await;
 
         // Should still be able to make progress
-        harness.run_oracle_workload(20).await;
+        harness.run_oracle_workload(small_ops_count()).await;
 
         // Recover nodes
         harness.recover_node(1).await;
         harness.recover_node(2).await;
         harness.tick(50, 50).await;
 
-        harness.run_oracle_workload(20).await;
+        harness.run_oracle_workload(small_ops_count()).await;
         harness.cleanup();
     }
 
@@ -375,7 +463,7 @@ mod comprehensive_tests {
         let leader = harness.wait_for_leader().await;
         assert!(leader.is_some(), "leader election failed");
 
-        harness.run_oracle_workload(30).await;
+        harness.run_oracle_workload(small_ops_count()).await;
 
         // Crash majority (3 nodes) - cluster should stall
         harness.crash_multiple(&[0, 1, 2], CrashReason::Scheduled);
@@ -392,7 +480,7 @@ mod comprehensive_tests {
         let leader = harness.wait_for_leader().await;
         assert!(leader.is_some(), "leader election failed after recovery");
 
-        harness.run_oracle_workload(30).await;
+        harness.run_oracle_workload(small_ops_count()).await;
         harness.cleanup();
     }
 
@@ -405,7 +493,7 @@ mod comprehensive_tests {
             let leader = harness.wait_for_leader().await;
             assert!(leader.is_some(), "leader election failed in cycle {}", cycle);
 
-            harness.run_oracle_workload(15).await;
+            harness.run_oracle_workload(small_ops_count() / 2).await;
 
             // Crash a random node
             let crash_idx = (cycle * 7) % harness.nodes.len();
@@ -427,7 +515,7 @@ mod comprehensive_tests {
         assert!(leader.is_some(), "leader election failed");
 
         // Run initial workload
-        harness.run_oracle_workload(30).await;
+        harness.run_oracle_workload(small_ops_count()).await;
 
         // Add a new node
         let new_idx = harness.add_node().await.expect("add node failed");
@@ -445,14 +533,14 @@ mod comprehensive_tests {
         let leader = harness.wait_for_leader().await;
         assert!(leader.is_some(), "leader election failed");
 
-        harness.run_oracle_workload(20).await;
+        harness.run_oracle_workload(small_ops_count()).await;
 
         // Add and promote a new node
         let new_idx = harness.add_node().await.expect("add node failed");
         harness.promote_node(new_idx).await.expect("promote failed");
 
         // Should now have 4 voters
-        harness.run_oracle_workload(20).await;
+        harness.run_oracle_workload(small_ops_count()).await;
         harness.cleanup();
     }
 
@@ -464,7 +552,7 @@ mod comprehensive_tests {
         let leader = harness.wait_for_leader().await;
         assert!(leader.is_some(), "leader election failed");
 
-        harness.run_oracle_workload(20).await;
+        harness.run_oracle_workload(small_ops_count()).await;
 
         // Remove a follower
         let leader_id = leader.unwrap();
@@ -474,7 +562,7 @@ mod comprehensive_tests {
         harness.remove_node(follower_idx).await.expect("remove failed");
 
         // Cluster should continue operating
-        harness.run_oracle_workload(20).await;
+        harness.run_oracle_workload(small_ops_count()).await;
         harness.cleanup();
     }
 
@@ -485,13 +573,13 @@ mod comprehensive_tests {
         let leader = harness.wait_for_leader().await;
         assert!(leader.is_some(), "leader election failed");
 
-        harness.run_oracle_workload(20).await;
+        harness.run_oracle_workload(small_ops_count()).await;
 
         // Scale up to 5 nodes
         harness.scale_cluster(5).await.expect("scale up failed");
         assert_eq!(harness.nodes.len(), 5);
 
-        harness.run_oracle_workload(20).await;
+        harness.run_oracle_workload(small_ops_count()).await;
         harness.cleanup();
     }
 
@@ -508,7 +596,7 @@ mod comprehensive_tests {
         assert!(leader.is_some(), "leader election failed");
 
         // Run enough operations to trigger snapshots
-        harness.run_oracle_workload(200).await;
+        harness.run_oracle_workload(ops_count()).await;
 
         harness.cleanup();
     }
@@ -521,7 +609,7 @@ mod comprehensive_tests {
         let leader = harness.wait_for_leader().await;
         assert!(leader.is_some(), "leader election failed");
 
-        harness.run_oracle_workload(100).await;
+        harness.run_oracle_workload(small_ops_count()).await;
 
         harness.cleanup();
     }
@@ -538,24 +626,24 @@ mod comprehensive_tests {
         harness.crash_node(1, CrashReason::Scheduled);
 
         // Run lots of operations so log is truncated
-        harness.run_oracle_workload(100).await;
+        harness.run_oracle_workload(small_ops_count()).await;
 
         // Recover the follower - should catch up via snapshot
         harness.recover_node(1).await;
         harness.tick(200, 50).await;
 
         // Verify the recovered node has caught up
-        harness.run_oracle_workload(20).await;
+        harness.run_oracle_workload(small_ops_count() / 2).await;
 
         harness.cleanup();
     }
 
     // =========================================================================
-    // 4.9 Stress Tests (Long-Running, Nightly)
+    // 4.9 Stress Tests (Long-Running)
     // =========================================================================
 
     #[tokio::test(flavor = "current_thread")]
-    async fn stress_cluster_5000_ops_seed_sweep() {
+    async fn stress_cluster_seed_sweep() {
         let seeds = walrus_seed_sequence(0x9e3779b97f4a7c15, 5);
         for seed in seeds {
             let error_rate = walrus_error_rate(seed, 0.05);
@@ -583,7 +671,7 @@ mod comprehensive_tests {
             let leader = harness.wait_for_leader().await;
             assert!(leader.is_some(), "leader election failed for seed {}", seed);
 
-            harness.run_oracle_workload(200).await;
+            harness.run_oracle_workload(stress_ops() / 2).await;
             harness.cleanup();
         }
     }
@@ -604,7 +692,7 @@ mod comprehensive_tests {
 
         // Run with periodic crashes
         for cycle in 0..5 {
-            harness.run_oracle_workload(50).await;
+            harness.run_oracle_workload(stress_ops() / 10).await;
 
             // Crash and recover a node each cycle
             let crash_idx = (cycle * 3) % harness.nodes.len();
@@ -613,6 +701,107 @@ mod comprehensive_tests {
 
         let (commits, failures, _) = harness.oracle_stats();
         eprintln!("Full chaos: {} commits, {} failures", commits, failures);
+
+        harness.cleanup();
+    }
+
+    // =========================================================================
+    // 4.10 Walrus-Style Seed Sweeps (Matching simulation.rs patterns)
+    // =========================================================================
+
+    /// 8 random seeds with 1000+ ops each, no faults - matches Walrus pattern
+    #[tokio::test(flavor = "current_thread")]
+    async fn deterministic_random_seeds_8_no_faults() {
+        let seeds = walrus_seed_sequence(0x9e3779b97f4a7c15, 8);
+        for seed in seeds {
+            let params = ClusterParams::new(3, seed, 0.0, FaultProfile::None);
+            let mut harness = ClusterHarness::new(params).await;
+            let leader = harness.wait_for_leader().await;
+            assert!(leader.is_some(), "leader election failed for seed {}", seed);
+
+            harness.run_oracle_workload(ops_count()).await;
+
+            let (commits, failures, verifies) = harness.oracle_stats();
+            assert_eq!(failures, 0, "seed {}: unexpected failures", seed);
+            assert_eq!(commits, verifies, "seed {}: verification mismatch", seed);
+
+            harness.cleanup();
+        }
+    }
+
+    /// 8 random seeds with I/O errors - matches Walrus fault injection pattern
+    #[tokio::test(flavor = "current_thread")]
+    async fn deterministic_random_seeds_8_io_errors() {
+        let seeds = walrus_seed_sequence(0xd1b54a32d192ed03, 8);
+        for seed in seeds {
+            let error_rate = walrus_error_rate(seed, 0.05);
+            let params = ClusterParams::new(3, seed, error_rate, FaultProfile::IoErrorsLight);
+            let mut harness = ClusterHarness::new(params).await;
+            let leader = harness.wait_for_leader().await;
+            assert!(leader.is_some(), "leader election failed for seed {}", seed);
+
+            harness.run_oracle_workload(ops_count()).await;
+
+            let (commits, failures, _) = harness.oracle_stats();
+            eprintln!("Seed {}: {} commits, {} failures", seed, commits, failures);
+
+            harness.cleanup();
+        }
+    }
+
+    /// 8 random seeds with partial writes - matches Walrus partial write pattern
+    #[tokio::test(flavor = "current_thread")]
+    async fn deterministic_random_seeds_8_partial_writes() {
+        let seeds = walrus_seed_sequence(0x517cc1b727220a95, 8);
+        for seed in seeds {
+            let error_rate = walrus_error_rate(seed, 0.05);
+            let mut params = ClusterParams::new(3, seed, error_rate, FaultProfile::PartialWrites);
+            params.enable_partial_writes = true;
+            let mut harness = ClusterHarness::new(params).await;
+            let leader = harness.wait_for_leader().await;
+            assert!(leader.is_some(), "leader election failed for seed {}", seed);
+
+            harness.run_oracle_workload(ops_count()).await;
+
+            let (commits, failures, _) = harness.oracle_stats();
+            eprintln!("Seed {}: {} commits, {} failures", seed, commits, failures);
+
+            harness.cleanup();
+        }
+    }
+
+    /// Long-running no-faults stress test - matches Walrus stress_ tests
+    #[tokio::test(flavor = "current_thread")]
+    async fn stress_no_faults_long() {
+        let params = ClusterParams::new(5, 0x1234567890abcdef, 0.0, FaultProfile::None);
+        let mut harness = ClusterHarness::new(params).await;
+        let leader = harness.wait_for_leader().await;
+        assert!(leader.is_some(), "leader election failed");
+
+        // Run many operations to find rare bugs
+        harness.run_oracle_workload(stress_ops() * 2).await;
+
+        let (commits, failures, verifies) = harness.oracle_stats();
+        assert_eq!(failures, 0, "unexpected failures in stress test");
+        assert_eq!(commits, verifies, "verification mismatch in stress test");
+
+        harness.cleanup();
+    }
+
+    /// Long-running stress with I/O faults
+    #[tokio::test(flavor = "current_thread")]
+    async fn stress_io_faults_long() {
+        let seed = 0xfedcba0987654321;
+        let error_rate = walrus_error_rate(seed, 0.07);
+        let params = ClusterParams::new(5, seed, error_rate, FaultProfile::IoErrorsMedium);
+        let mut harness = ClusterHarness::new(params).await;
+        let leader = harness.wait_for_leader().await;
+        assert!(leader.is_some(), "leader election failed");
+
+        harness.run_oracle_workload(stress_ops()).await;
+
+        let (commits, failures, _) = harness.oracle_stats();
+        eprintln!("Stress I/O faults: {} commits, {} failures", commits, failures);
 
         harness.cleanup();
     }

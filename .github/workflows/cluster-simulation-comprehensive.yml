@@ -7,10 +7,10 @@ on:
     - cron: "0 4 * * *"  # Nightly at 4 AM UTC
 
 jobs:
-  # Conservative tests - run on every push
+  # All tests run on every push (60 min timeout)
   cluster-ci:
     runs-on: self-hosted
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -23,65 +23,61 @@ jobs:
         env:
           CLUSTER_SEED_START: "0"
           CLUSTER_SEED_COUNT: "20"
-          CLUSTER_OPS: "100"
+          CLUSTER_OPS: "1000"
         run: cargo test --features simulation,openraft --test cluster_simulation_comprehensive basic_correctness_ -- --test-threads=1
       - name: Run I/O fault tests
         env:
           CLUSTER_SEED_START: "0"
           CLUSTER_SEED_COUNT: "20"
-          CLUSTER_OPS: "50"
+          CLUSTER_OPS: "500"
         run: cargo test --features simulation,openraft --test cluster_simulation_comprehensive io_faults_ -- --test-threads=1
       - name: Run network fault tests
         env:
           CLUSTER_SEED_START: "0"
           CLUSTER_SEED_COUNT: "20"
-          CLUSTER_OPS: "50"
+          CLUSTER_OPS: "500"
         run: cargo test --features simulation,openraft --test cluster_simulation_comprehensive network_faults_ -- --test-threads=1
-      - name: Run crash recovery tests
-        env:
-          CLUSTER_SEED_START: "0"
-          CLUSTER_SEED_COUNT: "10"
-        run: cargo test --features simulation,openraft --test cluster_simulation_comprehensive crash_recovery_ -- --test-threads=1
-      - name: Run membership tests
-        run: cargo test --features simulation,openraft --test cluster_simulation_comprehensive membership_ -- --test-threads=1
-      - if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: failed-cluster-ci-logs
-          path: /tmp/octopii_sim_cluster_*
-          retention-days: 7
-      - if: always()
-        run: rm -rf /tmp/octopii_sim_cluster_* || true
-
-  # Aggressive tests - run on push for now (can be changed to nightly later)
-  cluster-nightly:
-    runs-on: self-hosted
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
-        with:
-          toolchain: stable
-          cache: true
-      - name: Set vendored protoc
-        run: echo "PROTOC=$(cargo run --quiet --bin protoc_path)" >> "$GITHUB_ENV"
       - name: Run combined fault tests
         env:
           CLUSTER_SEED_START: "0"
           CLUSTER_SEED_COUNT: "20"
+          CLUSTER_OPS: "500"
         run: cargo test --features simulation,openraft --test cluster_simulation_comprehensive combined_faults_ -- --test-threads=1
-      - name: Run stress crash tests
-        run: cargo test --features simulation,openraft --test cluster_simulation_comprehensive stress_crash_ -- --test-threads=1
-      - name: Run snapshot tests
-        run: cargo test --features simulation,openraft --test cluster_simulation_comprehensive snapshot_ -- --test-threads=1
-      - name: Run stress tests
+      - name: Run crash recovery tests
         env:
-          CLUSTER_STRESS_OPS: "500"
+          CLUSTER_SEED_START: "0"
+          CLUSTER_SEED_COUNT: "10"
+          CLUSTER_OPS: "500"
+        run: cargo test --features simulation,openraft --test cluster_simulation_comprehensive crash_recovery_ -- --test-threads=1
+      - name: Run membership tests
+        env:
+          CLUSTER_OPS: "500"
+        run: cargo test --features simulation,openraft --test cluster_simulation_comprehensive membership_ -- --test-threads=1
+      - name: Run snapshot tests
+        env:
+          CLUSTER_OPS: "500"
+        run: cargo test --features simulation,openraft --test cluster_simulation_comprehensive snapshot_ -- --test-threads=1
+      - name: Run stress crash tests
+        env:
+          CLUSTER_OPS: "500"
+        run: cargo test --features simulation,openraft --test cluster_simulation_comprehensive stress_crash_ -- --test-threads=1
+      - name: Run stress cluster tests
+        env:
+          CLUSTER_STRESS_OPS: "5000"
         run: cargo test --features simulation,openraft --test cluster_simulation_comprehensive stress_cluster_ -- --test-threads=1 --nocapture
+      - name: Run deterministic seed sweep tests
+        env:
+          CLUSTER_OPS: "1000"
+          CLUSTER_STRESS_OPS: "5000"
+        run: cargo test --features simulation,openraft --test cluster_simulation_comprehensive deterministic_ -- --test-threads=1
+      - name: Run long stress tests
+        env:
+          CLUSTER_STRESS_OPS: "5000"
+        run: cargo test --features simulation,openraft --test cluster_simulation_comprehensive stress_no_faults_long --test cluster_simulation_comprehensive stress_io_faults_long -- --test-threads=1 --nocapture
       - if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: failed-cluster-nightly-logs
+          name: failed-cluster-ci-logs
           path: /tmp/octopii_sim_cluster_*
           retention-days: 7
       - if: always()
