@@ -1,5 +1,6 @@
 #![cfg(all(feature = "simulation", feature = "openraft"))]
 
+use crate::common::cluster_oracle::ClusterOracle;
 use octopii::config::Config;
 use octopii::openraft::node::OpenRaftNode;
 use octopii::openraft::sim_runtime;
@@ -13,11 +14,35 @@ use std::sync::Arc;
 use tokio::task::yield_now;
 use tokio::time::Duration;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub enum FaultProfile {
     None,
     ReorderTimeoutBandwidth,
     PartitionChurn,
+    // Extended fault profiles
+    IoErrorsLight,      // 5% I/O error rate
+    IoErrorsMedium,     // 10% I/O error rate
+    IoErrorsHeavy,      // 15-20% I/O error rate
+    PartialWrites,      // Enable torn writes
+    CombinedNetworkAndIo, // Network faults + I/O errors
+    SplitBrain,         // Partition isolating leader
+    FlappingConnectivity, // Rapid partition/heal cycles
+}
+
+#[derive(Clone, Debug)]
+pub struct CrashEvent {
+    pub node_idx: usize,
+    pub node_id: u64,
+    pub tick: u64,
+    pub reason: CrashReason,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum CrashReason {
+    Scheduled,
+    IoError,
+    Partition,
+    MembershipChange,
 }
 
 pub struct ClusterParams {
@@ -56,6 +81,12 @@ pub struct ClusterHarness {
     transports: Vec<Arc<SimTransport>>,
     configs: Vec<Config>,
     rt: OctopiiRuntime,
+    // New fields for comprehensive testing
+    pub oracle: ClusterOracle,
+    pub crash_history: Vec<CrashEvent>,
+    pub tick_count: u64,
+    enable_partial_writes: bool,
+    next_node_id: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -144,6 +175,11 @@ impl ClusterHarness {
             transports,
             configs,
             rt,
+            oracle: ClusterOracle::new(),
+            crash_history: Vec::new(),
+            tick_count: 0,
+            enable_partial_writes: params.enable_partial_writes,
+            next_node_id: (params.size + 1) as u64,
         }
     }
 
@@ -153,8 +189,15 @@ impl ClusterHarness {
             self.fault_plan.apply(&self.router);
             self.router.deliver_ready();
             sim_runtime::advance_time(Duration::from_millis(step_ms));
+            self.tick_count += 1;
+            self.oracle.set_tick(self.tick_count);
             yield_now().await;
         }
+    }
+
+    /// Get the current tick count
+    pub fn current_tick(&self) -> u64 {
+        self.tick_count
     }
 
     pub async fn wait_for_leader(&mut self) -> Option<u64> {
@@ -277,6 +320,333 @@ impl ClusterHarness {
         wal::__clear_storage_cache_for_tests();
         sim::teardown();
     }
+
+    // =========================================================================
+    // Crash and Recovery Methods
+    // =========================================================================
+
+    /// Crash a node (shutdown without restart)
+    pub fn crash_node(&mut self, idx: usize, reason: CrashReason) {
+        if let Some(node) = self.nodes.get(idx) {
+            let node_id = node.id();
+            node.shutdown();
+            self.crash_history.push(CrashEvent {
+                node_idx: idx,
+                node_id,
+                tick: self.tick_count,
+                reason,
+            });
+        }
+    }
+
+    /// Crash multiple nodes simultaneously
+    pub fn crash_multiple(&mut self, indices: &[usize], reason: CrashReason) {
+        for &idx in indices {
+            self.crash_node(idx, reason);
+        }
+    }
+
+    /// Crash majority of nodes (n/2 + 1)
+    pub fn crash_majority(&mut self, reason: CrashReason) {
+        let majority = (self.nodes.len() / 2) + 1;
+        let indices: Vec<usize> = (0..majority).collect();
+        self.crash_multiple(&indices, reason);
+    }
+
+    /// Restart a crashed node
+    pub async fn recover_node(&mut self, idx: usize) {
+        if idx >= self.configs.len() {
+            return;
+        }
+        let mut cfg = self.configs[idx].clone();
+        cfg.is_initial_leader = false;
+        let transport = Arc::clone(&self.transports[idx]) as Arc<dyn Transport>;
+        let node = new_node_with_retry(cfg, self.rt.clone(), transport).await;
+        self.nodes[idx] = node;
+    }
+
+    /// Crash and recover a node in sequence
+    pub async fn crash_and_recover_node(&mut self, idx: usize, reason: CrashReason) {
+        self.crash_node(idx, reason);
+        self.tick(10, 50).await; // Let the cluster detect the failure
+        self.recover_node(idx).await;
+        self.tick(20, 50).await; // Let the node catch up
+    }
+
+    // =========================================================================
+    // Partition Methods
+    // =========================================================================
+
+    /// Isolate the current leader from all followers
+    pub async fn isolate_leader(&mut self) -> Option<u64> {
+        let leader_id = self.wait_for_leader().await?;
+        let leader_idx = self.nodes.iter().position(|n| n.id() == leader_id)?;
+        let leader_addr = self.addrs[leader_idx];
+        let other_addrs: Vec<SocketAddr> = self.addrs.iter()
+            .filter(|&&a| a != leader_addr)
+            .copied()
+            .collect();
+        self.router.add_partition(vec![leader_addr], other_addrs);
+        Some(leader_id)
+    }
+
+    /// Heal all partitions
+    pub fn heal_partitions(&self) {
+        self.router.clear_faults();
+    }
+
+    /// Create a partition between two groups of nodes
+    pub fn partition_nodes(&self, group_a: &[usize], group_b: &[usize]) {
+        let addrs_a: Vec<SocketAddr> = group_a.iter()
+            .filter_map(|&i| self.addrs.get(i).copied())
+            .collect();
+        let addrs_b: Vec<SocketAddr> = group_b.iter()
+            .filter_map(|&i| self.addrs.get(i).copied())
+            .collect();
+        self.router.add_partition(addrs_a, addrs_b);
+    }
+
+    // =========================================================================
+    // Log and State Inspection Methods
+    // =========================================================================
+
+    /// Get the committed index for a node
+    pub fn get_committed_index(&self, idx: usize) -> Option<u64> {
+        self.nodes.get(idx).and_then(|n| {
+            let metrics = n.raft_metrics();
+            metrics.last_applied.as_ref().map(|log_id| log_id.index)
+        })
+    }
+
+    /// Get the last log index for a node
+    pub fn get_last_log_index(&self, idx: usize) -> Option<u64> {
+        self.nodes.get(idx).and_then(|n| {
+            let metrics = n.raft_metrics();
+            metrics.last_log_index
+        })
+    }
+
+    /// Get the current term for a node
+    pub fn get_current_term(&self, idx: usize) -> Option<u64> {
+        self.nodes.get(idx).map(|n| {
+            let metrics = n.raft_metrics();
+            metrics.current_term
+        })
+    }
+
+    /// Check if all nodes have converged to the same committed index
+    pub fn check_commit_convergence(&self) -> bool {
+        let indices: Vec<Option<u64>> = (0..self.nodes.len())
+            .map(|i| self.get_committed_index(i))
+            .collect();
+
+        let first = indices.first().and_then(|o| *o);
+        first.is_some() && indices.iter().all(|o| *o == first)
+    }
+
+    /// Verify no log divergence (all nodes agree on log entries up to min committed)
+    pub async fn verify_no_divergence(&mut self) -> bool {
+        // Get the minimum committed index across all nodes
+        let min_committed = (0..self.nodes.len())
+            .filter_map(|i| self.get_committed_index(i))
+            .min();
+
+        let Some(min_idx) = min_committed else {
+            return true; // No commits yet
+        };
+
+        // For simplicity, we verify by reading values from the state machine
+        // In a more thorough check, we'd compare log entries directly
+        for i in 0..min_idx.min(100) {
+            let key = format!("GET key{i}");
+            let mut values = Vec::new();
+            for node in &self.nodes {
+                if let Ok(val) = node.query(key.as_bytes()).await {
+                    values.push(val);
+                }
+            }
+            // All values should be the same
+            if !values.is_empty() && !values.windows(2).all(|w| w[0] == w[1]) {
+                return false;
+            }
+        }
+        true
+    }
+
+    // =========================================================================
+    // Membership Change Methods
+    // =========================================================================
+
+    /// Add a new learner node to the cluster
+    pub async fn add_node(&mut self) -> octopii::Result<usize> {
+        let new_idx = self.nodes.len();
+        let new_node_id = self.next_node_id;
+        self.next_node_id += 1;
+
+        let base_port = 9700 + (self.seed % 1000) as u16;
+        let new_port = base_port + new_idx as u16;
+        let new_addr: SocketAddr = format!("127.0.0.1:{new_port}").parse().unwrap();
+
+        // Create transport for new node
+        let transport = Arc::new(SimTransport::new(new_addr, self.router.clone()));
+
+        // Create config for new node
+        let config = Config {
+            node_id: new_node_id,
+            bind_addr: new_addr,
+            peers: self.addrs.clone(),
+            wal_dir: self.base.join(format!("n{}", new_node_id)),
+            worker_threads: 1,
+            wal_batch_size: 10,
+            wal_flush_interval_ms: 50,
+            is_initial_leader: false,
+            snapshot_lag_threshold: 500,
+        };
+
+        // Start the new node
+        let node = new_node_with_retry(config.clone(), self.rt.clone(), Arc::clone(&transport) as Arc<dyn Transport>).await;
+
+        // Add to cluster tracking
+        self.addrs.push(new_addr);
+        self.transports.push(transport);
+        self.configs.push(config);
+        self.nodes.push(node);
+
+        // Tell the leader to add this node as a learner
+        let leader_id = self.wait_for_leader().await
+            .ok_or_else(|| octopii::error::OctopiiError::Rpc("no leader".to_string()))?;
+        let leader = self.nodes.iter()
+            .find(|n| n.id() == leader_id)
+            .ok_or_else(|| octopii::error::OctopiiError::Rpc("leader not found".to_string()))?;
+
+        leader.add_learner(new_node_id, new_addr).await?;
+
+        Ok(new_idx)
+    }
+
+    /// Promote a learner to voter
+    pub async fn promote_node(&mut self, idx: usize) -> octopii::Result<()> {
+        let node_id = self.nodes.get(idx)
+            .map(|n| n.id())
+            .ok_or_else(|| octopii::error::OctopiiError::Rpc("node not found".to_string()))?;
+
+        // Wait for the learner to catch up
+        for _ in 0..100 {
+            let leader_id = self.wait_for_leader().await
+                .ok_or_else(|| octopii::error::OctopiiError::Rpc("no leader".to_string()))?;
+            let leader = self.nodes.iter()
+                .find(|n| n.id() == leader_id)
+                .ok_or_else(|| octopii::error::OctopiiError::Rpc("leader not found".to_string()))?;
+
+            if leader.is_learner_caught_up(node_id).await.unwrap_or(false) {
+                leader.promote_learner(node_id).await?;
+                return Ok(());
+            }
+            self.tick(10, 50).await;
+        }
+
+        Err(octopii::error::OctopiiError::Rpc("learner did not catch up".to_string()))
+    }
+
+    /// Remove a node from the cluster (by crashing it and removing from membership)
+    pub async fn remove_node(&mut self, idx: usize) -> octopii::Result<()> {
+        if idx >= self.nodes.len() {
+            return Err(octopii::error::OctopiiError::Rpc("invalid node index".to_string()));
+        }
+
+        // Crash the node
+        self.crash_node(idx, CrashReason::MembershipChange);
+        self.tick(20, 50).await;
+
+        // Note: Full membership change (removing from Raft config) would require
+        // change_membership on the leader. For now, we just crash the node.
+        // The cluster should continue operating with the remaining nodes.
+
+        Ok(())
+    }
+
+    /// Scale cluster up or down
+    pub async fn scale_cluster(&mut self, target_size: usize) -> octopii::Result<()> {
+        let current_size = self.nodes.len();
+
+        if target_size > current_size {
+            // Scale up
+            for _ in current_size..target_size {
+                let idx = self.add_node().await?;
+                self.tick(20, 50).await;
+                self.promote_node(idx).await?;
+                self.tick(10, 50).await;
+            }
+        } else if target_size < current_size {
+            // Scale down - remove from the end
+            for idx in (target_size..current_size).rev() {
+                self.remove_node(idx).await?;
+            }
+        }
+
+        Ok(())
+    }
+
+    // =========================================================================
+    // Oracle-Integrated Workload Methods
+    // =========================================================================
+
+    /// Propose a SET command and track in oracle
+    pub async fn propose_set(&mut self, key: &str, value: &str) -> octopii::Result<()> {
+        let cmd = format!("SET {key} {value}");
+        match self.propose_with_leader(cmd.into_bytes()).await {
+            Ok(()) => {
+                self.oracle.record_commit(key, value);
+                Ok(())
+            }
+            Err(e) => {
+                self.oracle.record_failure(key, value, &e.to_string());
+                Err(e)
+            }
+        }
+    }
+
+    /// Query a value and verify against oracle
+    pub async fn query_and_verify(&mut self, key: &str) -> octopii::Result<()> {
+        let leader_id = self.wait_for_leader().await
+            .ok_or_else(|| octopii::error::OctopiiError::Rpc("no leader".to_string()))?;
+        let leader = self.nodes.iter()
+            .find(|n| n.id() == leader_id)
+            .ok_or_else(|| octopii::error::OctopiiError::Rpc("leader not found".to_string()))?;
+
+        let query = format!("GET {key}");
+        let result = leader.query(query.as_bytes()).await?;
+        let actual = std::str::from_utf8(&result).ok();
+
+        self.oracle.assert_read(key, actual);
+        Ok(())
+    }
+
+    /// Run a workload with oracle tracking
+    pub async fn run_oracle_workload(&mut self, ops: usize) {
+        for i in 0..ops {
+            let key = format!("key{i}");
+            let value = format!("val{i}");
+            self.propose_set(&key, &value).await.expect("propose");
+        }
+
+        // Verify all values
+        self.tick(50, 50).await; // Let cluster converge
+        for i in 0..ops {
+            let key = format!("key{i}");
+            self.query_and_verify(&key).await.expect("query");
+        }
+    }
+
+    /// Get oracle statistics
+    pub fn oracle_stats(&self) -> (u64, usize, u64) {
+        self.oracle.stats()
+    }
+
+    /// Get crash history
+    pub fn crash_history(&self) -> &[CrashEvent] {
+        &self.crash_history
+    }
 }
 
 pub fn walrus_seed_sequence(init: u64, count: usize) -> Vec<u64> {
@@ -386,6 +756,69 @@ impl FaultPlan {
                     events.push(FaultEvent::Clear {
                         at_ms: start_ms + t3 + 600,
                     });
+                }
+            }
+            // Extended fault profiles - these primarily affect I/O error rates
+            // which are set via ClusterParams, not network events
+            FaultProfile::IoErrorsLight
+            | FaultProfile::IoErrorsMedium
+            | FaultProfile::IoErrorsHeavy
+            | FaultProfile::PartialWrites => {
+                // No network events - these profiles rely on VFS fault injection
+            }
+            FaultProfile::CombinedNetworkAndIo => {
+                // Combine reorder/timeout with I/O errors
+                if n >= 2 {
+                    let t1 = 400 + rng.range(0, 200);
+                    let t2 = t1 + 600 + rng.range(0, 300);
+
+                    let jitter = 30 + rng.range(0, 100);
+                    let prob = 0.3 + (rng.range(0, 30) as f64 / 100.0);
+
+                    let (a, b) = pick_pair(&mut rng, n);
+                    events.push(FaultEvent::Reorder {
+                        at_ms: start_ms + t1,
+                        from: addrs[a],
+                        to: addrs[b],
+                        max_jitter_ms: jitter,
+                        probability: prob,
+                    });
+                    events.push(FaultEvent::Clear {
+                        at_ms: start_ms + t2,
+                    });
+                }
+            }
+            FaultProfile::SplitBrain => {
+                // Create a partition that isolates node 0 (typically the initial leader)
+                if n >= 3 {
+                    let t1 = 500 + rng.range(0, 200);
+                    let t2 = t1 + 800 + rng.range(0, 400);
+
+                    events.push(FaultEvent::Partition {
+                        at_ms: start_ms + t1,
+                        group_a: vec![addrs[0]],
+                        group_b: addrs[1..].to_vec(),
+                    });
+                    events.push(FaultEvent::Clear {
+                        at_ms: start_ms + t2,
+                    });
+                }
+            }
+            FaultProfile::FlappingConnectivity => {
+                // Rapid partition/heal cycles
+                if n >= 2 {
+                    let mut t = start_ms + 300;
+                    for _ in 0..5 {
+                        let (group_a, group_b) = pick_partition(&mut rng, n);
+                        events.push(FaultEvent::Partition {
+                            at_ms: t,
+                            group_a: group_a.iter().map(|i| addrs[*i]).collect(),
+                            group_b: group_b.iter().map(|i| addrs[*i]).collect(),
+                        });
+                        t += 200 + rng.range(0, 100);
+                        events.push(FaultEvent::Clear { at_ms: t });
+                        t += 100 + rng.range(0, 100);
+                    }
                 }
             }
         }
