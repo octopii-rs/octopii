@@ -5,8 +5,8 @@ use crate::error::Result;
 #[cfg(feature = "openraft-filters")]
 use crate::openraft::network::OpenRaftFilters;
 use crate::openraft::network::{QuinnNetwork, QuinnNetworkFactory};
-use crate::openraft::storage::new_mem_state_machine;
 use crate::openraft::storage::new_wal_log_store;
+use crate::openraft::storage::MemStateMachine;
 use crate::openraft::types::{AppEntry, AppNodeId, AppResponse, AppTypeConfig};
 use crate::runtime::OctopiiRuntime;
 use crate::state_machine::{KvStateMachine, StateMachine};
@@ -168,6 +168,14 @@ impl OpenRaftNode {
             )
             .await?,
         );
+        let meta_wal = Arc::new(
+            WriteAheadLog::new(
+                config.wal_dir.join("openraft_sm_meta"),
+                config.wal_batch_size,
+                flush_interval,
+            )
+            .await?,
+        );
         let mut initial_peer_map = load_peer_addr_records(&peer_addr_wal).await;
         initial_peer_map.insert(config.node_id, config.bind_addr);
 
@@ -254,7 +262,8 @@ impl OpenRaftNode {
         let filters = Arc::new(OpenRaftFilters::new());
 
         let state_machine: StateMachine = Arc::new(KvStateMachine::in_memory());
-        let state_machine_store = new_mem_state_machine(state_machine.clone());
+        let state_machine_store = MemStateMachine::new_with_wal(state_machine.clone(), meta_wal)
+            .await;
 
         // Create network factory
         #[cfg(feature = "openraft-filters")]

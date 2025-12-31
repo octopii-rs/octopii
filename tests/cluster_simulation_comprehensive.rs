@@ -398,10 +398,7 @@ mod comprehensive_tests {
         harness.cleanup();
     }
 
-    // TODO: Recovered nodes come back as Learners because state machine doesn't persist
-    // membership to WAL. After multiple crash/recovery cycles, we lose quorum.
     #[tokio::test(flavor = "current_thread")]
-    #[ignore = "WAL doesn't persist membership - recovered nodes stay as Learners"]
     async fn crash_recovery_cycles_5() {
         let params = ClusterParams::new(5, 300004, 0.0, FaultProfile::None);
         let mut harness = ClusterHarness::new(params).await;
@@ -420,7 +417,6 @@ mod comprehensive_tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    #[ignore = "WAL doesn't persist membership - recovered nodes stay as Learners"]
     async fn crash_recovery_cycles_8() {
         let params = ClusterParams::new(5, 300005, 0.05, FaultProfile::None);
         let mut harness = ClusterHarness::new(params).await;
@@ -497,7 +493,6 @@ mod comprehensive_tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    #[ignore = "WAL doesn't persist membership - recovered nodes stay as Learners"]
     async fn stress_crash_recovery_cycles_10() {
         let params = ClusterParams::new(5, 400003, 0.05, FaultProfile::None);
         let mut harness = ClusterHarness::new(params).await;
