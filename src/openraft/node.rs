@@ -279,6 +279,10 @@ impl OpenRaftNode {
         raft_config.heartbeat_interval = 200;
         raft_config.election_timeout_min = 800;
         raft_config.election_timeout_max = 1600;
+        #[cfg(feature = "simulation")]
+        {
+            raft_config.allow_log_reversion = Some(true);
+        }
         let raft_config = Arc::new(
             raft_config
                 .validate()
