@@ -559,11 +559,13 @@ impl WalLogStore {
     /// 4. If committed points to a lost entry, roll it back
     fn repair_state_after_recovery(inner: &mut MemLogStoreInner) {
         // Step 1: Remove entries at or before purge point
-        if let Some(purged) = inner.last_purged_log_id {
+        // Note: Use clone() since LogId doesn't implement Copy
+        if let Some(ref purged) = inner.last_purged_log_id {
+            let purge_idx = purged.index;
             let keys_to_remove: Vec<u64> = inner
                 .log
                 .keys()
-                .filter(|&&k| k <= purged.index)
+                .filter(|&&k| k <= purge_idx)
                 .copied()
                 .collect();
             for key in keys_to_remove {
@@ -573,7 +575,7 @@ impl WalLogStore {
 
         // Step 2: Find and truncate at first gap in log
         // Log must be contiguous - if there's a gap, entries after the gap are invalid
-        let expected_first = inner.last_purged_log_id.map(|p| p.index + 1).unwrap_or(1);
+        let expected_first = inner.last_purged_log_id.as_ref().map(|p| p.index + 1).unwrap_or(1);
         let mut last_valid_idx: Option<u64> = None;
 
         for (&idx, _) in inner.log.iter() {
@@ -616,8 +618,8 @@ impl WalLogStore {
 
         // Step 3: Ensure purged <= last_log_id (clear invalid purge if needed)
         let last_log_id = inner.log.values().next_back().map(|e| e.log_id);
-        if let Some(purged) = inner.last_purged_log_id {
-            let valid = last_log_id.map(|last| purged <= last).unwrap_or(true);
+        if let Some(ref purged) = inner.last_purged_log_id {
+            let valid = last_log_id.map(|last| *purged <= last).unwrap_or(true);
             if !valid {
                 // purged > last_log_id - this is inconsistent
                 // Can't unpurge, so we must accept the purge and clear the log

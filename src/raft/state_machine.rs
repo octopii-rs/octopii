@@ -208,6 +208,11 @@ impl KvStateMachine {
             tracing::info!("Starting state machine recovery from Walrus...");
             let mut recovered = HashMap::new();
 
+            // CRITICAL: Reset read offsets before recovery to ensure we read ALL entries
+            // Without this, if a previous read checkpointed the cursor, we'd skip entries
+            let _ = wal.walrus.reset_read_offset_for_topic(TOPIC_STATE_MACHINE_SNAPSHOT);
+            let _ = wal.walrus.reset_read_offset_for_topic(TOPIC_STATE_MACHINE);
+
             // Step 1: Check for latest snapshot first
             let mut snapshot_found = false;
             loop {

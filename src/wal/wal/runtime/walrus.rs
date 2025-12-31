@@ -187,6 +187,12 @@ impl Walrus {
         #[cfg(feature = "simulation")]
         let mut topic_entry_counts: HashMap<String, usize> = HashMap::new();
 
+        // Check for crash after file list scan
+        #[cfg(feature = "simulation")]
+        crate::wal::wal::vfs::sim::check_recovery_crash(
+            crate::wal::wal::vfs::sim::RecoveryCrashPoint::AfterFileList,
+        );
+
         for file_path in files.iter() {
             let mmap = match SharedMmapKeeper::get_mmap_arc(file_path) {
                 Ok(m) => m,
@@ -264,6 +270,12 @@ impl Walrus {
                 };
                 let col_name = md.owned_by;
 
+                // Check for crash after block header read
+                #[cfg(feature = "simulation")]
+                crate::wal::wal::vfs::sim::check_recovery_crash(
+                    crate::wal::wal::vfs::sim::RecoveryCrashPoint::AfterBlockHeader,
+                );
+
                 // scan entries to compute used
                 let block_stub = Block {
                     id: next_block_id as u64,
@@ -289,6 +301,8 @@ impl Walrus {
                             #[cfg(feature = "simulation")]
                             {
                                 entry_count_in_block += 1;
+                                // Check for crash after N entries recovered
+                                crate::wal::wal::vfs::sim::recovery_entry_recovered();
                             }
                             if in_block_off >= DEFAULT_BLOCK_SIZE {
                                 break;
@@ -365,6 +379,11 @@ impl Walrus {
                     }
                 }
             }
+
+            // Check for crash after chain rebuild
+            crate::wal::wal::vfs::sim::check_recovery_crash(
+                crate::wal::wal::vfs::sim::RecoveryCrashPoint::AfterChainRebuild,
+            );
         }
 
         // hydrate index into memory and mark checkpointed blocks

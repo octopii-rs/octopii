@@ -28,6 +28,15 @@ jobs:
           cargo test --features simulation --test simulation raft_storage_recovery_with_fault_injection -- --test-threads=1
           cargo test --features simulation --test simulation snapshot_log_filtering_stress -- --test-threads=1
           cargo test --features simulation --test simulation walrus_durability_guarantee_verification -- --test-threads=1
+          cargo test --features simulation --test simulation crash_during_recovery -- --test-threads=1
+          cargo test --features simulation --test simulation double_crash_recovery -- --test-threads=1
+          cargo test --features simulation --test simulation peer_addr_wal_recovery_with_fault_injection -- --test-threads=1
+          cargo test --features simulation --test simulation state_machine_durability_invariant -- --test-threads=1
+          cargo test --features simulation --test simulation log_store_durability_invariant -- --test-threads=1
+          cargo test --features simulation --test simulation two_phase_commit_invariant -- --test-threads=1
+          cargo test --features simulation --test simulation state_machine_compaction_with_faults -- --test-threads=1
+          cargo test --features simulation --test simulation raft_metadata_writes_with_fault_injection -- --test-threads=1
+          cargo test --features simulation --test simulation log_store_purge_with_faults -- --test-threads=1
           cargo test --features simulation,openraft --lib strictly_at_once_wal_log_store_recovery -- --test-threads=1
       - if: always()
-        run: rm -rf /tmp/walrus_strict_* /tmp/walrus_sim_* /tmp/walrus_raft_storage_* /tmp/walrus_snapshot_* /tmp/walrus_openraft_* /tmp/walrus_durability_* || true
+        run: rm -rf /tmp/walrus_strict_* /tmp/walrus_sim_* /tmp/walrus_raft_storage_* /tmp/walrus_snapshot_* /tmp/walrus_openraft_* /tmp/walrus_durability_* /tmp/walrus_crash_* /tmp/walrus_double_* /tmp/walrus_peer_addr_* /tmp/walrus_sm_* /tmp/walrus_log_store_* /tmp/walrus_two_phase_* /tmp/walrus_compaction_* /tmp/walrus_raft_metadata_* /tmp/walrus_purge_* || true

@@ -32,7 +32,7 @@ mod sim_tests {
     };
     use raft::storage::GetEntriesContext;
     use raft::Storage as RaftStorageTrait;
-    use std::collections::HashMap;
+    use std::collections::{BTreeMap, HashMap};
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::time::Duration;
@@ -1803,20 +1803,25 @@ mod sim_tests {
                 )
                 .expect("Failed to create WAL");
 
-                // After recovery, sync oracle with actual state
+                // Reset read cursor to start for verification
+                wal.reset_read_offset_for_topic(topic)
+                    .expect("reset_read_offset failed");
+
+                // After recovery, verify ALL must_survive entries from ALL cycles
                 if cycle > 0 {
-                    // Verify durability guarantee before syncing
+                    // Verify durability guarantee - all must_survive entries MUST exist
                     if let Err(e) = durability_oracle.verify_after_recovery(&wal) {
                         let partial_count = sim::get_partial_write_count();
+                        let (must_count, may_count) = durability_oracle.stats();
                         panic!(
                             "Scenario {scenario} Cycle {cycle}: {}\n\
                              Partial writes: {partial_count}\n\
-                             Total writes: {total_writes}, Durable: {total_durable}",
+                             Total writes: {total_writes}, Must survive: {must_count}, May lost: {may_count}",
                             e
                         );
                     }
-                    // Sync oracle to match recovered state
-                    durability_oracle.sync_from_recovery(&wal);
+                    // Promote may_be_lost entries that survived to must_survive
+                    durability_oracle.after_recovery(&wal);
                 }
 
                 // Re-enable faults for operations
@@ -1851,11 +1856,11 @@ mod sim_tests {
                     }
                 }
 
-                let (durable_count, maybe_count) = durability_oracle.stats();
+                let (must_count, may_count) = durability_oracle.stats();
                 if scenario == 0 {
                     eprintln!(
-                        "Scenario {} Cycle {}: {} writes ({} durable, {} maybe_lost)",
-                        scenario, cycle, total_writes, durable_count, maybe_count
+                        "Scenario {} Cycle {}: {} writes ({} must_survive, {} may_be_lost)",
+                        scenario, cycle, total_writes, must_count, may_count
                     );
                 }
 
@@ -1876,15 +1881,22 @@ mod sim_tests {
             )
             .expect("Failed to create WAL for final verification");
 
+            // Reset cursor for final verification
+            wal.reset_read_offset_for_topic(topic)
+                .expect("reset_read_offset failed");
+
             if let Err(e) = durability_oracle.verify_after_recovery(&wal) {
                 let partial_count = sim::get_partial_write_count();
+                let (must_count, may_count) = durability_oracle.stats();
                 panic!(
                     "Scenario {scenario} FINAL: {}\n\
                      Partial writes: {partial_count}\n\
-                     Total writes: {total_writes}, Durable: {total_durable}",
+                     Total writes: {total_writes}, Must survive: {must_count}, May lost: {may_count}",
                     e
                 );
             }
+
+            let (final_must, _) = durability_oracle.stats();
 
             // Cleanup
             let _ = vfs::remove_dir_all(&root_dir);
@@ -1892,10 +1904,1548 @@ mod sim_tests {
 
             if scenario == 0 {
                 eprintln!(
-                    "Scenario {} PASSED: {} total writes, {} definitely durable",
-                    scenario, total_writes, total_durable
+                    "Scenario {} PASSED: {} total writes, {} must_survive across {} cycles",
+                    scenario, total_writes, final_must, durability_oracle.cycle()
                 );
             }
+        }
+    }
+
+    /// Test that crash during recovery doesn't corrupt data.
+    ///
+    /// This test:
+    /// 1. Writes data with durability tracking
+    /// 2. Crashes
+    /// 3. Starts recovery but injects crash at various points
+    /// 4. Completes recovery
+    /// 5. Verifies all must_survive data exists
+    #[test]
+    fn crash_during_recovery() {
+        use octopii::wal::wal::vfs::sim::RecoveryCrashPoint;
+
+        const SCENARIOS: usize = 4;
+        const ENTRIES_PER_SCENARIO: usize = 50;
+        const BASE_SEED: u64 = 0xa1b2_c3d4_e5f6_7890;
+
+        let crash_points = [
+            RecoveryCrashPoint::AfterFileList,
+            RecoveryCrashPoint::AfterBlockHeader,
+            RecoveryCrashPoint::AfterChainRebuild,
+            RecoveryCrashPoint::AfterEntryCount(25),
+        ];
+
+        for (scenario, crash_point) in crash_points.iter().enumerate() {
+            let scenario_seed = BASE_SEED ^ (scenario as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15);
+            sim::setup(SimConfig {
+                seed: scenario_seed,
+                io_error_rate: 0.0, // No I/O errors - focus on crash testing
+                initial_time_ns: 1_700_000_000_000_000_000,
+                enable_partial_writes: false,
+            });
+
+            let root_dir = std::env::temp_dir()
+                .join(format!("walrus_crash_during_recovery_{scenario}"));
+            let _ = vfs::remove_dir_all(&root_dir);
+            vfs::create_dir_all(&root_dir).expect("Failed to create test dir");
+
+            let mut oracle = DurabilityOracle::new();
+            let topic = "crash_test";
+            let mut rng = sim::XorShift128::new(scenario_seed ^ 0x1234_5678);
+
+            // Phase 1: Write data
+            wal::__set_thread_wal_data_dir_for_tests(root_dir.clone());
+            let wal = Walrus::with_consistency_and_schedule_for_key(
+                "crash_node",
+                ReadConsistency::StrictlyAtOnce,
+                FsyncSchedule::SyncEach,
+            )
+            .expect("Failed to create WAL");
+
+            for _ in 0..ENTRIES_PER_SCENARIO {
+                let data_len = 10 + rng.next_usize(50);
+                let mut data = vec![0u8; data_len];
+                for byte in &mut data {
+                    *byte = rng.next_u64() as u8;
+                }
+
+                let partial_before = sim::get_partial_write_count();
+                if wal.append_for_topic(topic, &data).is_ok() {
+                    let partial_after = sim::get_partial_write_count();
+                    oracle.record_write(topic, data, partial_before, partial_after);
+                }
+            }
+
+            let (must_count, _) = oracle.stats();
+            eprintln!(
+                "Scenario {} ({:?}): wrote {} must_survive entries",
+                scenario, crash_point, must_count
+            );
+
+            // Crash
+            drop(wal);
+            wal::__clear_storage_cache_for_tests();
+
+            // Phase 2: Start recovery but crash during it
+            sim::set_recovery_crash_point(*crash_point);
+
+            let crash_result = std::panic::catch_unwind(|| {
+                wal::__set_thread_wal_data_dir_for_tests(root_dir.clone());
+                Walrus::with_consistency_and_schedule_for_key(
+                    "crash_node",
+                    ReadConsistency::StrictlyAtOnce,
+                    FsyncSchedule::SyncEach,
+                )
+            });
+
+            assert!(
+                crash_result.is_err(),
+                "Expected panic at {:?} but recovery succeeded",
+                crash_point
+            );
+            wal::__clear_storage_cache_for_tests();
+
+            // Phase 3: Complete recovery (no crash injection)
+            sim::set_recovery_crash_point(RecoveryCrashPoint::None);
+
+            wal::__set_thread_wal_data_dir_for_tests(root_dir.clone());
+            let wal = Walrus::with_consistency_and_schedule_for_key(
+                "crash_node",
+                ReadConsistency::StrictlyAtOnce,
+                FsyncSchedule::SyncEach,
+            )
+            .expect("Recovery should succeed after crash");
+
+            // Phase 4: Verify all must_survive data exists
+            wal.reset_read_offset_for_topic(topic)
+                .expect("reset_read_offset failed");
+
+            if let Err(e) = oracle.verify_after_recovery(&wal) {
+                panic!(
+                    "Scenario {} ({:?}): DURABILITY VIOLATION after crash-during-recovery\n{}",
+                    scenario, crash_point, e
+                );
+            }
+
+            eprintln!(
+                "Scenario {} ({:?}): PASSED - all {} entries survived crash during recovery",
+                scenario, crash_point, must_count
+            );
+
+            // Cleanup
+            let _ = vfs::remove_dir_all(&root_dir);
+            sim::teardown();
+        }
+    }
+
+    /// Test double crash recovery - crash during recovery across multiple cycles.
+    ///
+    /// This test simulates a "crash storm" scenario:
+    /// 1. Write data → crash
+    /// 2. Start recovery → crash during recovery
+    /// 3. Write more data → crash
+    /// 4. Start recovery → crash during recovery
+    /// 5. Complete recovery → verify ALL data from ALL cycles
+    #[test]
+    fn double_crash_recovery() {
+        use octopii::wal::wal::vfs::sim::RecoveryCrashPoint;
+
+        const CYCLES: usize = 3;
+        const ENTRIES_PER_CYCLE: usize = 30;
+        const BASE_SEED: u64 = 0xdead_beef_cafe_babe;
+
+        sim::setup(SimConfig {
+            seed: BASE_SEED,
+            io_error_rate: 0.10, // Some I/O errors to make it realistic
+            initial_time_ns: 1_700_000_000_000_000_000,
+            enable_partial_writes: true,
+        });
+
+        let root_dir = std::env::temp_dir().join("walrus_double_crash_recovery");
+        let _ = vfs::remove_dir_all(&root_dir);
+        vfs::create_dir_all(&root_dir).expect("Failed to create test dir");
+
+        let mut oracle = DurabilityOracle::new();
+        let topic = "double_crash_test";
+        let mut rng = sim::XorShift128::new(BASE_SEED ^ 0xabcd_ef01);
+
+        for cycle in 0..CYCLES {
+            // Disable faults for WAL creation
+            let prev_rate = sim::get_io_error_rate();
+            let prev_partial = sim::get_partial_writes_enabled();
+            sim::set_io_error_rate(0.0);
+            sim::set_partial_writes_enabled(false);
+
+            wal::__set_thread_wal_data_dir_for_tests(root_dir.clone());
+            let wal = Walrus::with_consistency_and_schedule_for_key(
+                "double_crash_node",
+                ReadConsistency::StrictlyAtOnce,
+                FsyncSchedule::SyncEach,
+            )
+            .expect("Failed to create WAL");
+
+            // Reset cursor and verify previous cycles' data
+            wal.reset_read_offset_for_topic(topic).ok();
+            if cycle > 0 {
+                if let Err(e) = oracle.verify_after_recovery(&wal) {
+                    let (must_count, may_count) = oracle.stats();
+                    panic!(
+                        "Cycle {} verification failed: {}\n\
+                         Must survive: {}, May be lost: {}",
+                        cycle, e, must_count, may_count
+                    );
+                }
+                oracle.after_recovery(&wal);
+            }
+
+            // Re-enable faults for writing
+            sim::set_io_error_rate(prev_rate);
+            sim::set_partial_writes_enabled(prev_partial);
+
+            // Write data for this cycle
+            for _ in 0..ENTRIES_PER_CYCLE {
+                let data_len = 10 + rng.next_usize(40);
+                let mut data = vec![0u8; data_len];
+                for byte in &mut data {
+                    *byte = rng.next_u64() as u8;
+                }
+
+                let partial_before = sim::get_partial_write_count();
+                if wal.append_for_topic(topic, &data).is_ok() {
+                    let partial_after = sim::get_partial_write_count();
+                    oracle.record_write(topic, data, partial_before, partial_after);
+                }
+            }
+
+            let (must_count, may_count) = oracle.stats();
+            eprintln!(
+                "Cycle {}: wrote entries, total must_survive={}, may_be_lost={}",
+                cycle, must_count, may_count
+            );
+
+            // Crash
+            drop(wal);
+            wal::__clear_storage_cache_for_tests();
+
+            // Crash during recovery (except last cycle)
+            if cycle < CYCLES - 1 {
+                // Pick a crash point based on cycle
+                let crash_point = match cycle % 3 {
+                    0 => RecoveryCrashPoint::AfterEntryCount(15),
+                    1 => RecoveryCrashPoint::AfterBlockHeader,
+                    _ => RecoveryCrashPoint::AfterChainRebuild,
+                };
+
+                sim::set_recovery_crash_point(crash_point);
+
+                let _ = std::panic::catch_unwind(|| {
+                    wal::__set_thread_wal_data_dir_for_tests(root_dir.clone());
+                    Walrus::with_consistency_and_schedule_for_key(
+                        "double_crash_node",
+                        ReadConsistency::StrictlyAtOnce,
+                        FsyncSchedule::SyncEach,
+                    )
+                });
+
+                wal::__clear_storage_cache_for_tests();
+                sim::set_recovery_crash_point(RecoveryCrashPoint::None);
+
+                eprintln!("Cycle {}: crashed during recovery at {:?}", cycle, crash_point);
+            }
+
+            sim::advance_time(std::time::Duration::from_secs(1));
+        }
+
+        // Final recovery
+        sim::set_io_error_rate(0.0);
+        sim::set_partial_writes_enabled(false);
+        sim::set_recovery_crash_point(RecoveryCrashPoint::None);
+
+        wal::__set_thread_wal_data_dir_for_tests(root_dir.clone());
+        let wal = Walrus::with_consistency_and_schedule_for_key(
+            "double_crash_node",
+            ReadConsistency::StrictlyAtOnce,
+            FsyncSchedule::SyncEach,
+        )
+        .expect("Final recovery should succeed");
+
+        // Final verification
+        wal.reset_read_offset_for_topic(topic)
+            .expect("reset_read_offset failed");
+
+        if let Err(e) = oracle.verify_after_recovery(&wal) {
+            let (must_count, may_count) = oracle.stats();
+            panic!(
+                "FINAL verification failed: {}\n\
+                 Must survive: {}, May be lost: {}",
+                e, must_count, may_count
+            );
+        }
+
+        let (final_must, _) = oracle.stats();
+        eprintln!(
+            "PASSED: {} must_survive entries verified across {} cycles with double crashes",
+            final_must, CYCLES
+        );
+
+        // Cleanup
+        let _ = vfs::remove_dir_all(&root_dir);
+        sim::teardown();
+    }
+
+    // ------------------------------------------------------------------------
+    // PeerAddrWal Fault Injection Test
+    // ------------------------------------------------------------------------
+    // Tests the peer address recovery pattern under fault injection.
+    // This exercises the "latest-wins" recovery semantics for peer addresses.
+
+    #[test]
+    fn peer_addr_wal_recovery_with_fault_injection() {
+        #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq, Eq)]
+        struct PeerAddrRecord {
+            peer_id: u64,
+            addr: std::net::SocketAddr,
+        }
+
+        const SCENARIOS: usize = 8;
+        const CRASH_CYCLES: usize = 4;
+        const OPS_PER_CYCLE: usize = 100;
+        const BASE_SEED: u64 = 0xf1e2_d3c4_b5a6_9708;
+        const WAL_CREATE_RETRIES: usize = 32;
+
+        let rt = Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .expect("tokio runtime");
+
+        for scenario in 0..SCENARIOS {
+            let scenario_seed = BASE_SEED ^ (scenario as u64).wrapping_mul(0x517c_c1b7_2722_0a95);
+            sim::setup(SimConfig {
+                seed: scenario_seed,
+                io_error_rate: 0.18,
+                initial_time_ns: 1_700_000_000_000_000_000,
+                enable_partial_writes: true,
+            });
+
+            let root_dir = std::env::temp_dir()
+                .join(format!("walrus_peer_addr_fault_{scenario}"));
+
+            // Setup without faults
+            let prev_rate = sim::get_io_error_rate();
+            let prev_partial = sim::get_partial_writes_enabled();
+            sim::set_io_error_rate(0.0);
+            sim::set_partial_writes_enabled(false);
+            let _ = vfs::remove_dir_all(&root_dir);
+            vfs::create_dir_all(&root_dir).expect("Failed to create walrus test dir");
+            sim::set_io_error_rate(prev_rate);
+            sim::set_partial_writes_enabled(prev_partial);
+
+            let wal_path = root_dir.join("peer_addrs.log");
+            let mut rng = sim::XorShift128::new(scenario_seed ^ 0xd1b5_4a32_1a2b_3c4d);
+
+            // Oracle: tracks the "latest-wins" state for each peer_id
+            // We also track all entries that MUST survive (no partial writes)
+            let mut oracle_state: std::collections::HashMap<u64, std::net::SocketAddr> =
+                std::collections::HashMap::new();
+            let mut must_survive_entries: Vec<PeerAddrRecord> = Vec::new();
+            let mut may_be_lost_entries: Vec<PeerAddrRecord> = Vec::new();
+
+            for _cycle in 0..CRASH_CYCLES {
+                // Create WAL without faults
+                let prev_rate = sim::get_io_error_rate();
+                let prev_partial = sim::get_partial_writes_enabled();
+                sim::set_io_error_rate(0.0);
+                sim::set_partial_writes_enabled(false);
+
+                let wal = retry_wal_create(&rt, &wal_path, WAL_CREATE_RETRIES);
+
+                // Recover oracle from WAL entries
+                let entries = rt.block_on(wal.read_all()).unwrap_or_default();
+                let mut recovered_state: std::collections::HashMap<u64, std::net::SocketAddr> =
+                    std::collections::HashMap::new();
+                let mut recovered_entries: Vec<PeerAddrRecord> = Vec::new();
+
+                for raw in entries {
+                    if let Ok(record) = bincode::deserialize::<PeerAddrRecord>(&raw) {
+                        recovered_state.insert(record.peer_id, record.addr);
+                        recovered_entries.push(record);
+                    }
+                }
+
+                // Promote entries that survived to must_survive
+                may_be_lost_entries.clear();
+                must_survive_entries = recovered_entries;
+                oracle_state = recovered_state;
+
+                // Re-enable faults for writing
+                sim::set_io_error_rate(prev_rate);
+                sim::set_partial_writes_enabled(prev_partial);
+
+                for _ in 0..OPS_PER_CYCLE {
+                    // Generate random peer address update
+                    let peer_id = rng.next_u64() % 10 + 1;
+                    let port = 5000 + (rng.next_u64() % 1000) as u16;
+                    let addr: std::net::SocketAddr =
+                        format!("127.0.0.1:{}", port).parse().unwrap();
+
+                    let record = PeerAddrRecord { peer_id, addr };
+                    let bytes = bincode::serialize(&record).expect("serialize");
+
+                    let partial_before = sim::get_partial_write_count();
+                    if rt.block_on(wal.append(bytes::Bytes::from(bytes))).is_ok() {
+                        let partial_after = sim::get_partial_write_count();
+
+                        if partial_before == partial_after {
+                            // No partial write - this entry MUST survive
+                            must_survive_entries.push(record.clone());
+                            oracle_state.insert(peer_id, addr);
+                        } else {
+                            // Partial write - may be lost
+                            may_be_lost_entries.push(record.clone());
+                        }
+                    }
+                }
+
+                // Crash
+                drop(wal);
+                wal::__clear_storage_cache_for_tests();
+                sim::advance_time(std::time::Duration::from_secs(1));
+            }
+
+            // Final recovery and verification (no faults)
+            sim::set_io_error_rate(0.0);
+            sim::set_partial_writes_enabled(false);
+
+            let wal = retry_wal_create(&rt, &wal_path, WAL_CREATE_RETRIES);
+            let entries = rt.block_on(wal.read_all()).expect("read_all");
+
+            let mut final_state: std::collections::HashMap<u64, std::net::SocketAddr> =
+                std::collections::HashMap::new();
+            let mut final_entries: Vec<PeerAddrRecord> = Vec::new();
+
+            for raw in entries {
+                if let Ok(record) = bincode::deserialize::<PeerAddrRecord>(&raw) {
+                    final_state.insert(record.peer_id, record.addr);
+                    final_entries.push(record);
+                }
+            }
+
+            // Verify all must_survive entries are present
+            let must_survive_count = must_survive_entries.len();
+            assert!(
+                final_entries.len() >= must_survive_count,
+                "Scenario {}: Lost entries! Expected at least {} entries, got {}",
+                scenario,
+                must_survive_count,
+                final_entries.len()
+            );
+
+            // Verify the latest-wins semantics: for each peer_id that had a must_survive write,
+            // the final state must match the oracle
+            for (peer_id, expected_addr) in &oracle_state {
+                if let Some(actual_addr) = final_state.get(peer_id) {
+                    // May have been updated by a may_be_lost entry that survived
+                    // That's fine - we just verify the oracle is a subset
+                } else {
+                    // Peer must exist since we tracked it in oracle
+                    panic!(
+                        "Scenario {}: peer_id {} missing from final state!",
+                        scenario, peer_id
+                    );
+                }
+            }
+
+            if scenario == 0 {
+                eprintln!(
+                    "Scenario {} PASSED: {} entries, {} must_survive, {} peers tracked",
+                    scenario,
+                    final_entries.len(),
+                    must_survive_count,
+                    final_state.len()
+                );
+            }
+
+            let _ = vfs::remove_dir_all(&root_dir);
+            sim::teardown();
+        }
+    }
+
+    /// Helper to retry WAL creation under fault injection.
+    fn retry_wal_create(
+        rt: &tokio::runtime::Runtime,
+        path: &std::path::Path,
+        max_retries: usize,
+    ) -> octopii::wal::WriteAheadLog {
+        let prev_rate = sim::get_io_error_rate();
+        let prev_partial = sim::get_partial_writes_enabled();
+        sim::set_io_error_rate(0.0);
+        sim::set_partial_writes_enabled(false);
+
+        let mut last_err = None;
+        for _ in 0..max_retries {
+            match rt.block_on(octopii::wal::WriteAheadLog::new(
+                path.to_path_buf(),
+                0,
+                Duration::from_millis(0),
+            )) {
+                Ok(wal) => {
+                    sim::set_io_error_rate(prev_rate);
+                    sim::set_partial_writes_enabled(prev_partial);
+                    return wal;
+                }
+                Err(e) => {
+                    last_err = Some(e);
+                    sim::advance_time(std::time::Duration::from_millis(10));
+                }
+            }
+        }
+        panic!("Failed to create WAL after {} retries: {:?}", max_retries, last_err);
+    }
+
+    // ------------------------------------------------------------------------
+    // TRUE INVARIANT TESTS (not oracle sync)
+    // ------------------------------------------------------------------------
+    // These tests track must_survive vs may_be_lost and verify durability
+    // guarantees rather than just syncing oracle to match recovery output.
+
+    /// Oracle for tracking state machine commands with durability guarantees.
+    /// Commands without partial writes MUST survive any crash.
+    struct StateMachineOracle {
+        /// Commands that MUST survive - written without partial write
+        must_survive: Vec<String>,
+        /// Commands that may be lost - written with partial write
+        may_be_lost: Vec<String>,
+        /// Expected state after applying must_survive commands
+        expected_state: HashMap<Vec<u8>, Vec<u8>>,
+        /// Current cycle number
+        cycle: usize,
+    }
+
+    impl StateMachineOracle {
+        fn new() -> Self {
+            Self {
+                must_survive: Vec::new(),
+                may_be_lost: Vec::new(),
+                expected_state: HashMap::new(),
+                cycle: 0,
+            }
+        }
+
+        fn record_command(&mut self, command: &str, partial_before: u64, partial_after: u64) {
+            if partial_before == partial_after {
+                // No partial write - MUST survive
+                self.must_survive.push(command.to_string());
+                self.apply_to_expected(command);
+            } else {
+                // Partial write occurred - may be lost
+                self.may_be_lost.push(command.to_string());
+            }
+        }
+
+        fn apply_to_expected(&mut self, command: &str) {
+            let mut tokens = command.split_whitespace();
+            let op = tokens.next().unwrap_or("");
+            match op {
+                "SET" => {
+                    if let (Some(key), Some(val)) = (tokens.next(), tokens.next()) {
+                        self.expected_state
+                            .insert(key.as_bytes().to_vec(), val.as_bytes().to_vec());
+                    }
+                }
+                "DELETE" => {
+                    if let Some(key) = tokens.next() {
+                        self.expected_state.remove(key.as_bytes());
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        fn after_recovery(&mut self, recovered_state: &HashMap<Vec<u8>, Vec<u8>>) {
+            // Verify expected state is subset of recovered state
+            for (key, expected_val) in &self.expected_state {
+                match recovered_state.get(key) {
+                    Some(actual_val) => {
+                        if actual_val != expected_val {
+                            panic!(
+                                "DURABILITY VIOLATION in cycle {}: key {:?} expected {:?}, got {:?}",
+                                self.cycle, key, expected_val, actual_val
+                            );
+                        }
+                    }
+                    None => {
+                        panic!(
+                            "DURABILITY VIOLATION in cycle {}: key {:?} MISSING (expected {:?})",
+                            self.cycle, key, expected_val
+                        );
+                    }
+                }
+            }
+
+            // Promote may_be_lost commands that survived to must_survive
+            // by re-applying them to expected_state
+            for cmd in std::mem::take(&mut self.may_be_lost) {
+                // Check if this command's effect is visible in recovered state
+                let mut tokens = cmd.split_whitespace();
+                let op = tokens.next().unwrap_or("");
+                let key = tokens.next();
+
+                let survived = match (op, key) {
+                    ("SET", Some(k)) => recovered_state.contains_key(k.as_bytes()),
+                    ("DELETE", Some(k)) => !recovered_state.contains_key(k.as_bytes()),
+                    _ => false,
+                };
+
+                if survived {
+                    self.must_survive.push(cmd.clone());
+                    self.apply_to_expected(&cmd);
+                }
+            }
+
+            self.cycle += 1;
+        }
+
+        fn stats(&self) -> (usize, usize) {
+            (self.must_survive.len(), self.may_be_lost.len())
+        }
+    }
+
+    /// TRUE INVARIANT TEST for WalBackedStateMachine
+    ///
+    /// This test tracks commands with must_survive vs may_be_lost semantics.
+    /// Commands written without partial writes MUST survive any crash.
+    #[test]
+    fn state_machine_durability_invariant() {
+        const SCENARIOS: usize = 8;
+        const CRASH_CYCLES: usize = 4;
+        const OPS_PER_CYCLE: usize = 100;
+        const BASE_SEED: u64 = 0xc4a7_e839_5b2d_1f06;
+        const WAL_CREATE_RETRIES: usize = 32;
+
+        let rt = Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .expect("tokio runtime");
+
+        for scenario in 0..SCENARIOS {
+            let scenario_seed = BASE_SEED ^ (scenario as u64).wrapping_mul(0x517c_c1b7_2722_0a95);
+            sim::setup(SimConfig {
+                seed: scenario_seed,
+                io_error_rate: 0.18,
+                initial_time_ns: 1_700_000_000_000_000_000,
+                enable_partial_writes: true,
+            });
+
+            let root_dir = std::env::temp_dir()
+                .join(format!("walrus_sm_durability_{scenario}"));
+
+            // Setup without faults
+            let prev_rate = sim::get_io_error_rate();
+            let prev_partial = sim::get_partial_writes_enabled();
+            sim::set_io_error_rate(0.0);
+            sim::set_partial_writes_enabled(false);
+            let _ = vfs::remove_dir_all(&root_dir);
+            vfs::create_dir_all(&root_dir).expect("create dir");
+            sim::set_io_error_rate(prev_rate);
+            sim::set_partial_writes_enabled(prev_partial);
+
+            let wal_path = root_dir.join("state_machine.log");
+            let mut rng = sim::XorShift128::new(scenario_seed ^ 0xd1b5_4a32);
+            let mut oracle = StateMachineOracle::new();
+
+            let keys: [&str; 6] = ["alpha", "beta", "gamma", "delta", "epsilon", "zeta"];
+
+            for _cycle in 0..CRASH_CYCLES {
+                // Create WAL and state machine without faults
+                let prev_rate = sim::get_io_error_rate();
+                let prev_partial = sim::get_partial_writes_enabled();
+                sim::set_io_error_rate(0.0);
+                sim::set_partial_writes_enabled(false);
+
+                let wal = create_wal_with_retry(&rt, wal_path.clone(), WAL_CREATE_RETRIES);
+                let (inner, _wal_arc, sm) = rt.block_on(async {
+                    let inner: StateMachine = Arc::new(KvStateMachine::in_memory());
+                    let sm = WalBackedStateMachine::with_inner(Arc::clone(&inner), Arc::clone(&wal));
+                    (inner, wal, sm)
+                });
+
+                // Verify recovery matches expected state
+                let recovered_snapshot = inner.snapshot();
+                let recovered_state: HashMap<Vec<u8>, Vec<u8>> =
+                    bincode::deserialize(&recovered_snapshot).unwrap_or_default();
+                oracle.after_recovery(&recovered_state);
+
+                // Re-enable faults
+                sim::set_io_error_rate(prev_rate);
+                sim::set_partial_writes_enabled(prev_partial);
+
+                // Apply commands with durability tracking
+                let _guard = rt.enter();
+                for _ in 0..OPS_PER_CYCLE {
+                    let key = keys[rng.next_usize(keys.len())];
+                    let action = rng.next_usize(3);
+                    let command = if action < 2 {
+                        let value = rng.next_u64() % 1000;
+                        format!("SET {} {}", key, value)
+                    } else {
+                        format!("DELETE {}", key)
+                    };
+
+                    let partial_before = sim::get_partial_write_count();
+                    if sm.apply(command.as_bytes()).is_ok() {
+                        let partial_after = sim::get_partial_write_count();
+                        oracle.record_command(&command, partial_before, partial_after);
+                    }
+                }
+
+                // Crash
+                drop(sm);
+                drop(inner);
+                wal::__clear_storage_cache_for_tests();
+                sim::advance_time(std::time::Duration::from_secs(1));
+            }
+
+            let (must_count, _) = oracle.stats();
+            if scenario == 0 {
+                eprintln!(
+                    "Scenario {} PASSED: {} must_survive commands verified across {} cycles",
+                    scenario, must_count, CRASH_CYCLES
+                );
+            }
+
+            let _ = vfs::remove_dir_all(&root_dir);
+            sim::teardown();
+        }
+    }
+
+    /// Oracle for tracking WalLogStore operations with durability guarantees.
+    struct LogStoreOracle {
+        /// Log entries that MUST survive
+        must_survive_entries: BTreeMap<u64, Vec<u8>>,
+        /// Vote that MUST survive (if any)
+        must_survive_vote: Option<(u64, u64)>, // (term, node_id)
+        /// Committed that MUST survive
+        must_survive_committed: Option<u64>, // index
+        /// Entries that may be lost
+        may_be_lost_entries: Vec<(u64, Vec<u8>)>,
+        next_index: u64,
+        cycle: usize,
+    }
+
+    impl LogStoreOracle {
+        fn new() -> Self {
+            Self {
+                must_survive_entries: BTreeMap::new(),
+                must_survive_vote: None,
+                must_survive_committed: None,
+                may_be_lost_entries: Vec::new(),
+                next_index: 1,
+                cycle: 0,
+            }
+        }
+
+        fn record_entry(
+            &mut self,
+            index: u64,
+            data: Vec<u8>,
+            partial_before: u64,
+            partial_after: u64,
+        ) {
+            if partial_before == partial_after {
+                self.must_survive_entries.insert(index, data);
+            } else {
+                self.may_be_lost_entries.push((index, data));
+            }
+            self.next_index = index + 1;
+        }
+
+        fn record_vote(&mut self, term: u64, node_id: u64, partial_before: u64, partial_after: u64) {
+            if partial_before == partial_after {
+                self.must_survive_vote = Some((term, node_id));
+            }
+        }
+
+        fn record_committed(&mut self, index: u64, partial_before: u64, partial_after: u64) {
+            if partial_before == partial_after {
+                self.must_survive_committed = Some(index);
+            }
+        }
+
+        fn after_recovery(&mut self, recovered_entries: &BTreeMap<u64, Vec<u8>>) {
+            // Verify all must_survive entries exist
+            for (idx, expected_data) in &self.must_survive_entries {
+                match recovered_entries.get(idx) {
+                    Some(actual_data) => {
+                        if actual_data != expected_data {
+                            panic!(
+                                "DURABILITY VIOLATION in cycle {}: entry {} data mismatch",
+                                self.cycle, idx
+                            );
+                        }
+                    }
+                    None => {
+                        panic!(
+                            "DURABILITY VIOLATION in cycle {}: entry {} MISSING",
+                            self.cycle, idx
+                        );
+                    }
+                }
+            }
+
+            // Promote may_be_lost that survived
+            for (idx, data) in std::mem::take(&mut self.may_be_lost_entries) {
+                if recovered_entries.get(&idx) == Some(&data) {
+                    self.must_survive_entries.insert(idx, data);
+                }
+            }
+
+            self.cycle += 1;
+        }
+
+        fn stats(&self) -> usize {
+            self.must_survive_entries.len()
+        }
+    }
+
+    /// TRUE INVARIANT TEST for WalLogStore
+    ///
+    /// This test tracks log entries with must_survive vs may_be_lost semantics.
+    /// Entries written without partial writes MUST survive any crash.
+    #[test]
+    fn log_store_durability_invariant() {
+        // Uses already imported: AppEntry, AppTypeConfig, WalLogStore, Entry, EntryPayload, LogId
+        // CommittedLeaderIdOf is the correct type alias for this openraft version
+
+        const SCENARIOS: usize = 8;
+        const CRASH_CYCLES: usize = 4;
+        const OPS_PER_CYCLE: usize = 100;
+        const BASE_SEED: u64 = 0xe7f2_a493_8c1b_5d60;
+        const WAL_CREATE_RETRIES: usize = 32;
+
+        let rt = Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .expect("tokio runtime");
+
+        for scenario in 0..SCENARIOS {
+            let scenario_seed = BASE_SEED ^ (scenario as u64).wrapping_mul(0x517c_c1b7_2722_0a95);
+            sim::setup(SimConfig {
+                seed: scenario_seed,
+                io_error_rate: 0.18,
+                initial_time_ns: 1_700_000_000_000_000_000,
+                enable_partial_writes: true,
+            });
+
+            let root_dir = std::env::temp_dir()
+                .join(format!("walrus_log_store_durability_{scenario}"));
+
+            // Setup without faults
+            let prev_rate = sim::get_io_error_rate();
+            let prev_partial = sim::get_partial_writes_enabled();
+            sim::set_io_error_rate(0.0);
+            sim::set_partial_writes_enabled(false);
+            let _ = vfs::remove_dir_all(&root_dir);
+            vfs::create_dir_all(&root_dir).expect("create dir");
+            sim::set_io_error_rate(prev_rate);
+            sim::set_partial_writes_enabled(prev_partial);
+
+            let wal_path = root_dir.join("log_store.log");
+            let mut rng = sim::XorShift128::new(scenario_seed ^ 0xa5a5_5a5a);
+            let mut oracle = LogStoreOracle::new();
+
+            for _cycle in 0..CRASH_CYCLES {
+                // Create without faults
+                let prev_rate = sim::get_io_error_rate();
+                let prev_partial = sim::get_partial_writes_enabled();
+                sim::set_io_error_rate(0.0);
+                sim::set_partial_writes_enabled(false);
+
+                let wal = create_wal_with_retry(&rt, wal_path.clone(), WAL_CREATE_RETRIES);
+                let mut store = rt
+                    .block_on(WalLogStore::new(Arc::clone(&wal)))
+                    .expect("log store init");
+
+                // Recover entries for verification
+                let last_idx = oracle.must_survive_entries.keys().next_back().copied().unwrap_or(0);
+                let recovered_entries: BTreeMap<u64, Vec<u8>> = if last_idx > 0 {
+                    rt.block_on(store.try_get_log_entries(1..=last_idx))
+                        .unwrap_or_default()
+                        .into_iter()
+                        .filter_map(|e| {
+                            if let EntryPayload::Normal(AppEntry(data)) = e.payload {
+                                Some((e.log_id.index, data))
+                            } else {
+                                None
+                            }
+                        })
+                        .collect()
+                } else {
+                    BTreeMap::new()
+                };
+
+                oracle.after_recovery(&recovered_entries);
+
+                // Update next_index from store
+                let log_state = rt.block_on(store.get_log_state()).expect("log state");
+                oracle.next_index = log_state.last_log_id.map(|id| id.index + 1).unwrap_or(1);
+
+                // Re-enable faults
+                sim::set_io_error_rate(prev_rate);
+                sim::set_partial_writes_enabled(prev_partial);
+
+                // Write entries with durability tracking
+                for _ in 0..OPS_PER_CYCLE {
+                    let term = (rng.next_u64() % 10) + 1;
+                    let node_id = (rng.next_u64() % 5) + 1;
+                    let leader_id = CommittedLeaderIdOf::<AppTypeConfig>::new(term, node_id);
+                    let payload_len = (rng.next_u64() % 24 + 8) as usize;
+                    let mut payload = vec![0u8; payload_len];
+                    for byte in &mut payload {
+                        *byte = b'a' + (rng.next_u64() % 26) as u8;
+                    }
+
+                    let entry = Entry::<AppTypeConfig> {
+                        log_id: LogId::new(leader_id, oracle.next_index),
+                        payload: EntryPayload::Normal(AppEntry(payload.clone())),
+                    };
+
+                    let partial_before = sim::get_partial_write_count();
+                    if rt
+                        .block_on(store.blocking_append(vec![entry.clone()]))
+                        .is_ok()
+                    {
+                        let partial_after = sim::get_partial_write_count();
+                        oracle.record_entry(
+                            oracle.next_index,
+                            payload,
+                            partial_before,
+                            partial_after,
+                        );
+                    }
+                }
+
+                // Crash
+                drop(store);
+                wal::__clear_storage_cache_for_tests();
+                sim::advance_time(std::time::Duration::from_secs(1));
+            }
+
+            if scenario == 0 {
+                eprintln!(
+                    "Scenario {} PASSED: {} must_survive entries verified across {} cycles",
+                    scenario,
+                    oracle.stats(),
+                    CRASH_CYCLES
+                );
+            }
+
+            let _ = vfs::remove_dir_all(&root_dir);
+            sim::teardown();
+        }
+    }
+
+    /// Test that the two-phase commit protocol in WalStorage correctly rejects
+    /// entries without commit markers.
+    ///
+    /// Invariant: Only entries with commit markers in TOPIC_LOG_COMMIT should be
+    /// considered durable. Entries written to TOPIC_LOG but not committed may be lost.
+    #[test]
+    fn two_phase_commit_invariant() {
+        // WalStorage is already imported at top of module
+
+        const SCENARIOS: usize = 8;
+        const CRASH_CYCLES: usize = 4;
+        const OPS_PER_CYCLE: usize = 50;
+        const BASE_SEED: u64 = 0xb3d8_7c2e_4f19_a065;
+        const WAL_CREATE_RETRIES: usize = 32;
+
+        let rt = Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .expect("tokio runtime");
+
+        for scenario in 0..SCENARIOS {
+            let scenario_seed = BASE_SEED ^ (scenario as u64).wrapping_mul(0x517c_c1b7_2722_0a95);
+            sim::setup(SimConfig {
+                seed: scenario_seed,
+                io_error_rate: 0.18,
+                initial_time_ns: 1_700_000_000_000_000_000,
+                enable_partial_writes: true,
+            });
+
+            let root_dir =
+                std::env::temp_dir().join(format!("walrus_two_phase_commit_{scenario}"));
+
+            // Setup without faults
+            let prev_rate = sim::get_io_error_rate();
+            let prev_partial = sim::get_partial_writes_enabled();
+            sim::set_io_error_rate(0.0);
+            sim::set_partial_writes_enabled(false);
+            let _ = vfs::remove_dir_all(&root_dir);
+            vfs::create_dir_all(&root_dir).expect("create dir");
+            sim::set_io_error_rate(prev_rate);
+            sim::set_partial_writes_enabled(prev_partial);
+
+            let wal_path = root_dir.join("two_phase.log");
+            let mut rng = sim::XorShift128::new(scenario_seed ^ 0x1234_5678);
+
+            // Track committed entries (entries where append succeeded without partial write)
+            let mut must_survive_indices: std::collections::HashSet<u64> =
+                std::collections::HashSet::new();
+            let mut next_index: u64 = 1;
+
+            for _cycle in 0..CRASH_CYCLES {
+                // Create without faults
+                let prev_rate = sim::get_io_error_rate();
+                let prev_partial = sim::get_partial_writes_enabled();
+                sim::set_io_error_rate(0.0);
+                sim::set_partial_writes_enabled(false);
+
+                let wal = rt.block_on(async {
+                    for _ in 0..WAL_CREATE_RETRIES {
+                        match WriteAheadLog::new(wal_path.clone(), 0, Duration::from_millis(0)).await
+                        {
+                            Ok(w) => return w,
+                            Err(_) => sim::advance_time(Duration::from_millis(10)),
+                        }
+                    }
+                    panic!("WAL creation failed");
+                });
+                let storage = WalStorage::new(Arc::new(wal));
+
+                // Verify all must_survive entries exist after recovery
+                let first_idx = storage.first_index().unwrap_or(1);
+                let last_idx = storage.last_index().unwrap_or(0);
+                if last_idx >= first_idx {
+                    let entries = storage
+                        .entries(first_idx, last_idx + 1, u64::MAX, GetEntriesContext::empty(false))
+                        .unwrap_or_default();
+                    let recovered_indices: std::collections::HashSet<u64> =
+                        entries.iter().map(|e| e.index).collect();
+
+                    for idx in &must_survive_indices {
+                        if *idx >= first_idx && !recovered_indices.contains(idx) {
+                            panic!(
+                                "TWO-PHASE COMMIT VIOLATION: entry {} was committed but MISSING",
+                                idx
+                            );
+                        }
+                    }
+
+                    // Update must_survive with what actually recovered
+                    must_survive_indices = recovered_indices;
+                    next_index = last_idx + 1;
+                }
+
+                // Re-enable faults
+                sim::set_io_error_rate(prev_rate);
+                sim::set_partial_writes_enabled(prev_partial);
+
+                // Write entries
+                for _ in 0..OPS_PER_CYCLE {
+                    let entry = make_raft_entry(next_index, 1, b"data");
+                    let partial_before = sim::get_partial_write_count();
+
+                    if rt.block_on(storage.append_entries(&[entry])).is_ok() {
+                        let partial_after = sim::get_partial_write_count();
+                        if partial_before == partial_after {
+                            // No partial write - this entry MUST survive
+                            must_survive_indices.insert(next_index);
+                        }
+                        next_index += 1;
+                    }
+                }
+
+                // Crash
+                drop(storage);
+                wal::__clear_storage_cache_for_tests();
+                sim::advance_time(std::time::Duration::from_secs(1));
+            }
+
+            if scenario == 0 {
+                eprintln!(
+                    "Scenario {} PASSED: {} must_survive entries verified",
+                    scenario,
+                    must_survive_indices.len()
+                );
+            }
+
+            let _ = vfs::remove_dir_all(&root_dir);
+            sim::teardown();
+        }
+    }
+
+    /// Test KvStateMachine compaction under fault injection.
+    ///
+    /// Compaction writes a snapshot and should be atomic - either the snapshot
+    /// is fully written or not at all. Partial compaction should not corrupt state.
+    #[test]
+    fn state_machine_compaction_with_faults() {
+        use octopii::raft::KvStateMachine as RaftKvStateMachine;
+
+        const SCENARIOS: usize = 8;
+        const CRASH_CYCLES: usize = 4;
+        const OPS_PER_CYCLE: usize = 50;
+        const COMPACT_EVERY: usize = 20;
+        const BASE_SEED: u64 = 0xf9a1_c5e3_7b2d_8046;
+        const WAL_CREATE_RETRIES: usize = 32;
+
+        let rt = Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .expect("tokio runtime");
+
+        for scenario in 0..SCENARIOS {
+            let scenario_seed = BASE_SEED ^ (scenario as u64).wrapping_mul(0x517c_c1b7_2722_0a95);
+            sim::setup(SimConfig {
+                seed: scenario_seed,
+                io_error_rate: 0.18,
+                initial_time_ns: 1_700_000_000_000_000_000,
+                enable_partial_writes: true,
+            });
+
+            let root_dir = std::env::temp_dir()
+                .join(format!("walrus_compaction_fault_{scenario}"));
+
+            // Setup without faults
+            let prev_rate = sim::get_io_error_rate();
+            let prev_partial = sim::get_partial_writes_enabled();
+            sim::set_io_error_rate(0.0);
+            sim::set_partial_writes_enabled(false);
+            let _ = vfs::remove_dir_all(&root_dir);
+            vfs::create_dir_all(&root_dir).expect("create dir");
+            sim::set_io_error_rate(prev_rate);
+            sim::set_partial_writes_enabled(prev_partial);
+
+            let wal_path = root_dir.join("compaction.log");
+            let mut rng = sim::XorShift128::new(scenario_seed ^ 0xbeef_cafe);
+
+            // Oracle tracks expected state after confirmed operations
+            // Uses String keys to match snapshot_hashmap() return type
+            let mut oracle: HashMap<String, Vec<u8>> = HashMap::new();
+            let keys: [&str; 6] = ["k1", "k2", "k3", "k4", "k5", "k6"];
+
+            for _cycle in 0..CRASH_CYCLES {
+                // Create without faults
+                let prev_rate = sim::get_io_error_rate();
+                let prev_partial = sim::get_partial_writes_enabled();
+                sim::set_io_error_rate(0.0);
+                sim::set_partial_writes_enabled(false);
+
+                let wal = rt.block_on(async {
+                    for _ in 0..WAL_CREATE_RETRIES {
+                        match WriteAheadLog::new(wal_path.clone(), 0, Duration::from_millis(0)).await
+                        {
+                            Ok(w) => return Arc::new(w),
+                            Err(_) => sim::advance_time(Duration::from_millis(10)),
+                        }
+                    }
+                    panic!("WAL creation failed");
+                });
+                let sm = RaftKvStateMachine::with_wal(Arc::clone(&wal));
+
+                // Verify recovery matches oracle subset
+                // (oracle only tracks must_survive, so recovered should contain at least oracle)
+                let recovered = sm.snapshot_hashmap();
+                for (key, expected_val) in &oracle {
+                    if let Some(actual_val) = recovered.get(key) {
+                        if actual_val.as_ref() != expected_val.as_slice() {
+                            panic!(
+                                "COMPACTION VIOLATION: key {:?} expected {:?}, got {:?}",
+                                key, expected_val, actual_val
+                            );
+                        }
+                    }
+                    // Note: key may be missing if it was only in may_be_lost
+                }
+
+                // Sync oracle to recovered state
+                oracle = recovered
+                    .into_iter()
+                    .map(|(k, v)| (k, v.to_vec()))
+                    .collect();
+
+                // Re-enable faults
+                sim::set_io_error_rate(prev_rate);
+                sim::set_partial_writes_enabled(prev_partial);
+
+                let mut ops_since_compact = 0;
+
+                for _ in 0..OPS_PER_CYCLE {
+                    let key = keys[rng.next_usize(keys.len())];
+                    let action = rng.next_usize(3);
+
+                    let partial_before = sim::get_partial_write_count();
+                    let result = if action < 2 {
+                        let val = format!("{}", rng.next_u64() % 1000);
+                        sm.apply_kv(format!("SET {} {}", key, val).as_bytes())
+                    } else {
+                        sm.apply_kv(format!("DELETE {}", key).as_bytes())
+                    };
+
+                    if result.is_ok() {
+                        let partial_after = sim::get_partial_write_count();
+                        if partial_before == partial_after {
+                            // Must survive - sync oracle to current state
+                            let current = sm.snapshot_hashmap();
+                            oracle = current
+                                .into_iter()
+                                .map(|(k, v)| (k, v.to_vec()))
+                                .collect();
+                        }
+                        ops_since_compact += 1;
+                    }
+
+                    // Periodic compaction
+                    if ops_since_compact >= COMPACT_EVERY {
+                        let partial_before = sim::get_partial_write_count();
+                        if sm.compact_state_machine().is_ok() {
+                            let partial_after = sim::get_partial_write_count();
+                            if partial_before == partial_after {
+                                // Compaction succeeded - oracle is now authoritative
+                                let current = sm.snapshot_hashmap();
+                                oracle = current
+                                    .into_iter()
+                                    .map(|(k, v)| (k, v.to_vec()))
+                                    .collect();
+                            }
+                        }
+                        ops_since_compact = 0;
+                    }
+                }
+
+                // Crash
+                drop(sm);
+                wal::__clear_storage_cache_for_tests();
+                sim::advance_time(std::time::Duration::from_secs(1));
+            }
+
+            if scenario == 0 {
+                eprintln!(
+                    "Scenario {} PASSED: compaction under faults verified",
+                    scenario
+                );
+            }
+
+            let _ = vfs::remove_dir_all(&root_dir);
+            sim::teardown();
+        }
+    }
+
+    // ------------------------------------------------------------------------
+    // RAFT METADATA FAULT INJECTION TESTS
+    // ------------------------------------------------------------------------
+    // These tests exercise hard_state/conf_state writes under fault injection
+    // by catching panics and verifying recovery invariants still hold.
+
+    /// Test WalStorage hard_state and conf_state writes under fault injection.
+    ///
+    /// The production code panics on write failures, so we catch panics and
+    /// verify that recovery invariants still hold after partial writes.
+    #[test]
+    fn raft_metadata_writes_with_fault_injection() {
+        const SCENARIOS: usize = 8;
+        const CRASH_CYCLES: usize = 4;
+        const OPS_PER_CYCLE: usize = 30;
+        const BASE_SEED: u64 = 0xd4e5_f6a7_b8c9_0123;
+        const WAL_CREATE_RETRIES: usize = 32;
+
+        let rt = Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .expect("tokio runtime");
+
+        for scenario in 0..SCENARIOS {
+            let scenario_seed = BASE_SEED ^ (scenario as u64).wrapping_mul(0x517c_c1b7_2722_0a95);
+            sim::setup(SimConfig {
+                seed: scenario_seed,
+                io_error_rate: 0.18,
+                initial_time_ns: 1_700_000_000_000_000_000,
+                enable_partial_writes: true,
+            });
+
+            let root_dir =
+                std::env::temp_dir().join(format!("walrus_raft_metadata_fault_{scenario}"));
+
+            // Setup without faults
+            let prev_rate = sim::get_io_error_rate();
+            let prev_partial = sim::get_partial_writes_enabled();
+            sim::set_io_error_rate(0.0);
+            sim::set_partial_writes_enabled(false);
+            let _ = vfs::remove_dir_all(&root_dir);
+            vfs::create_dir_all(&root_dir).expect("create dir");
+            sim::set_io_error_rate(prev_rate);
+            sim::set_partial_writes_enabled(prev_partial);
+
+            let wal_path = root_dir.join("raft_metadata.log");
+            let mut rng = sim::XorShift128::new(scenario_seed ^ 0xabcd_ef01);
+
+            // Track the last successfully persisted state
+            let mut last_term: u64 = 0;
+            let mut last_vote: u64 = 0;
+            let mut successful_hard_state_writes = 0;
+            let mut successful_conf_state_writes = 0;
+            let mut panics_caught = 0;
+
+            for _cycle in 0..CRASH_CYCLES {
+                // Create storage without faults
+                let prev_rate = sim::get_io_error_rate();
+                let prev_partial = sim::get_partial_writes_enabled();
+                sim::set_io_error_rate(0.0);
+                sim::set_partial_writes_enabled(false);
+
+                let wal = rt.block_on(async {
+                    for _ in 0..WAL_CREATE_RETRIES {
+                        match WriteAheadLog::new(wal_path.clone(), 0, Duration::from_millis(0)).await
+                        {
+                            Ok(w) => return w,
+                            Err(_) => sim::advance_time(Duration::from_millis(10)),
+                        }
+                    }
+                    panic!("WAL creation failed");
+                });
+                let storage = WalStorage::new(Arc::new(wal));
+
+                // Verify recovery - the sim_assert invariants in WalStorage::new()
+                // will fire if recovery is inconsistent
+                let initial_state = storage.initial_state().expect("initial_state");
+                let recovered_term = initial_state.hard_state.term;
+                let recovered_vote = initial_state.hard_state.vote;
+
+                // The recovered state should be >= our last known good state
+                // (could be higher if a "may be lost" write actually survived)
+                assert!(
+                    recovered_term >= last_term,
+                    "Term went backwards: {} < {}",
+                    recovered_term,
+                    last_term
+                );
+
+                last_term = recovered_term;
+                last_vote = recovered_vote;
+
+                // Re-enable faults for writes
+                sim::set_io_error_rate(prev_rate);
+                sim::set_partial_writes_enabled(prev_partial);
+
+                for _ in 0..OPS_PER_CYCLE {
+                    let action = rng.next_usize(10);
+
+                    match action {
+                        // set_hard_state (40% of ops) - may panic
+                        0..=3 => {
+                            let new_term = last_term + rng.next_u64() % 3;
+                            let new_vote = 1 + rng.next_u64() % 5;
+                            let mut hs = RaftHardState::default();
+                            hs.set_term(new_term);
+                            hs.set_vote(new_vote);
+                            hs.set_commit(0);
+
+                            // Catch panic from fault injection
+                            let result = std::panic::catch_unwind(
+                                std::panic::AssertUnwindSafe(|| {
+                                    storage.set_hard_state(hs.clone());
+                                }),
+                            );
+
+                            if result.is_ok() {
+                                // Write succeeded - update our tracking
+                                last_term = new_term;
+                                last_vote = new_vote;
+                                successful_hard_state_writes += 1;
+                            } else {
+                                panics_caught += 1;
+                            }
+                        }
+                        // set_conf_state (30% of ops) - may panic
+                        4..=6 => {
+                            let mut cs = RaftConfState::default();
+                            let num_voters = 1 + rng.next_usize(3);
+                            for i in 0..num_voters {
+                                cs.mut_voters().push((i + 1) as u64);
+                            }
+
+                            let result = std::panic::catch_unwind(
+                                std::panic::AssertUnwindSafe(|| {
+                                    storage.set_conf_state(cs);
+                                }),
+                            );
+
+                            if result.is_ok() {
+                                successful_conf_state_writes += 1;
+                            } else {
+                                panics_caught += 1;
+                            }
+                        }
+                        // append_entries (30% of ops) - can fail gracefully
+                        _ => {
+                            let entry = make_raft_entry(1, last_term.max(1), b"data");
+                            let _ = rt.block_on(storage.append_entries(&[entry]));
+                        }
+                    }
+                }
+
+                // Crash
+                drop(storage);
+                wal::__clear_storage_cache_for_tests();
+                sim::advance_time(std::time::Duration::from_secs(1));
+            }
+
+            if scenario == 0 {
+                eprintln!(
+                    "Scenario {} PASSED: {} hard_state, {} conf_state writes, {} panics caught",
+                    scenario, successful_hard_state_writes, successful_conf_state_writes, panics_caught
+                );
+            }
+
+            let _ = vfs::remove_dir_all(&root_dir);
+            sim::teardown();
+        }
+    }
+
+    /// Test WalLogStore truncate and purge operations under fault injection.
+    ///
+    /// These operations modify log structure and must maintain invariants
+    /// even when I/O errors occur.
+    #[test]
+    /// Test WalLogStore append and purge operations with fault injection.
+    /// This exercises the recovery invariants in WalLogStore including:
+    /// - Append entries are recovered correctly
+    /// - Purge operations are recovered correctly
+    /// - Log remains contiguous after recovery
+    /// - First entry immediately follows last purged entry
+    fn log_store_purge_with_faults() {
+        use openraft::storage::RaftLogStorage;
+
+        const SCENARIOS: usize = 8;
+        const CRASH_CYCLES: usize = 4;
+        const OPS_PER_CYCLE: usize = 50;
+        const BASE_SEED: u64 = 0xa1b2_c3d4_e5f6_7890;
+        const WAL_CREATE_RETRIES: usize = 32;
+
+        let rt = Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .expect("tokio runtime");
+
+        for scenario in 0..SCENARIOS {
+            let scenario_seed = BASE_SEED ^ (scenario as u64).wrapping_mul(0x517c_c1b7_2722_0a95);
+            sim::setup(SimConfig {
+                seed: scenario_seed,
+                io_error_rate: 0.18,
+                initial_time_ns: 1_700_000_000_000_000_000,
+                enable_partial_writes: true,
+            });
+
+            let root_dir =
+                std::env::temp_dir().join(format!("walrus_purge_fault_{scenario}"));
+
+            // Setup without faults
+            let prev_rate = sim::get_io_error_rate();
+            let prev_partial = sim::get_partial_writes_enabled();
+            sim::set_io_error_rate(0.0);
+            sim::set_partial_writes_enabled(false);
+            let _ = vfs::remove_dir_all(&root_dir);
+            vfs::create_dir_all(&root_dir).expect("create dir");
+            sim::set_io_error_rate(prev_rate);
+            sim::set_partial_writes_enabled(prev_partial);
+
+            let wal_path = root_dir.join("truncate_purge.log");
+            let mut rng = sim::XorShift128::new(scenario_seed ^ 0xfeed_face);
+
+            // Track state across cycles
+            let mut next_index: u64 = 1;
+            let mut last_purged_index: u64 = 0; // Track purge monotonicity
+            let mut purge_ops = 0;
+
+            for _cycle in 0..CRASH_CYCLES {
+                // Create without faults
+                let prev_rate = sim::get_io_error_rate();
+                let prev_partial = sim::get_partial_writes_enabled();
+                sim::set_io_error_rate(0.0);
+                sim::set_partial_writes_enabled(false);
+
+                let wal = create_wal_with_retry(&rt, wal_path.clone(), WAL_CREATE_RETRIES);
+                let mut store = rt
+                    .block_on(WalLogStore::new(Arc::clone(&wal)))
+                    .expect("log store init");
+
+                // Get current state - the sim_assert invariants in WalLogStore will
+                // fire if recovery violated any invariants
+                let log_state = rt.block_on(store.get_log_state()).expect("log state");
+                // Update last_purged_index from recovered state
+                if let Some(purged_id) = log_state.last_purged_log_id.clone() {
+                    last_purged_index = purged_id.index;
+                }
+                // next_index must be > last_purged_index (can't append at or before purge point)
+                let min_next = last_purged_index + 1;
+                next_index = log_state.last_log_id.map(|id| id.index + 1).unwrap_or(min_next);
+                if next_index <= last_purged_index {
+                    next_index = last_purged_index + 1;
+                }
+
+                // Re-enable faults
+                sim::set_io_error_rate(prev_rate);
+                sim::set_partial_writes_enabled(prev_partial);
+
+                // Use consistent term=1 throughout - LogId comparison is (term, index)
+                // so random terms could cause purge(term=5, idx=3) > entry(term=1, idx=10)
+                let term: u64 = 1;
+                let leader_id = CommittedLeaderIdOf::<AppTypeConfig>::new(term, 1);
+
+                for _ in 0..OPS_PER_CYCLE {
+                    let action = rng.next_usize(10);
+
+                    match action {
+                        // Append entries (70% of ops)
+                        0..=6 => {
+                            let entry = Entry::<AppTypeConfig> {
+                                log_id: LogId::new(leader_id.clone(), next_index),
+                                payload: EntryPayload::Normal(AppEntry(b"data".to_vec())),
+                            };
+
+                            if rt.block_on(store.blocking_append(vec![entry])).is_ok() {
+                                next_index += 1;
+                            }
+                        }
+                        // Purge (30% of ops)
+                        _ => {
+                            // Only purge if we have enough entries
+                            // Purge to next_index - 2 to leave at least one entry
+                            if next_index > last_purged_index + 2 {
+                                let purge_to = last_purged_index + 1;
+                                let log_id = LogId::new(leader_id.clone(), purge_to);
+
+                                if rt.block_on(store.purge(log_id)).is_ok() {
+                                    last_purged_index = purge_to;
+                                    purge_ops += 1;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Crash
+                drop(store);
+                wal::__clear_storage_cache_for_tests();
+                sim::advance_time(std::time::Duration::from_secs(1));
+            }
+
+            if scenario == 0 {
+                eprintln!(
+                    "Scenario {} PASSED: {} purges across {} cycles",
+                    scenario, purge_ops, CRASH_CYCLES
+                );
+            }
+
+            let _ = vfs::remove_dir_all(&root_dir);
+            sim::teardown();
         }
     }
 

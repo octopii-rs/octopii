@@ -598,6 +598,70 @@ pub mod sim {
         })
     }
 
+    // ========================================================================
+    // Recovery Crash Point Injection
+    // ========================================================================
+
+    /// Points during recovery where we can inject a simulated crash
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum RecoveryCrashPoint {
+        /// No crash injection
+        None,
+        /// Crash after scanning file list
+        AfterFileList,
+        /// Crash after reading a block header
+        AfterBlockHeader,
+        /// Crash after rebuilding topic chains
+        AfterChainRebuild,
+        /// Crash after recovering N entries (for partial recovery testing)
+        AfterEntryCount(usize),
+    }
+
+    thread_local! {
+        static RECOVERY_CRASH_POINT: std::cell::Cell<RecoveryCrashPoint> =
+            const { std::cell::Cell::new(RecoveryCrashPoint::None) };
+        static RECOVERY_ENTRY_COUNT: std::cell::Cell<usize> =
+            const { std::cell::Cell::new(0) };
+    }
+
+    /// Set the crash point for recovery testing
+    pub fn set_recovery_crash_point(point: RecoveryCrashPoint) {
+        RECOVERY_CRASH_POINT.with(|p| p.set(point));
+        RECOVERY_ENTRY_COUNT.with(|c| c.set(0));
+    }
+
+    /// Get the current recovery crash point
+    pub fn get_recovery_crash_point() -> RecoveryCrashPoint {
+        RECOVERY_CRASH_POINT.with(|p| p.get())
+    }
+
+    /// Check if we should crash at the given point. Panics if crash point matches.
+    pub fn check_recovery_crash(current: RecoveryCrashPoint) {
+        let target = RECOVERY_CRASH_POINT.with(|p| p.get());
+        if target == current {
+            panic!("SIMULATED CRASH DURING RECOVERY at {:?}", current);
+        }
+    }
+
+    /// Increment recovery entry count and check if we should crash
+    pub fn recovery_entry_recovered() {
+        let count = RECOVERY_ENTRY_COUNT.with(|c| {
+            let new = c.get() + 1;
+            c.set(new);
+            new
+        });
+
+        let target = RECOVERY_CRASH_POINT.with(|p| p.get());
+        if let RecoveryCrashPoint::AfterEntryCount(n) = target {
+            if count >= n {
+                panic!(
+                    "SIMULATED CRASH DURING RECOVERY after {} entries",
+                    count
+                );
+            }
+        }
+    }
+
     /// Get direct access to the RNG for test-specific randomness
     pub fn with_rng<F, R>(f: F) -> Option<R>
     where

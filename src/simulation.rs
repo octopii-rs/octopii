@@ -157,42 +157,53 @@ impl Oracle {
     }
 }
 
-/// Durability oracle that tracks which entries MUST survive vs MAY be lost.
+/// Tracked entry with cycle information for debugging
+#[derive(Debug, Clone)]
+struct TrackedEntry {
+    cycle: usize,
+    data: Vec<u8>,
+}
+
+/// Durability oracle that tracks entries across ALL crash cycles.
 ///
-/// The key insight: if an append returns Ok AND no partial write occurred during
-/// the operation, that entry is definitely_durable and MUST survive a crash.
-/// If an append returns Ok BUT a partial write occurred, the entry is maybe_lost
-/// and MAY or MAY NOT survive.
+/// Key insight: if an append returns Ok AND no partial write occurred,
+/// that entry is "must_survive" and MUST exist after ANY number of crashes.
+/// If a partial write occurred, the entry "may_be_lost" until we confirm
+/// it survived a crash (then it becomes must_survive).
 ///
-/// This allows us to make strong assertions: definitely_durable entries missing
-/// after recovery is a DURABILITY VIOLATION, while maybe_lost entries missing
-/// is expected behavior.
+/// Unlike the simple sync-from-recovery pattern, this oracle:
+/// 1. Tracks must_survive entries FOREVER (not reset each cycle)
+/// 2. Promotes may_be_lost entries that survive to must_survive
+/// 3. Verifies ALL must_survive entries exist after EVERY recovery
 #[derive(Debug, Clone)]
 pub struct DurabilityOracle {
-    /// Entries where: append returned Ok AND partial_write_count unchanged
-    /// These MUST survive any crash - missing one is a durability violation
-    definitely_durable: HashMap<String, Vec<Vec<u8>>>,
+    /// Entries that MUST survive - accumulated across ALL cycles.
+    /// Once an entry is here, it must exist after every future crash.
+    must_survive: HashMap<String, Vec<TrackedEntry>>,
 
-    /// Entries where: append returned Ok BUT partial_write_count increased
-    /// These MAY be lost on crash - missing one is expected
-    maybe_lost: HashMap<String, Vec<Vec<u8>>>,
+    /// Entries that MAY be lost - from current cycle only.
+    /// After crash, entries that survived move to must_survive.
+    may_be_lost: HashMap<String, Vec<TrackedEntry>>,
 
-    /// Read cursors for verification
-    read_cursors: HashMap<String, usize>,
+    /// Current crash cycle number
+    current_cycle: usize,
+
+    /// How many entries we've verified per topic (for resuming verification)
+    verified_count: HashMap<String, usize>,
 }
 
 impl DurabilityOracle {
     pub fn new() -> Self {
         Self {
-            definitely_durable: HashMap::new(),
-            maybe_lost: HashMap::new(),
-            read_cursors: HashMap::new(),
+            must_survive: HashMap::new(),
+            may_be_lost: HashMap::new(),
+            current_cycle: 0,
+            verified_count: HashMap::new(),
         }
     }
 
     /// Record a write operation with its durability status.
-    /// Call this after every successful append with the partial_write_count
-    /// from before and after the operation.
+    /// Call this after every successful append.
     pub fn record_write(
         &mut self,
         topic: &str,
@@ -200,59 +211,71 @@ impl DurabilityOracle {
         partial_before: u64,
         partial_after: u64,
     ) {
+        let entry = TrackedEntry {
+            cycle: self.current_cycle,
+            data,
+        };
+
         if partial_after == partial_before {
-            // No partial write during this operation - definitely durable
-            self.definitely_durable
+            // No partial write - this entry MUST survive all future crashes
+            self.must_survive
                 .entry(topic.into())
                 .or_default()
-                .push(data);
+                .push(entry);
         } else {
-            // Partial write happened - might be lost
-            self.maybe_lost.entry(topic.into()).or_default().push(data);
+            // Partial write happened - might be lost on this crash
+            self.may_be_lost
+                .entry(topic.into())
+                .or_default()
+                .push(entry);
         }
     }
 
     /// Verify durability guarantees after recovery.
-    /// All definitely_durable entries MUST exist in order.
+    /// ALL must_survive entries from ALL previous cycles MUST exist in order.
     /// Returns Err with details on durability violation.
-    pub fn verify_after_recovery(&mut self, wal: &Walrus) -> Result<(), String> {
-        // Check all definitely_durable entries exist in order
-        for (topic, entries) in &self.definitely_durable {
-            let cursor = self.read_cursors.entry(topic.clone()).or_insert(0);
-
-            for (idx, expected) in entries.iter().enumerate().skip(*cursor) {
+    ///
+    /// Note: This advances the WAL read cursor. Call after_recovery() next to
+    /// check may_be_lost entries (which continues from where verification left off).
+    pub fn verify_after_recovery(&self, wal: &Walrus) -> Result<(), String> {
+        for (topic, entries) in &self.must_survive {
+            // Read entries with checkpoint=true to advance cursor
+            for (idx, tracked) in entries.iter().enumerate() {
                 match wal.read_next(topic, true) {
                     Ok(Some(entry)) => {
-                        if entry.data != *expected {
+                        if entry.data != tracked.data {
                             return Err(format!(
-                                "DURABILITY VIOLATION: topic '{}' entry {} data mismatch.\n\
+                                "DURABILITY VIOLATION: topic '{}' entry {} (from cycle {}) data mismatch.\n\
                                  Expected {} bytes: {:?}\n\
                                  Got {} bytes: {:?}",
                                 topic,
                                 idx,
-                                expected.len(),
-                                &expected[..expected.len().min(50)],
+                                tracked.cycle,
+                                tracked.data.len(),
+                                &tracked.data[..tracked.data.len().min(50)],
                                 entry.data.len(),
                                 &entry.data[..entry.data.len().min(50)]
                             ));
                         }
-                        *cursor = idx + 1;
                     }
                     Ok(None) => {
                         return Err(format!(
-                            "DURABILITY VIOLATION: topic '{}' missing definitely_durable entry {}.\n\
-                             Expected {} bytes, got None (end of stream)",
-                            topic, idx, expected.len()
+                            "DURABILITY VIOLATION: topic '{}' entry {} (from cycle {}) MISSING.\n\
+                             Expected {} bytes, got EOF.\n\
+                             Total must_survive entries: {}, verified so far: {}",
+                            topic,
+                            idx,
+                            tracked.cycle,
+                            tracked.data.len(),
+                            entries.len(),
+                            idx
                         ));
                     }
                     Err(e) => {
                         return Err(format!(
-                            "DURABILITY VIOLATION: topic '{}' missing definitely_durable entry {}.\n\
+                            "DURABILITY VIOLATION: topic '{}' entry {} (from cycle {}) read error.\n\
                              Expected {} bytes, got error: {:?}",
-                            topic,
-                            idx,
-                            expected.len(),
-                            e
+                            topic, idx, tracked.cycle, tracked.data.len(), e
                         ));
                     }
                 }
@@ -262,62 +285,58 @@ impl DurabilityOracle {
         Ok(())
     }
 
-    /// Sync oracle state from actual recovered data.
-    /// After a crash, call this to:
-    /// 1. Move maybe_lost entries that survived to definitely_durable
-    /// 2. Remove entries that were lost
-    /// This resets the oracle to match actual WAL state.
-    pub fn sync_from_recovery(&mut self, wal: &Walrus) {
-        // For each topic, read all entries and rebuild oracle state
-        let mut new_definitely_durable: HashMap<String, Vec<Vec<u8>>> = HashMap::new();
+    /// Call after successful recovery verification.
+    /// Promotes may_be_lost entries that survived to must_survive.
+    /// Increments cycle counter.
+    ///
+    /// Note: This continues reading from where verify_after_recovery left off.
+    pub fn after_recovery(&mut self, wal: &Walrus) {
+        // For each topic with may_be_lost entries, check which survived
+        // verify_after_recovery already read past must_survive entries,
+        // so we continue from there
+        let may_be_lost = std::mem::take(&mut self.may_be_lost);
 
-        // Collect all topics we're tracking
-        let all_topics: Vec<String> = self
-            .definitely_durable
-            .keys()
-            .chain(self.maybe_lost.keys())
-            .cloned()
-            .collect::<std::collections::HashSet<_>>()
-            .into_iter()
-            .collect();
+        for (topic, entries) in may_be_lost {
+            let must_survive = self.must_survive.entry(topic.clone()).or_default();
 
-        for topic in all_topics {
-            let mut recovered_entries = Vec::new();
-
-            // Read all entries from WAL for this topic
-            loop {
+            // Check which may_be_lost entries survived (continuing from where verify left off)
+            for tracked in entries {
                 match wal.read_next(&topic, true) {
-                    Ok(Some(entry)) => {
-                        recovered_entries.push(entry.data);
+                    Ok(Some(entry)) if entry.data == tracked.data => {
+                        // This entry survived! Promote to must_survive
+                        must_survive.push(tracked);
                     }
-                    Ok(None) => break, // End of stream
-                    Err(_) => break,   // Error, stop reading
+                    _ => {
+                        // Entry was lost or mismatched - that's allowed for may_be_lost
+                        // Stop checking further entries for this topic
+                        break;
+                    }
                 }
-            }
-
-            if !recovered_entries.is_empty() {
-                new_definitely_durable.insert(topic.clone(), recovered_entries);
             }
         }
 
-        // Replace oracle state with recovered state
-        self.definitely_durable = new_definitely_durable;
-        self.maybe_lost.clear();
-        self.read_cursors.clear();
+        self.current_cycle += 1;
+        self.verified_count.clear();
     }
 
     /// Get counts for logging/debugging
     pub fn stats(&self) -> (usize, usize) {
-        let durable_count: usize = self.definitely_durable.values().map(|v| v.len()).sum();
-        let maybe_count: usize = self.maybe_lost.values().map(|v| v.len()).sum();
-        (durable_count, maybe_count)
+        let must_count: usize = self.must_survive.values().map(|v| v.len()).sum();
+        let may_count: usize = self.may_be_lost.values().map(|v| v.len()).sum();
+        (must_count, may_count)
+    }
+
+    /// Get current cycle number
+    pub fn cycle(&self) -> usize {
+        self.current_cycle
     }
 
     /// Clear all state (for new test scenario)
     pub fn clear(&mut self) {
-        self.definitely_durable.clear();
-        self.maybe_lost.clear();
-        self.read_cursors.clear();
+        self.must_survive.clear();
+        self.may_be_lost.clear();
+        self.current_cycle = 0;
+        self.verified_count.clear();
     }
 }
 
