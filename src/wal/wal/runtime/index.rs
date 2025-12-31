@@ -8,6 +8,10 @@ use std::collections::HashMap;
 pub struct BlockPos {
     pub cur_block_idx: u64,
     pub cur_block_offset: u64,
+    /// File path for stable block identification (used when cur_block_idx has TAIL_FLAG)
+    pub file_path: Option<String>,
+    /// Block's offset within the file (used when cur_block_idx has TAIL_FLAG)
+    pub file_offset: Option<u64>,
 }
 
 pub struct WalIndex {
@@ -44,13 +48,22 @@ impl WalIndex {
         })
     }
 
-    pub fn set(&mut self, key: String, idx: u64, offset: u64) -> std::io::Result<()> {
+    pub fn set(
+        &mut self,
+        key: String,
+        idx: u64,
+        offset: u64,
+        file_path: Option<String>,
+        file_offset: Option<u64>,
+    ) -> std::io::Result<()> {
         sim_assert(!key.is_empty(), "wal index set with empty key");
         self.store.insert(
             key,
             BlockPos {
                 cur_block_idx: idx,
                 cur_block_offset: offset,
+                file_path,
+                file_offset,
             },
         );
         self.persist()

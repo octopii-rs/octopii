@@ -76,13 +76,19 @@ impl Walrus {
         );
 
         // Load persisted position (supports tail sentinel)
-        let mut persisted_tail: Option<(u64 /*block_id*/, u64 /*offset*/)> = None;
+        // (block_id, within_block_offset, file_path, file_offset)
+        let mut persisted_tail: Option<(u64, u64, Option<String>, Option<u64>)> = None;
         if !info.hydrated_from_index {
             if let Ok(idx_guard) = self.read_offset_index.read() {
                 if let Some(pos) = idx_guard.get(col_name) {
                     if (pos.cur_block_idx & TAIL_FLAG) != 0 {
                         let tail_block_id = pos.cur_block_idx & (!TAIL_FLAG);
-                        persisted_tail = Some((tail_block_id, pos.cur_block_offset));
+                        persisted_tail = Some((
+                            tail_block_id,
+                            pos.cur_block_offset,
+                            pos.file_path.clone(),
+                            pos.file_offset,
+                        ));
                         // sealed state is considered caught up
                         info.cur_block_idx = info.chain.len();
                         info.cur_block_offset = 0;
@@ -108,18 +114,28 @@ impl Walrus {
         }
 
         // If we have a persisted tail and some sealed blocks were recovered, fold into the last block
-        if let Some((tail_block_id, tail_off)) = persisted_tail {
+        if let Some((tail_block_id, tail_off, file_path_opt, file_offset_opt)) = persisted_tail {
             if !info.chain.is_empty() {
-                if let Some((idx, block)) = info
-                    .chain
-                    .iter()
-                    .enumerate()
-                    .find(|(_, b)| b.id == tail_block_id)
-                {
+                // Try to match by file position first (stable across recovery),
+                // then fall back to block_id (may not match after recovery)
+                let found = if let (Some(ref fp), Some(fo)) = (&file_path_opt, file_offset_opt) {
+                    info.chain
+                        .iter()
+                        .enumerate()
+                        .find(|(_, b)| &b.file_path == fp && b.offset == fo)
+                } else {
+                    info.chain
+                        .iter()
+                        .enumerate()
+                        .find(|(_, b)| b.id == tail_block_id)
+                };
+
+                if let Some((idx, block)) = found {
                     let used = block.used;
                     info.cur_block_idx = idx;
                     info.cur_block_offset = tail_off.min(used);
                 } else {
+                    // Block not found - start from beginning
                     info.cur_block_idx = 0;
                     info.cur_block_offset = 0;
                 }
@@ -209,7 +225,7 @@ impl Walrus {
                         if checkpoint {
                             if let Some((idx_val, off_val)) = maybe_persist {
                                 if let Ok(mut idx_guard) = self.read_offset_index.write() {
-                                    let _ = idx_guard.set(col_name.to_string(), idx_val, off_val);
+                                    let _ = idx_guard.set(col_name.to_string(), idx_val, off_val, None, None);
                                 }
                             }
                         }
@@ -255,14 +271,22 @@ impl Walrus {
             let mut info = info_arc.write().map_err(|_| {
                 io::Error::new(io::ErrorKind::Other, "col info write lock poisoned")
             })?;
-            if let Some((tail_block_id, tail_off)) = persisted_tail {
+            if let Some((tail_block_id, tail_off, ref file_path_opt, file_offset_opt)) = persisted_tail {
                 if tail_block_id != active_block.id {
-                    if let Some((idx, _)) = info
-                        .chain
-                        .iter()
-                        .enumerate()
-                        .find(|(_, b)| b.id == tail_block_id)
-                    {
+                    // Try to find the block by file position (stable) or block_id
+                    let found = if let (Some(ref fp), Some(fo)) = (file_path_opt, file_offset_opt) {
+                        info.chain
+                            .iter()
+                            .enumerate()
+                            .find(|(_, b)| &b.file_path == fp && b.offset == fo)
+                    } else {
+                        info.chain
+                            .iter()
+                            .enumerate()
+                            .find(|(_, b)| b.id == tail_block_id)
+                    };
+
+                    if let Some((idx, _)) = found {
                         info.cur_block_idx = idx;
                         info.cur_block_offset = tail_off.min(info.chain[idx].used);
                         if checkpoint {
@@ -272,6 +296,8 @@ impl Walrus {
                                         col_name.to_string(),
                                         info.cur_block_idx as u64,
                                         info.cur_block_offset,
+                                        None,
+                                        None,
                                     );
                                 }
                             }
@@ -281,7 +307,12 @@ impl Walrus {
                         continue;
                     } else {
                         // rebase tail to current active block at 0
-                        persisted_tail = Some((active_block.id, 0));
+                        persisted_tail = Some((
+                            active_block.id,
+                            0,
+                            Some(active_block.file_path.clone()),
+                            Some(active_block.offset),
+                        ));
                         if checkpoint {
                             if self.should_persist(&mut info, true) {
                                 if let Ok(mut idx_guard) = self.read_offset_index.write() {
@@ -289,6 +320,8 @@ impl Walrus {
                                         col_name.to_string(),
                                         active_block.id | TAIL_FLAG,
                                         0,
+                                        Some(active_block.file_path.clone()),
+                                        Some(active_block.offset),
                                     );
                                 }
                             }
@@ -297,12 +330,22 @@ impl Walrus {
                 }
             } else {
                 // No persisted tail; init at current active block start
-                persisted_tail = Some((active_block.id, 0));
+                persisted_tail = Some((
+                    active_block.id,
+                    0,
+                    Some(active_block.file_path.clone()),
+                    Some(active_block.offset),
+                ));
                 if checkpoint {
                     if self.should_persist(&mut info, true) {
                         if let Ok(mut idx_guard) = self.read_offset_index.write() {
-                            let _ =
-                                idx_guard.set(col_name.to_string(), active_block.id | TAIL_FLAG, 0);
+                            let _ = idx_guard.set(
+                                col_name.to_string(),
+                                active_block.id | TAIL_FLAG,
+                                0,
+                                Some(active_block.file_path.clone()),
+                                Some(active_block.offset),
+                            );
                         }
                     }
                 }
@@ -310,8 +353,8 @@ impl Walrus {
             drop(info);
 
             // Choose the best known tail offset: prefer in-memory snapshot for current active block
-            let (tail_block_id, mut tail_off) = match persisted_tail {
-                Some(v) => v,
+            let (tail_block_id, mut tail_off) = match &persisted_tail {
+                Some((blk_id, off, _, _)) => (*blk_id, *off),
                 None => return Ok(None),
             };
             if tail_block_id == active_block.id {
@@ -344,16 +387,27 @@ impl Walrus {
                             info.tail_block_id = active_block.id;
                             info.tail_offset = new_off;
                             maybe_persist = if self.should_persist(&mut info, false) {
-                                Some((tail_block_id | TAIL_FLAG, new_off))
+                                Some((
+                                    tail_block_id | TAIL_FLAG,
+                                    new_off,
+                                    active_block.file_path.clone(),
+                                    active_block.offset,
+                                ))
                             } else {
                                 None
                             };
                         }
                         drop(info);
                         if checkpoint {
-                            if let Some((idx_val, off_val)) = maybe_persist {
+                            if let Some((idx_val, off_val, file_path, file_offset)) = maybe_persist {
                                 if let Ok(mut idx_guard) = self.read_offset_index.write() {
-                                    let _ = idx_guard.set(col_name.to_string(), idx_val, off_val);
+                                    let _ = idx_guard.set(
+                                        col_name.to_string(),
+                                        idx_val,
+                                        off_val,
+                                        Some(file_path),
+                                        Some(file_offset),
+                                    );
                                 }
                             }
                         }
@@ -505,7 +559,8 @@ impl Walrus {
             .map_err(|_| io::Error::new(io::ErrorKind::Other, "col info write lock poisoned"))?;
 
         // Hydrate from index if needed
-        let mut persisted_tail_for_fold: Option<(u64 /*block_id*/, u64 /*offset*/)> = None;
+        // (block_id, within_block_offset, file_path, file_offset)
+        let mut persisted_tail_for_fold: Option<(u64, u64, Option<String>, Option<u64>)> = None;
         if !info.hydrated_from_index {
             if let Ok(idx_guard) = self.read_offset_index.read() {
                 if let Some(pos) = idx_guard.get(col_name) {
@@ -515,7 +570,12 @@ impl Walrus {
                         info.tail_offset = pos.cur_block_offset;
                         info.cur_block_idx = info.chain.len();
                         info.cur_block_offset = 0;
-                        persisted_tail_for_fold = Some((tail_block_id, pos.cur_block_offset));
+                        persisted_tail_for_fold = Some((
+                            tail_block_id,
+                            pos.cur_block_offset,
+                            pos.file_path.clone(),
+                            pos.file_offset,
+                        ));
                     } else {
                         let mut ib = pos.cur_block_idx as usize;
                         if ib > info.chain.len() {
@@ -538,14 +598,24 @@ impl Walrus {
         }
 
         // Fold persisted tail into sealed blocks if possible
-        if let Some((tail_block_id, tail_off)) = persisted_tail_for_fold {
-            if let Some(idx) = info
-                .chain
-                .iter()
-                .enumerate()
-                .find(|(_, b)| b.id == tail_block_id)
-                .map(|(idx, _)| idx)
-            {
+        if let Some((tail_block_id, tail_off, file_path_opt, file_offset_opt)) = persisted_tail_for_fold {
+            // Try to match by file position first (stable across recovery),
+            // then fall back to block_id
+            let found = if let (Some(ref fp), Some(fo)) = (&file_path_opt, file_offset_opt) {
+                info.chain
+                    .iter()
+                    .enumerate()
+                    .find(|(_, b)| &b.file_path == fp && b.offset == fo)
+                    .map(|(idx, _)| idx)
+            } else {
+                info.chain
+                    .iter()
+                    .enumerate()
+                    .find(|(_, b)| b.id == tail_block_id)
+                    .map(|(idx, _)| idx)
+            };
+
+            if let Some(idx) = found {
                 let used = info.chain[idx].used;
                 info.cur_block_idx = idx;
                 info.cur_block_offset = tail_off.min(used);
@@ -756,6 +826,8 @@ impl Walrus {
         let mut final_block_offset = 0u64;
         let mut final_tail_block_id = 0u64;
         let mut final_tail_offset = 0u64;
+        let mut final_tail_file_path = String::new();
+        let mut final_tail_file_offset = 0u64;
         let mut entries_parsed = 0u32;
         let mut saw_tail = false;
 
@@ -908,6 +980,8 @@ impl Walrus {
                     saw_tail = true;
                     final_tail_block_id = read_plan.blk.id;
                     final_tail_offset = in_block_offset;
+                    final_tail_file_path = read_plan.blk.file_path.clone();
+                    final_tail_file_offset = read_plan.blk.offset;
                 } else if let Some(idx) = read_plan.chain_idx {
                     final_block_idx = idx;
                     final_block_offset = in_block_offset;
@@ -929,7 +1003,12 @@ impl Walrus {
         // 5) Commit progress (optional)
         if entries_parsed > 0 {
             enum PersistTarget {
-                Tail { blk_id: u64, off: u64 },
+                Tail {
+                    blk_id: u64,
+                    off: u64,
+                    file_path: String,
+                    file_offset: u64,
+                },
                 Sealed { idx: u64, off: u64 },
                 None,
             }
@@ -953,6 +1032,8 @@ impl Walrus {
                         target = PersistTarget::Tail {
                             blk_id: final_tail_block_id,
                             off: final_tail_offset,
+                            file_path: final_tail_file_path.clone(),
+                            file_offset: final_tail_file_offset,
                         };
                     } else {
                         info.cur_block_idx = final_block_idx;
@@ -1035,14 +1116,25 @@ impl Walrus {
 
             if checkpoint {
                 match target {
-                    PersistTarget::Tail { blk_id, off } => {
+                    PersistTarget::Tail {
+                        blk_id,
+                        off,
+                        file_path,
+                        file_offset,
+                    } => {
                         if let Ok(mut idx_guard) = self.read_offset_index.write() {
-                            let _ = idx_guard.set(col_name.to_string(), blk_id | TAIL_FLAG, off);
+                            let _ = idx_guard.set(
+                                col_name.to_string(),
+                                blk_id | TAIL_FLAG,
+                                off,
+                                Some(file_path),
+                                Some(file_offset),
+                            );
                         }
                     }
                     PersistTarget::Sealed { idx, off } => {
                         if let Ok(mut idx_guard) = self.read_offset_index.write() {
-                            let _ = idx_guard.set(col_name.to_string(), idx, off);
+                            let _ = idx_guard.set(col_name.to_string(), idx, off, None, None);
                         }
                     }
                     PersistTarget::None => {}
