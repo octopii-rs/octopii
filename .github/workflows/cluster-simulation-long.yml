@@ -1,0 +1,30 @@
+name: Cluster Simulation Long
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  cluster-long:
+    runs-on: self-hosted
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          cache: true
+      - name: Set vendored protoc
+        run: echo "PROTOC=$(cargo run --quiet --bin protoc_path)" >> "$GITHUB_ENV"
+      - name: Run long stress tests
+        env:
+          CLUSTER_STRESS_OPS: "5000"
+        run: cargo test --features simulation,openraft --test cluster_simulation_comprehensive stress_no_faults_long --test cluster_simulation_comprehensive stress_io_faults_long -- --test-threads=1 --nocapture
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: failed-cluster-long-logs
+          path: /tmp/octopii_sim_cluster_*
+          retention-days: 7
+      - if: always()
+        run: rm -rf /tmp/octopii_sim_cluster_* || true

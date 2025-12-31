@@ -3,8 +3,6 @@ name: Cluster Simulation Comprehensive
 on:
   push:
   workflow_dispatch:
-  schedule:
-    - cron: "0 4 * * *"  # Nightly at 4 AM UTC
 
 jobs:
   # All tests run on every push (60 min timeout)
@@ -70,10 +68,6 @@ jobs:
           CLUSTER_OPS: "1000"
           CLUSTER_STRESS_OPS: "5000"
         run: cargo test --features simulation,openraft --test cluster_simulation_comprehensive deterministic_ -- --test-threads=1
-      - name: Run long stress tests
-        env:
-          CLUSTER_STRESS_OPS: "5000"
-        run: cargo test --features simulation,openraft --test cluster_simulation_comprehensive stress_no_faults_long --test cluster_simulation_comprehensive stress_io_faults_long -- --test-threads=1 --nocapture
       - if: failure()
         uses: actions/upload-artifact@v4
         with:
