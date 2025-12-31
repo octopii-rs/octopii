@@ -119,10 +119,13 @@ impl ClusterHarness {
             max_delay_ms: 0,
         });
 
-        let base_port = 9700 + (params.seed % 1000) as u16;
+        // Port must end in node_id for the port % 10 hack in openraft/node.rs
+        // Node IDs are 1, 2, 3, ..., so ports must end in 1, 2, 3, ...
+        // Use base_port that ends in 0 (e.g., 9320, 9330, ...) so port+1 ends in 1
+        let base_port = 9320 + ((params.seed % 100) * 10) as u16;
         let mut addrs = Vec::with_capacity(params.size);
         for i in 0..params.size {
-            let port = base_port + i as u16;
+            let port = base_port + (i + 1) as u16; // +1 so node 1 gets port ending in 1
             let addr: SocketAddr = format!("127.0.0.1:{port}").parse().unwrap();
             addrs.push(addr);
         }
@@ -306,7 +309,7 @@ impl ClusterHarness {
 
     pub async fn restart_node(&mut self, idx: usize) {
         if let Some(node) = self.nodes.get(idx) {
-            node.shutdown();
+            node.shutdown().await;
         }
         let mut cfg = self.configs[idx].clone();
         cfg.is_initial_leader = false;
@@ -326,10 +329,10 @@ impl ClusterHarness {
     // =========================================================================
 
     /// Crash a node (shutdown without restart)
-    pub fn crash_node(&mut self, idx: usize, reason: CrashReason) {
+    pub async fn crash_node(&mut self, idx: usize, reason: CrashReason) {
         if let Some(node) = self.nodes.get(idx) {
             let node_id = node.id();
-            node.shutdown();
+            node.shutdown().await;
             self.crash_history.push(CrashEvent {
                 node_idx: idx,
                 node_id,
@@ -340,17 +343,17 @@ impl ClusterHarness {
     }
 
     /// Crash multiple nodes simultaneously
-    pub fn crash_multiple(&mut self, indices: &[usize], reason: CrashReason) {
+    pub async fn crash_multiple(&mut self, indices: &[usize], reason: CrashReason) {
         for &idx in indices {
-            self.crash_node(idx, reason);
+            self.crash_node(idx, reason).await;
         }
     }
 
     /// Crash majority of nodes (n/2 + 1)
-    pub fn crash_majority(&mut self, reason: CrashReason) {
+    pub async fn crash_majority(&mut self, reason: CrashReason) {
         let majority = (self.nodes.len() / 2) + 1;
         let indices: Vec<usize> = (0..majority).collect();
-        self.crash_multiple(&indices, reason);
+        self.crash_multiple(&indices, reason).await;
     }
 
     /// Restart a crashed node
@@ -367,10 +370,12 @@ impl ClusterHarness {
 
     /// Crash and recover a node in sequence
     pub async fn crash_and_recover_node(&mut self, idx: usize, reason: CrashReason) {
-        self.crash_node(idx, reason);
-        self.tick(10, 50).await; // Let the cluster detect the failure
+        self.crash_node(idx, reason).await;
+        // Wait for election timeout (800-1600ms) and new leader election
+        // At 50ms per tick, need ~32 ticks for min election timeout
+        self.tick(100, 50).await; // 5 seconds - should be enough for election
         self.recover_node(idx).await;
-        self.tick(20, 50).await; // Let the node catch up
+        self.tick(100, 50).await; // Let the node catch up and rejoin cluster
     }
 
     // =========================================================================
@@ -555,7 +560,7 @@ impl ClusterHarness {
         }
 
         // Crash the node
-        self.crash_node(idx, CrashReason::MembershipChange);
+        self.crash_node(idx, CrashReason::MembershipChange).await;
         self.tick(20, 50).await;
 
         // Note: Full membership change (removing from Raft config) would require

@@ -632,7 +632,7 @@ mod comprehensive_tests {
         assert!(leader.is_some(), "leader election failed");
 
         // Crash a follower
-        harness.crash_node(1, CrashReason::Scheduled);
+        harness.crash_node(1, CrashReason::Scheduled).await;
 
         // Run lots of operations so log is truncated
         harness.run_oracle_workload(small_ops_count()).await;

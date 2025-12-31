@@ -779,8 +779,8 @@ impl OpenRaftNode {
         self.config.node_id
     }
 
-    pub fn shutdown(&self) {
-        let _ = self.raft.shutdown();
+    pub async fn shutdown(&self) {
+        let _ = self.raft.shutdown().await;
     }
 
     pub fn shipping_lane(&self) -> crate::shipping_lane::ShippingLane {
