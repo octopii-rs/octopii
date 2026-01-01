@@ -589,7 +589,11 @@ impl ClusterHarness {
             .find(|n| n.id() == leader_id)
             .ok_or_else(|| octopii::error::OctopiiError::Rpc("leader not found".to_string()))?;
 
-        leader.add_learner(new_node_id, new_addr).await?;
+        let add_task = {
+            let leader = Arc::clone(leader);
+            tokio::spawn(async move { leader.add_learner(new_node_id, new_addr).await })
+        };
+        drive_join(&self.router, &mut self.fault_plan, add_task, 50).await?;
 
         Ok(new_idx)
     }
@@ -609,7 +613,11 @@ impl ClusterHarness {
                 .ok_or_else(|| octopii::error::OctopiiError::Rpc("leader not found".to_string()))?;
 
             if leader.is_learner_caught_up(node_id).await.unwrap_or(false) {
-                leader.promote_learner(node_id).await?;
+                let promote_task = {
+                    let leader = Arc::clone(leader);
+                    tokio::spawn(async move { leader.promote_learner(node_id).await })
+                };
+                drive_join(&self.router, &mut self.fault_plan, promote_task, 50).await?;
                 return Ok(());
             }
             self.tick(10, 50).await;
