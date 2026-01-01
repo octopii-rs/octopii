@@ -96,6 +96,37 @@ pub enum ValidationMode {
 }
 
 impl ClusterHarness {
+    fn debug_enabled() -> bool {
+        std::env::var("CLUSTER_DEBUG").ok().as_deref() == Some("1")
+    }
+
+    fn debug_dump_metrics(&self, label: &str) {
+        if !Self::debug_enabled() {
+            return;
+        }
+        eprintln!("\n[cluster_debug] {label}");
+        for (idx, node) in self.nodes.iter().enumerate() {
+            let metrics = node.raft_metrics();
+            eprintln!(
+                "  node[{}] id={} state={:?} leader={:?} term={:?} last_log={:?} last_applied={:?} membership={:?}",
+                idx,
+                node.id(),
+                metrics.state,
+                metrics.current_leader,
+                metrics.current_term,
+                metrics.last_log_index,
+                metrics.last_applied,
+                metrics.membership_config.membership().get_joint_config(),
+            );
+            if metrics.state == openraft::ServerState::Leader {
+                if let Some(replication) = metrics.replication.as_ref() {
+                    let mut peers = replication.keys().copied().collect::<Vec<_>>();
+                    peers.sort_unstable();
+                    eprintln!("    replication peers={:?}", peers);
+                }
+            }
+        }
+    }
     pub async fn new(params: ClusterParams) -> Self {
         let base = std::env::temp_dir().join(format!(
             "octopii_sim_cluster_{}_n{}",
@@ -204,19 +235,23 @@ impl ClusterHarness {
     }
 
     pub async fn wait_for_leader(&mut self) -> Option<u64> {
-        for _ in 0..2000 {
+        for i in 0..2000 {
             self.tick(5, 50).await;
             for node in &self.nodes {
                 if node.is_leader().await {
                     return Some(node.id());
                 }
             }
+            if i % 200 == 0 {
+                self.debug_dump_metrics("wait_for_leader progress");
+            }
         }
+        self.debug_dump_metrics("wait_for_leader exhausted");
         None
     }
 
     pub async fn propose_with_leader(&mut self, command: Vec<u8>) -> octopii::Result<()> {
-        for _ in 0..20 {
+        for attempt in 0..20 {
             let leader_id = self.wait_for_leader().await;
             let Some(leader_id) = leader_id else {
                 self.tick(5, 50).await;
@@ -239,7 +274,11 @@ impl ClusterHarness {
                     self.tick(5, 50).await;
                 }
             }
+            if attempt % 5 == 0 {
+                self.debug_dump_metrics("propose_with_leader retry");
+            }
         }
+        self.debug_dump_metrics("propose_with_leader exhausted");
         Err(octopii::error::OctopiiError::Rpc(
             "failed to propose after retries".to_string(),
         ))
@@ -319,6 +358,13 @@ impl ClusterHarness {
     }
 
     pub fn cleanup(&self) {
+        if Self::debug_enabled() {
+            eprintln!(
+                "\n[cluster_debug] skipping cleanup for inspection: {}",
+                self.base.display()
+            );
+            return;
+        }
         let _ = std::fs::remove_dir_all(&self.base);
         wal::__clear_storage_cache_for_tests();
         sim::teardown();
@@ -363,19 +409,38 @@ impl ClusterHarness {
         }
         let mut cfg = self.configs[idx].clone();
         cfg.is_initial_leader = false;
-        let transport = Arc::clone(&self.transports[idx]) as Arc<dyn Transport>;
+        let addr = self.addrs[idx];
+        let transport = Arc::new(SimTransport::new(addr, self.router.clone()));
+        self.transports[idx] = Arc::clone(&transport);
+        let transport = transport as Arc<dyn Transport>;
         let node = new_node_with_retry(cfg, self.rt.clone(), transport).await;
+        node.set_election_enabled(false);
         self.nodes[idx] = node;
     }
 
     /// Crash and recover a node in sequence
     pub async fn crash_and_recover_node(&mut self, idx: usize, reason: CrashReason) {
+        if Self::debug_enabled() {
+            eprintln!(
+                "\n[cluster_debug] crash_and_recover_node idx={} reason={:?} tick={}",
+                idx, reason, self.tick_count
+            );
+        }
         self.crash_node(idx, reason).await;
+        if Self::debug_enabled() {
+            eprintln!("[cluster_debug] crash_node complete idx={}", idx);
+        }
         // Wait for election timeout (800-1600ms) and new leader election
         // At 50ms per tick, need ~32 ticks for min election timeout
         self.tick(100, 50).await; // 5 seconds - should be enough for election
         self.recover_node(idx).await;
         self.tick(100, 50).await; // Let the node catch up and rejoin cluster
+        if let Some(node) = self.nodes.get(idx) {
+            node.set_election_enabled(true);
+        }
+        if Self::debug_enabled() {
+            self.debug_dump_metrics("after crash_and_recover_node");
+        }
     }
 
     // =========================================================================
@@ -629,6 +694,13 @@ impl ClusterHarness {
 
     /// Run a workload with oracle tracking
     pub async fn run_oracle_workload(&mut self, ops: usize) {
+        if Self::debug_enabled() {
+            eprintln!(
+                "\n[cluster_debug] run_oracle_workload start ops={} tick={}",
+                ops, self.tick_count
+            );
+            self.debug_dump_metrics("run_oracle_workload start");
+        }
         for i in 0..ops {
             let key = format!("key{i}");
             let value = format!("val{i}");
@@ -640,6 +712,12 @@ impl ClusterHarness {
         for i in 0..ops {
             let key = format!("key{i}");
             self.query_and_verify(&key).await.expect("query");
+        }
+        if Self::debug_enabled() {
+            eprintln!(
+                "\n[cluster_debug] run_oracle_workload end ops={} tick={}",
+                ops, self.tick_count
+            );
         }
     }
 
@@ -1005,10 +1083,10 @@ async fn new_node_with_retry(
     for attempt in 0..10 {
         let prev_rate = sim::get_io_error_rate();
         sim::set_io_error_rate(0.0);
-        let node = OpenRaftNode::new_sim(config.clone(), rt.clone(), Arc::clone(&transport))
-            .await
-            .ok()
-            .map(Arc::new);
+        let node_res = OpenRaftNode::new_sim(config.clone(), rt.clone(), Arc::clone(&transport))
+            .await;
+        let node_err = node_res.as_ref().err().map(|e| e.to_string());
+        let node = node_res.ok().map(Arc::new);
         let started = if let Some(node) = node.as_ref() {
             node.start().await.is_ok()
         } else {
@@ -1017,6 +1095,14 @@ async fn new_node_with_retry(
         sim::set_io_error_rate(prev_rate);
         if let (Some(node), true) = (node, started) {
             return node;
+        }
+        if ClusterHarness::debug_enabled() {
+            eprintln!(
+                "[cluster_debug] new_node_with_retry attempt={} failed: new_res={:?} started={}",
+                attempt,
+                node_err.as_deref(),
+                started
+            );
         }
         let _ = std::fs::remove_dir_all(&config.wal_dir);
         sim_runtime::advance_time(Duration::from_millis(50));

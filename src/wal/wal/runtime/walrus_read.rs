@@ -475,6 +475,16 @@ impl Walrus {
         max_bytes: usize,
         checkpoint: bool,
     ) -> io::Result<Vec<Entry>> {
+        self.batch_read_for_topic_with_mode(col_name, max_bytes, checkpoint, checkpoint)
+    }
+
+    pub fn batch_read_for_topic_with_mode(
+        &self,
+        col_name: &str,
+        max_bytes: usize,
+        checkpoint: bool,
+        mark_checkpointed: bool,
+    ) -> io::Result<Vec<Entry>> {
         // Debug: unconditional logging for orders to trace the issue
         #[cfg(feature = "simulation")]
         if col_name == "orders" {
@@ -633,7 +643,9 @@ impl Walrus {
             let block = info.chain[cur_idx].clone();
             sim_assert(cur_off <= block.used, "batch plan offset beyond block.used");
             if cur_off >= block.used {
-                BlockStateTracker::set_checkpointed_true(block.id as usize);
+                if mark_checkpointed {
+                    BlockStateTracker::set_checkpointed_true(block.id as usize);
+                }
                 cur_idx += 1;
                 cur_off = 0;
                 continue;

@@ -788,8 +788,13 @@ impl OpenRaftNode {
         self.config.node_id
     }
 
+    pub fn set_election_enabled(&self, enabled: bool) {
+        self.raft.runtime_config().elect(enabled);
+    }
+
     pub async fn shutdown(&self) {
         let _ = self.raft.shutdown().await;
+        self.transport.close();
     }
 
     pub fn shipping_lane(&self) -> crate::shipping_lane::ShippingLane {

@@ -175,7 +175,12 @@ impl WriteAheadLog {
 
             // Read in batches, checkpointing to advance the reader
             loop {
-                match walrus.batch_read_for_topic(&topic, 10 * 1024 * 1024, checkpoint) {
+                match walrus.batch_read_for_topic_with_mode(
+                    &topic,
+                    10 * 1024 * 1024,
+                    checkpoint,
+                    false,
+                ) {
                     Ok(batch) => {
                         if batch.is_empty() {
                             consecutive_empty_reads += 1;
@@ -205,7 +210,12 @@ impl WriteAheadLog {
                 let mut meta_count = 0usize;
                 let mut empty_reads = 0usize;
                 loop {
-                    match walrus.batch_read_for_topic(WAL_META_TOPIC, 1024 * 1024, true) {
+                    match walrus.batch_read_for_topic_with_mode(
+                        WAL_META_TOPIC,
+                        1024 * 1024,
+                        checkpoint,
+                        false,
+                    ) {
                         Ok(batch) => {
                             if batch.is_empty() {
                                 empty_reads += 1;

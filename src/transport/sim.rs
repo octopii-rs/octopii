@@ -38,16 +38,31 @@ impl SimRouter {
         }
     }
 
-    pub fn register(&self, addr: SocketAddr) {
+    pub fn register(&self, addr: SocketAddr) -> u64 {
         let mut inner = self.inner.lock().unwrap();
-        inner.nodes.entry(addr).or_insert_with(NodeQueue::new);
+        let epoch = inner
+            .nodes
+            .entry(addr)
+            .and_modify(|node| {
+                node.epoch = node.epoch.saturating_add(1);
+                node.inbox.clear();
+                node.pending_accepts.clear();
+                node.active_peers.clear();
+                node.closed = false;
+                node.notify.notify_waiters();
+            })
+            .or_insert_with(NodeQueue::new)
+            .epoch;
+        epoch
     }
 
-    pub fn close(&self, addr: SocketAddr) {
+    pub fn close(&self, addr: SocketAddr, epoch: u64) {
         let mut inner = self.inner.lock().unwrap();
         if let Some(node) = inner.nodes.get_mut(&addr) {
-            node.closed = true;
-            node.notify.notify_waiters();
+            if node.epoch == epoch {
+                node.closed = true;
+                node.notify.notify_waiters();
+            }
         }
     }
 
@@ -144,6 +159,19 @@ impl SimRouter {
 
         for msg in ready {
             let mut inner = self.inner.lock().unwrap();
+            let from_ok = inner
+                .nodes
+                .get(&msg.from)
+                .map(|n| !n.closed && n.epoch == msg.from_epoch)
+                .unwrap_or(false);
+            let to_ok = inner
+                .nodes
+                .get(&msg.to)
+                .map(|n| !n.closed && n.epoch == msg.to_epoch)
+                .unwrap_or(false);
+            if !from_ok || !to_ok {
+                continue;
+            }
             if inner.should_timeout(&msg) {
                 continue;
             }
@@ -154,7 +182,7 @@ impl SimRouter {
                 continue;
             }
             if let Some(node) = inner.nodes.get_mut(&msg.to) {
-                if node.closed {
+                if node.closed || node.epoch != msg.to_epoch {
                     continue;
                 }
                 let queue = node.inbox.entry(msg.from).or_default();
@@ -169,8 +197,28 @@ impl SimRouter {
         }
     }
 
-    fn enqueue(&self, from: SocketAddr, to: SocketAddr, data: Bytes) -> Result<()> {
+    fn enqueue(
+        &self,
+        from: SocketAddr,
+        from_epoch: u64,
+        to: SocketAddr,
+        to_epoch: u64,
+        data: Bytes,
+    ) -> Result<()> {
         let mut inner = self.inner.lock().unwrap();
+        let from_ok = inner
+            .nodes
+            .get(&from)
+            .map(|n| !n.closed && n.epoch == from_epoch)
+            .unwrap_or(false);
+        let to_ok = inner
+            .nodes
+            .get(&to)
+            .map(|n| !n.closed && n.epoch == to_epoch)
+            .unwrap_or(false);
+        if !from_ok || !to_ok {
+            return Ok(());
+        }
         if inner.is_blocked(from, to) {
             return Ok(());
         }
@@ -191,17 +239,19 @@ impl SimRouter {
                 deliver_at_ms,
                 now_ms,
                 seq,
+                from_epoch,
+                to_epoch,
             )));
         Ok(())
     }
 
-    fn recv_from(&self, local: SocketAddr, remote: SocketAddr) -> Result<Option<Bytes>> {
+    fn recv_from(&self, local: SocketAddr, local_epoch: u64, remote: SocketAddr) -> Result<Option<Bytes>> {
         let mut inner = self.inner.lock().unwrap();
         let node = inner
             .nodes
             .get_mut(&local)
             .ok_or_else(|| OctopiiError::Transport("sim node not registered".to_string()))?;
-        if node.closed {
+        if node.closed || node.epoch != local_epoch {
             return Ok(None);
         }
         let queue = node.inbox.entry(remote).or_default();
@@ -221,18 +271,26 @@ impl SimRouter {
         Ok(None)
     }
 
-    fn notify_handle(&self, addr: SocketAddr) -> Option<Arc<Notify>> {
-        let inner = self.inner.lock().unwrap();
-        inner.nodes.get(&addr).map(|n| Arc::clone(&n.notify))
-    }
-
-    fn is_closed(&self, addr: SocketAddr) -> bool {
+    fn notify_handle(&self, addr: SocketAddr, epoch: u64) -> Option<Arc<Notify>> {
         let inner = self.inner.lock().unwrap();
         inner
             .nodes
             .get(&addr)
-            .map(|n| n.closed)
+            .and_then(|n| (n.epoch == epoch).then(|| Arc::clone(&n.notify)))
+    }
+
+    fn is_closed(&self, addr: SocketAddr, epoch: u64) -> bool {
+        let inner = self.inner.lock().unwrap();
+        inner
+            .nodes
+            .get(&addr)
+            .map(|n| n.closed || n.epoch != epoch)
             .unwrap_or(true)
+    }
+
+    fn epoch_of(&self, addr: SocketAddr) -> u64 {
+        let inner = self.inner.lock().unwrap();
+        inner.nodes.get(&addr).map(|n| n.epoch).unwrap_or(0)
     }
 }
 
@@ -240,12 +298,13 @@ impl SimRouter {
 pub struct SimTransport {
     addr: SocketAddr,
     router: SimRouter,
+    epoch: u64,
 }
 
 impl SimTransport {
     pub fn new(addr: SocketAddr, router: SimRouter) -> Self {
-        router.register(addr);
-        Self { addr, router }
+        let epoch = router.register(addr);
+        Self { addr, router, epoch }
     }
 
     pub fn router(&self) -> SimRouter {
@@ -259,34 +318,44 @@ impl Transport for SimTransport {
     }
 
     fn close(&self) {
-        self.router.close(self.addr);
+        self.router.close(self.addr, self.epoch);
     }
 
     fn is_closed(&self) -> bool {
-        self.router.is_closed(self.addr)
+        self.router.is_closed(self.addr, self.epoch)
     }
 
     fn connect(&self, addr: SocketAddr) -> TransportFut<'_, Arc<dyn Peer>> {
         let router = self.router.clone();
         let local = self.addr;
+        let local_epoch = self.epoch;
         Box::pin(async move {
-            Ok(Arc::new(SimPeer::new(local, addr, router)) as Arc<dyn Peer>)
+            let remote_epoch = router.epoch_of(addr);
+            Ok(Arc::new(SimPeer::new(
+                local,
+                local_epoch,
+                addr,
+                remote_epoch,
+                router,
+            )) as Arc<dyn Peer>)
         })
     }
 
     fn accept(&self) -> TransportFut<'_, (SocketAddr, Arc<dyn Peer>)> {
         let router = self.router.clone();
         let local = self.addr;
+        let local_epoch = self.epoch;
         Box::pin(async move {
             loop {
-                if router.is_closed(local) {
+                if router.is_closed(local, local_epoch) {
                     return Err(OctopiiError::Transport("sim transport closed".to_string()));
                 }
                 if let Some(peer) = router.accept_peer(local)? {
-                    let sim_peer = SimPeer::new(local, peer, router.clone());
+                    let remote_epoch = router.epoch_of(peer);
+                    let sim_peer = SimPeer::new(local, local_epoch, peer, remote_epoch, router.clone());
                     return Ok((peer, Arc::new(sim_peer) as Arc<dyn Peer>));
                 }
-                if let Some(notify) = router.notify_handle(local) {
+                if let Some(notify) = router.notify_handle(local, local_epoch) {
                     notify.notified().await;
                 }
             }
@@ -296,22 +365,30 @@ impl Transport for SimTransport {
     fn send(&self, addr: SocketAddr, data: Bytes) -> TransportFut<'_, ()> {
         let router = self.router.clone();
         let local = self.addr;
-        Box::pin(async move { router.enqueue(local, addr, data) })
+        let local_epoch = self.epoch;
+        Box::pin(async move {
+            let remote_epoch = router.epoch_of(addr);
+            router.enqueue(local, local_epoch, addr, remote_epoch, data)
+        })
     }
 }
 
 #[derive(Clone)]
 struct SimPeer {
     local: SocketAddr,
+    local_epoch: u64,
     remote: SocketAddr,
+    remote_epoch: u64,
     router: SimRouter,
 }
 
 impl SimPeer {
-    fn new(local: SocketAddr, remote: SocketAddr, router: SimRouter) -> Self {
+    fn new(local: SocketAddr, local_epoch: u64, remote: SocketAddr, remote_epoch: u64, router: SimRouter) -> Self {
         Self {
             local,
+            local_epoch,
             remote,
+            remote_epoch,
             router,
         }
     }
@@ -322,22 +399,26 @@ impl Peer for SimPeer {
         let router = self.router.clone();
         let local = self.local;
         let remote = self.remote;
-        Box::pin(async move { router.enqueue(local, remote, data) })
+        let local_epoch = self.local_epoch;
+        let remote_epoch = self.remote_epoch;
+        Box::pin(async move { router.enqueue(local, local_epoch, remote, remote_epoch, data) })
     }
 
     fn recv(&self) -> TransportFut<'_, Option<Bytes>> {
         let router = self.router.clone();
         let local = self.local;
         let remote = self.remote;
+        let local_epoch = self.local_epoch;
+        let remote_epoch = self.remote_epoch;
         Box::pin(async move {
             loop {
-                if router.is_closed(local) {
+                if router.is_closed(local, local_epoch) || router.is_closed(remote, remote_epoch) {
                     return Ok(None);
                 }
-                if let Some(data) = router.recv_from(local, remote)? {
+                if let Some(data) = router.recv_from(local, local_epoch, remote)? {
                     return Ok(Some(data));
                 }
-                if let Some(notify) = router.notify_handle(local) {
+                if let Some(notify) = router.notify_handle(local, local_epoch) {
                     notify.notified().await;
                 }
             }
@@ -345,7 +426,8 @@ impl Peer for SimPeer {
     }
 
     fn is_closed(&self) -> bool {
-        self.router.is_closed(self.local) || self.router.is_closed(self.remote)
+        self.router.is_closed(self.local, self.local_epoch)
+            || self.router.is_closed(self.remote, self.remote_epoch)
     }
 }
 
@@ -355,6 +437,7 @@ struct NodeQueue {
     active_peers: HashSet<SocketAddr>,
     notify: Arc<Notify>,
     closed: bool,
+    epoch: u64,
 }
 
 impl NodeQueue {
@@ -365,6 +448,7 @@ impl NodeQueue {
             active_peers: HashSet::new(),
             notify: Arc::new(Notify::new()),
             closed: false,
+            epoch: 1,
         }
     }
 }
@@ -377,6 +461,8 @@ struct QueuedMsg {
     deliver_at_ms: u64,
     enqueued_at_ms: u64,
     seq: u64,
+    from_epoch: u64,
+    to_epoch: u64,
 }
 
 impl QueuedMsg {
@@ -387,6 +473,8 @@ impl QueuedMsg {
         deliver_at_ms: u64,
         enqueued_at_ms: u64,
         seq: u64,
+        from_epoch: u64,
+        to_epoch: u64,
     ) -> Self {
         Self {
             from,
@@ -395,6 +483,8 @@ impl QueuedMsg {
             deliver_at_ms,
             enqueued_at_ms,
             seq,
+            from_epoch,
+            to_epoch,
         }
     }
 }

@@ -251,8 +251,6 @@ enum SmMetaRecord {
         log_id: Option<LogId<AppTypeConfig>>,
         membership: openraft::Membership<AppTypeConfig>,
     },
-    /// Last applied log ID
-    Applied(LogId<AppTypeConfig>),
 }
 
 /// State machine wrapper for OpenRaft with WAL-backed membership persistence.
@@ -290,14 +288,8 @@ impl MemStateMachine {
         if let Ok(entries) = wal.read_all().await {
             for raw in entries {
                 if let Ok(record) = bincode::deserialize::<SmMetaRecord>(&raw) {
-                    match record {
-                        SmMetaRecord::Membership { log_id, membership } => {
-                            data.last_membership = StoredMembership::new(log_id, membership);
-                        }
-                        SmMetaRecord::Applied(log_id) => {
-                            data.last_applied_log = Some(log_id);
-                        }
-                    }
+                    let SmMetaRecord::Membership { log_id, membership } = record;
+                    data.last_membership = StoredMembership::new(log_id, membership);
                 }
             }
         }
@@ -405,16 +397,14 @@ impl RaftStateMachine<AppTypeConfig> for Arc<MemStateMachine> {
         Strm:
             Stream<Item = Result<EntryResponder<AppTypeConfig>, io::Error>> + Unpin + OptionalSend,
     {
-        // Collect metadata updates to persist after releasing the lock
+        // Collect membership updates to persist after releasing the lock
         let mut membership_to_persist: Option<(Option<LogId<AppTypeConfig>>, openraft::Membership<AppTypeConfig>)> = None;
-        let mut applied_to_persist: Option<LogId<AppTypeConfig>> = None;
 
         {
             let mut sm = self.state_machine.write().await;
 
             while let Some((entry, responder)) = entries.try_next().await? {
                 sm.last_applied_log = Some(entry.log_id);
-                applied_to_persist = Some(entry.log_id);
 
                 let response = match entry.payload {
                     EntryPayload::Blank => AppResponse(Vec::new()),
@@ -439,12 +429,9 @@ impl RaftStateMachine<AppTypeConfig> for Arc<MemStateMachine> {
             }
         }
 
-        // Persist metadata updates outside the lock
+        // Persist membership updates outside the lock
         if let Some((log_id, membership)) = membership_to_persist {
             self.persist_meta(&SmMetaRecord::Membership { log_id, membership }).await?;
-        }
-        if let Some(log_id) = applied_to_persist {
-            self.persist_meta(&SmMetaRecord::Applied(log_id)).await?;
         }
 
         Ok(())
@@ -479,7 +466,6 @@ impl RaftStateMachine<AppTypeConfig> for Arc<MemStateMachine> {
         // Extract membership info for persistence before taking locks
         let membership_to_persist = meta.last_membership.membership().clone();
         let membership_log_id = meta.last_membership.log_id().clone();
-        let applied_to_persist = meta.last_log_id;
 
         {
             let mut state_machine = self.state_machine.write().await;
@@ -503,9 +489,6 @@ impl RaftStateMachine<AppTypeConfig> for Arc<MemStateMachine> {
             log_id: membership_log_id,
             membership: membership_to_persist,
         }).await?;
-        if let Some(log_id) = applied_to_persist {
-            self.persist_meta(&SmMetaRecord::Applied(log_id)).await?;
-        }
 
         Ok(())
     }
@@ -642,6 +625,14 @@ impl WalLogStore {
 
     async fn recover_from_wal(&self) -> Result<(), OctopiiError> {
         let entries = self.wal.read_all().await.unwrap_or_else(|_| Vec::new());
+        if cfg!(feature = "simulation")
+            && std::env::var("CLUSTER_DEBUG").ok().as_deref() == Some("1")
+        {
+            eprintln!(
+                "[cluster_debug] wal_log_store recover entries={}",
+                entries.len()
+            );
+        }
         let mut inner = self.inner.lock().await;
         Self::apply_wal_entries(&entries, &mut inner)?;
         Self::repair_state_after_recovery(&mut inner);
@@ -684,7 +675,21 @@ impl WalLogStore {
 
         // Step 2: Find and truncate at first gap in log
         // Log must be contiguous - if there's a gap, entries after the gap are invalid
-        let expected_first = inner.last_purged_log_id.as_ref().map(|p| p.index + 1).unwrap_or(1);
+        let expected_first = match inner.last_purged_log_id.as_ref() {
+            Some(p) => p.index + 1,
+            None => inner.log.keys().next().copied().unwrap_or(1),
+        };
+        if cfg!(feature = "simulation")
+            && std::env::var("CLUSTER_DEBUG").ok().as_deref() == Some("1")
+        {
+            let first_key = inner.log.keys().next().copied();
+            eprintln!(
+                "[cluster_debug] wal_log_store repair expected_first={} first_key={:?} last_purged={:?}",
+                expected_first,
+                first_key,
+                inner.last_purged_log_id.as_ref().map(|p| p.index)
+            );
+        }
         let mut last_valid_idx: Option<u64> = None;
 
         for (&idx, _) in inner.log.iter() {
@@ -766,20 +771,29 @@ impl WalLogStore {
         entries: &[Bytes],
         inner: &mut MemLogStoreInner,
     ) -> Result<(), OctopiiError> {
+        let mut log_entry_count = 0usize;
+        let mut vote_count = 0usize;
+        let mut committed_count = 0usize;
+        let mut purged_count = 0usize;
+        let mut truncated_count = 0usize;
         for raw in entries {
             let record: WalLogRecord = bincode::deserialize(raw)
                 .map_err(|e| OctopiiError::Wal(format!("Failed to deserialize WAL record: {e}")))?;
             match record {
                 WalLogRecord::LogEntry(entry) => {
+                    log_entry_count += 1;
                     inner.log.insert(entry.log_id.index, entry);
                 }
                 WalLogRecord::Vote(vote) => {
+                    vote_count += 1;
                     inner.vote = Some(vote);
                 }
                 WalLogRecord::Committed(committed) => {
+                    committed_count += 1;
                     inner.committed = committed;
                 }
                 WalLogRecord::Purged(log_id) => {
+                    purged_count += 1;
                     let keys = inner
                         .log
                         .range(..=log_id.index)
@@ -791,6 +805,7 @@ impl WalLogStore {
                     inner.last_purged_log_id = Some(log_id);
                 }
                 WalLogRecord::Truncated(log_id) => {
+                    truncated_count += 1;
                     let keys = inner
                         .log
                         .range(log_id.index..)
@@ -801,6 +816,14 @@ impl WalLogStore {
                     }
                 }
             }
+        }
+        if cfg!(feature = "simulation")
+            && std::env::var("CLUSTER_DEBUG").ok().as_deref() == Some("1")
+        {
+            eprintln!(
+                "[cluster_debug] wal_log_store apply counts: log_entry={} vote={} committed={} purged={} truncated={}",
+                log_entry_count, vote_count, committed_count, purged_count, truncated_count
+            );
         }
         Ok(())
     }
