@@ -1,6 +1,6 @@
 use bytes::Bytes;
 use octopii::rpc::{self, RequestPayload, ResponsePayload, RpcHandler};
-use octopii::transport::QuicTransport;
+use octopii::transport::{Peer, QuicTransport, Transport};
 use octopii::ShippingLane;
 use std::error::Error;
 use std::net::SocketAddr;
@@ -19,7 +19,9 @@ pub async fn run_negotiated_transfer() -> Result<Bytes, Box<dyn Error>> {
     let rpc_server_addr = rpc_server_transport.local_addr()?;
     let data_server_transport = Arc::new(QuicTransport::new("127.0.0.1:0".parse()?).await?);
     let shipping_lane = Arc::new(ShippingLane::new(Arc::clone(&data_server_transport)));
-    let rpc_server = Arc::new(RpcHandler::new(Arc::clone(&rpc_server_transport)));
+    let rpc_server = Arc::new(RpcHandler::new(
+        Arc::clone(&rpc_server_transport) as Arc<dyn Transport>
+    ));
 
     let snapshot = Bytes::from_static(b"SNAPSHOT_PAYLOAD");
 
@@ -27,43 +29,51 @@ pub async fn run_negotiated_transfer() -> Result<Bytes, Box<dyn Error>> {
         .set_request_handler({
             let shipping_lane = Arc::clone(&shipping_lane);
             let snapshot = snapshot.clone();
-            move |req| match req.payload {
-                RequestPayload::Custom { operation, data } if operation == "SNAPSHOT_REQUEST" => {
-                    let addr_str = match String::from_utf8(data.to_vec()) {
-                        Ok(s) => s,
-                        Err(e) => {
-                            return ResponsePayload::Error {
-                                message: format!("invalid utf-8 address: {}", e),
+            move |req| {
+                let shipping_lane = Arc::clone(&shipping_lane);
+                let snapshot = snapshot.clone();
+                async move {
+                    match req.payload {
+                        RequestPayload::Custom { operation, data }
+                            if operation == "SNAPSHOT_REQUEST" =>
+                        {
+                            let addr_str = match String::from_utf8(data.to_vec()) {
+                                Ok(s) => s,
+                                Err(e) => {
+                                    return ResponsePayload::Error {
+                                        message: format!("invalid utf-8 address: {}", e),
+                                    }
+                                }
+                            };
+
+                            let addr: SocketAddr = match addr_str.parse() {
+                                Ok(a) => a,
+                                Err(e) => {
+                                    return ResponsePayload::Error {
+                                        message: format!("invalid address: {}", e),
+                                    }
+                                }
+                            };
+
+                            let bytes = snapshot.clone();
+                            let lane = Arc::clone(&shipping_lane);
+                            let chunk = bytes.clone();
+                            tokio::spawn(async move {
+                                if let Err(err) = lane.send_memory(addr, chunk).await {
+                                    tracing::warn!("shipping lane send failed: {}", err);
+                                }
+                            });
+
+                            ResponsePayload::CustomResponse {
+                                success: true,
+                                data: Bytes::from(format!("READY {}", bytes.len())),
                             }
                         }
-                    };
-
-                    let addr: SocketAddr = match addr_str.parse() {
-                        Ok(a) => a,
-                        Err(e) => {
-                            return ResponsePayload::Error {
-                                message: format!("invalid address: {}", e),
-                            }
-                        }
-                    };
-
-                    let bytes = snapshot.clone();
-                    let lane = Arc::clone(&shipping_lane);
-                    let chunk = bytes.clone();
-                    tokio::spawn(async move {
-                        if let Err(err) = lane.send_memory(addr, chunk).await {
-                            tracing::warn!("shipping lane send failed: {}", err);
-                        }
-                    });
-
-                    ResponsePayload::CustomResponse {
-                        success: true,
-                        data: Bytes::from(format!("READY {}", bytes.len())),
+                        _ => ResponsePayload::Error {
+                            message: "unsupported request".into(),
+                        },
                     }
                 }
-                _ => ResponsePayload::Error {
-                    message: "unsupported request".into(),
-                },
             }
         })
         .await;
@@ -74,7 +84,9 @@ pub async fn run_negotiated_transfer() -> Result<Bytes, Box<dyn Error>> {
     ));
 
     let rpc_client_transport = Arc::new(QuicTransport::new("127.0.0.1:0".parse()?).await?);
-    let rpc_client = Arc::new(RpcHandler::new(Arc::clone(&rpc_client_transport)));
+    let rpc_client = Arc::new(RpcHandler::new(
+        Arc::clone(&rpc_client_transport) as Arc<dyn Transport>
+    ));
 
     let data_client_transport = Arc::new(QuicTransport::new("127.0.0.1:0".parse()?).await?);
     let data_client_addr = data_client_transport.local_addr()?;
@@ -120,6 +132,7 @@ async fn run_rpc_server(
 ) {
     while let Ok((addr, peer)) = transport.accept().await {
         let rpc = Arc::clone(&rpc);
+        let peer = peer as Arc<dyn Peer>;
         tokio::spawn(async move {
             loop {
                 match peer.recv().await {

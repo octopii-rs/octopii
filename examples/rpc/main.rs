@@ -1,6 +1,6 @@
 use bytes::Bytes;
 use octopii::rpc::{self, RequestPayload, ResponsePayload, RpcHandler};
-use octopii::transport::QuicTransport;
+use octopii::transport::{Peer, QuicTransport, Transport};
 use std::error::Error;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -17,20 +17,24 @@ pub async fn run_rpc_example() -> Result<String, Box<dyn Error>> {
     let server_addr: SocketAddr = "127.0.0.1:0".parse()?;
     let server_transport = Arc::new(QuicTransport::new(server_addr).await?);
     let server_bind = server_transport.local_addr()?;
-    let server_rpc = Arc::new(RpcHandler::new(Arc::clone(&server_transport)));
+    let server_rpc = Arc::new(RpcHandler::new(
+        Arc::clone(&server_transport) as Arc<dyn Transport>
+    ));
 
     server_rpc
-        .set_request_handler(|req| match req.payload {
-            RequestPayload::Custom { data, .. } => {
-                let upper = String::from_utf8_lossy(&data).to_uppercase();
-                ResponsePayload::CustomResponse {
-                    success: true,
-                    data: Bytes::from(upper),
+        .set_request_handler(|req| async move {
+            match req.payload {
+                RequestPayload::Custom { data, .. } => {
+                    let upper = String::from_utf8_lossy(&data).to_uppercase();
+                    ResponsePayload::CustomResponse {
+                        success: true,
+                        data: Bytes::from(upper),
+                    }
                 }
+                _ => ResponsePayload::Error {
+                    message: "unsupported payload".into(),
+                },
             }
-            _ => ResponsePayload::Error {
-                message: "unsupported payload".into(),
-            },
         })
         .await;
 
@@ -38,7 +42,9 @@ pub async fn run_rpc_example() -> Result<String, Box<dyn Error>> {
 
     let client_addr: SocketAddr = "127.0.0.1:0".parse()?;
     let client_transport = Arc::new(QuicTransport::new(client_addr).await?);
-    let client_rpc = Arc::new(RpcHandler::new(Arc::clone(&client_transport)));
+    let client_rpc = Arc::new(RpcHandler::new(
+        Arc::clone(&client_transport) as Arc<dyn Transport>
+    ));
 
     let response = client_rpc
         .request(
@@ -70,6 +76,7 @@ async fn run_server(
 ) {
     while let Ok((addr, peer)) = transport.accept().await {
         let rpc = Arc::clone(&rpc);
+        let peer = peer as Arc<dyn Peer>;
         tokio::spawn(async move {
             loop {
                 match peer.recv().await {
