@@ -21,6 +21,6 @@ jobs:
           CLUSTER_PARALLEL_JOBS: "6"
           CLUSTER_PARALLEL_SEED_START: "0"
           CLUSTER_PARALLEL_SEED_COUNT: "20"
-        run: cargo test --features simulation,openraft --test cluster_simulation_stress stress_cluster_parallel_seed_sweep -- --test-threads=1
+        run: cargo test --features simulation,openraft --test cluster_simulation_stress stress_cluster_parallel_seed_sweep -- --test-threads=5
       - if: always()
         run: rm -rf /tmp/octopii_sim_cluster_* || true

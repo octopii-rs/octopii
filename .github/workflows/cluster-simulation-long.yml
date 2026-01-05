@@ -19,11 +19,11 @@ jobs:
       - name: Run stress_no_faults_long
         env:
           CLUSTER_STRESS_OPS: "5000"
-        run: cargo test --features simulation,openraft --test cluster_simulation_comprehensive stress_no_faults_long -- --test-threads=1 --nocapture
+        run: cargo test --features simulation,openraft --test cluster_simulation_comprehensive stress_no_faults_long -- --test-threads=5 --nocapture
       - name: Run stress_io_faults_long
         env:
           CLUSTER_STRESS_OPS: "5000"
-        run: cargo test --features simulation,openraft --test cluster_simulation_comprehensive stress_io_faults_long -- --test-threads=1 --nocapture
+        run: cargo test --features simulation,openraft --test cluster_simulation_comprehensive stress_io_faults_long -- --test-threads=5 --nocapture
       - if: failure()
         uses: actions/upload-artifact@v4
         with:

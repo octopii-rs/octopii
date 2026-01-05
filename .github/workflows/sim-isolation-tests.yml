@@ -20,6 +20,6 @@ jobs:
         run: |
           cargo test --features simulation --test sim_isolation_tests -- --test-threads=1
           cargo test --features simulation --test simulation deterministic_random_seeds_smoke_8 -- --test-threads=1
-          cargo test --features simulation,openraft --test cluster_simulation_stress stress_cluster_parallel_seed_sweep -- --test-threads=1
+          cargo test --features simulation,openraft --test cluster_simulation_stress stress_cluster_parallel_seed_sweep -- --test-threads=5
       - if: always()
         run: rm -rf /tmp/sim_* /tmp/walrus_sim_* /tmp/octopii_sim_cluster_* || true

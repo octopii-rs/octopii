@@ -39,6 +39,10 @@ pub struct ClusterOracle {
     current_tick: u64,
     /// Keys written without partial writes (must survive crashes)
     must_survive: HashMap<String, String>,
+    /// Keys written during partial writes (may be lost after crash)
+    may_be_lost: HashMap<String, String>,
+    /// Recovery cycle counter for durability checks
+    recovery_cycle: u64,
 }
 
 impl Default for ClusterOracle {
@@ -57,6 +61,8 @@ impl ClusterOracle {
             failed_ops: Vec::new(),
             current_tick: 0,
             must_survive: HashMap::new(),
+            may_be_lost: HashMap::new(),
+            recovery_cycle: 0,
         }
     }
 
@@ -75,6 +81,13 @@ impl ClusterOracle {
     pub fn record_must_survive(&mut self, key: &str, value: &str) {
         self.expected_state.insert(key.to_string(), value.to_string());
         self.must_survive.insert(key.to_string(), value.to_string());
+        self.commit_count += 1;
+    }
+
+    /// Record a commit that may be lost after crash (partial write observed)
+    pub fn record_may_be_lost(&mut self, key: &str, value: &str) {
+        self.expected_state.insert(key.to_string(), value.to_string());
+        self.may_be_lost.insert(key.to_string(), value.to_string());
         self.commit_count += 1;
     }
 
@@ -184,6 +197,8 @@ impl ClusterOracle {
         self.failed_ops.clear();
         self.current_tick = 0;
         self.must_survive.clear();
+        self.may_be_lost.clear();
+        self.recovery_cycle = 0;
     }
 
     /// Dump diagnostic information (useful when debugging failures)
@@ -194,6 +209,8 @@ impl ClusterOracle {
         eprintln!("Verified reads: {}", self.verify_count);
         eprintln!("Failed ops: {}", self.failed_ops.len());
         eprintln!("Must-survive keys: {}", self.must_survive.len());
+        eprintln!("May-be-lost keys: {}", self.may_be_lost.len());
+        eprintln!("Recovery cycle: {}", self.recovery_cycle);
         eprintln!("Keys in state: {}", self.expected_state.len());
 
         if !self.failed_ops.is_empty() {
@@ -227,6 +244,23 @@ impl ClusterOracle {
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect()
+    }
+
+    /// Snapshot may-be-lost keys for post-recovery promotion
+    pub fn may_be_lost_snapshot(&self) -> Vec<(String, String)> {
+        self.may_be_lost
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect()
+    }
+
+    /// Promote a may-be-lost key to must-survive if the expected value is present
+    pub fn promote_may_be_lost(&mut self, key: &str, value: &str) {
+        if self.may_be_lost.get(key).map(String::as_str) != Some(value) {
+            return;
+        }
+        self.may_be_lost.remove(key);
+        self.must_survive.insert(key.to_string(), value.to_string());
     }
 
     /// Verify all keys in expected state exist on a node

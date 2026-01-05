@@ -27,6 +27,11 @@ mod comprehensive_tests {
     // =========================================================================
     // Configuration helpers
     // =========================================================================
+    //
+    // Env knobs:
+    // - CLUSTER_SEED_START / CLUSTER_SEED_COUNT
+    // - CLUSTER_OPS / CLUSTER_STRESS_OPS
+    // - CLUSTER_STRESS_SEED_COUNT / CLUSTER_WALRUS_SEED_COUNT
 
     fn seed_range() -> (u64, u64) {
         let start = std::env::var("CLUSTER_SEED_START")
@@ -54,6 +59,32 @@ mod comprehensive_tests {
             .unwrap_or(5000)
     }
 
+    fn enable_full_verification(params: &mut ClusterParams) {
+        params.verify_full = true;
+        params.verify_invariants = true;
+        params.invariant_interval = 25;
+        params.verify_logs = true;
+        params.verify_each_op = true;
+    }
+
+    fn enable_durability(params: &mut ClusterParams) {
+        params.verify_durability = true;
+    }
+
+    fn stress_seed_count() -> usize {
+        std::env::var("CLUSTER_STRESS_SEED_COUNT")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(5)
+    }
+
+    fn walrus_seed_count() -> usize {
+        std::env::var("CLUSTER_WALRUS_SEED_COUNT")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(8)
+    }
+
     /// Smaller ops count for tests with high overhead (membership, 7-node clusters)
     fn small_ops_count() -> usize {
         ops_count() / 4
@@ -65,7 +96,7 @@ mod comprehensive_tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn basic_correctness_3_nodes_no_faults() {
-        let params = ClusterParams::new(3, 100001, 0.0, FaultProfile::None);
+        let mut params = ClusterParams::new(3, 100001, 0.0, FaultProfile::None);
         let mut harness = ClusterHarness::new(params).await;
         let leader = harness.wait_for_leader().await;
         assert!(leader.is_some(), "leader election failed");
@@ -81,7 +112,7 @@ mod comprehensive_tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn basic_correctness_5_nodes_no_faults() {
-        let params = ClusterParams::new(5, 100002, 0.0, FaultProfile::None);
+        let mut params = ClusterParams::new(5, 100002, 0.0, FaultProfile::None);
         let mut harness = ClusterHarness::new(params).await;
         let leader = harness.wait_for_leader().await;
         assert!(leader.is_some(), "leader election failed");
@@ -97,7 +128,7 @@ mod comprehensive_tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn basic_correctness_7_nodes_no_faults() {
-        let params = ClusterParams::new(7, 100003, 0.0, FaultProfile::None);
+        let mut params = ClusterParams::new(7, 100003, 0.0, FaultProfile::None);
         let mut harness = ClusterHarness::new(params).await;
         let leader = harness.wait_for_leader().await;
         assert!(leader.is_some(), "leader election failed");
@@ -111,7 +142,7 @@ mod comprehensive_tests {
     async fn basic_correctness_seed_sweep_no_faults() {
         let (start, count) = seed_range();
         for seed in start..(start + count) {
-            let params = ClusterParams::new(3, seed, 0.0, FaultProfile::None);
+            let mut params = ClusterParams::new(3, seed, 0.0, FaultProfile::None);
             let mut harness = ClusterHarness::new(params).await;
             let leader = harness.wait_for_leader().await;
             assert!(leader.is_some(), "leader election failed for seed {}", seed);
@@ -130,7 +161,7 @@ mod comprehensive_tests {
         let (start, count) = seed_range();
         for seed in start..(start + count) {
             let error_rate = walrus_error_rate(seed, 0.05);
-            let params = ClusterParams::new(3, seed, error_rate, FaultProfile::IoErrorsLight);
+            let mut params = ClusterParams::new(3, seed, error_rate, FaultProfile::IoErrorsLight);
             let mut harness = ClusterHarness::new(params).await;
             let leader = harness.wait_for_leader().await;
             assert!(leader.is_some(), "leader election failed for seed {}", seed);
@@ -145,7 +176,7 @@ mod comprehensive_tests {
         let (start, count) = seed_range();
         for seed in start..(start + count) {
             let error_rate = walrus_error_rate(seed, 0.10);
-            let params = ClusterParams::new(3, seed, error_rate, FaultProfile::IoErrorsMedium);
+            let mut params = ClusterParams::new(3, seed, error_rate, FaultProfile::IoErrorsMedium);
             let mut harness = ClusterHarness::new(params).await;
             let leader = harness.wait_for_leader().await;
             assert!(leader.is_some(), "leader election failed for seed {}", seed);
@@ -176,7 +207,7 @@ mod comprehensive_tests {
         let (start, count) = seed_range();
         for seed in start..(start + count) {
             let error_rate = walrus_error_rate(seed, 0.15);
-            let params = ClusterParams::new(3, seed, error_rate, FaultProfile::IoErrorsHeavy);
+            let mut params = ClusterParams::new(3, seed, error_rate, FaultProfile::IoErrorsHeavy);
             let mut harness = ClusterHarness::new(params).await;
             let leader = harness.wait_for_leader().await;
             assert!(leader.is_some(), "leader election failed for seed {}", seed);
@@ -191,7 +222,7 @@ mod comprehensive_tests {
         let (start, count) = seed_range();
         for seed in start..(start + count.min(10)) {
             let error_rate = walrus_error_rate(seed, 0.20);
-            let params = ClusterParams::new(3, seed, error_rate, FaultProfile::IoErrorsHeavy);
+            let mut params = ClusterParams::new(3, seed, error_rate, FaultProfile::IoErrorsHeavy);
             let mut harness = ClusterHarness::new(params).await;
             let leader = harness.wait_for_leader().await;
             assert!(leader.is_some(), "leader election failed for seed {}", seed);
@@ -206,7 +237,7 @@ mod comprehensive_tests {
         let (start, count) = seed_range();
         for seed in start..(start + count.min(5)) {
             let error_rate = walrus_error_rate(seed, 0.25);
-            let params = ClusterParams::new(3, seed, error_rate, FaultProfile::IoErrorsHeavy);
+            let mut params = ClusterParams::new(3, seed, error_rate, FaultProfile::IoErrorsHeavy);
             let mut harness = ClusterHarness::new(params).await;
             let leader = harness.wait_for_leader().await;
             assert!(leader.is_some(), "leader election failed for seed {}", seed);
@@ -222,7 +253,7 @@ mod comprehensive_tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn network_faults_partition_churn() {
-        let params = ClusterParams::new(5, 200001, 0.0, FaultProfile::PartitionChurn);
+        let mut params = ClusterParams::new(5, 200001, 0.0, FaultProfile::PartitionChurn);
         let mut harness = ClusterHarness::new(params).await;
         let leader = harness.wait_for_leader().await;
         assert!(leader.is_some(), "leader election failed");
@@ -234,7 +265,7 @@ mod comprehensive_tests {
     // SplitBrain / leader isolation case (historically flaky under OpenRaft assertions)
     #[tokio::test(flavor = "current_thread")]
     async fn network_faults_leader_isolation() {
-        let params = ClusterParams::new(5, 200002, 0.0, FaultProfile::SplitBrain);
+        let mut params = ClusterParams::new(5, 200002, 0.0, FaultProfile::SplitBrain);
         let mut harness = ClusterHarness::new(params).await;
         let leader = harness.wait_for_leader().await;
         assert!(leader.is_some(), "leader election failed");
@@ -260,7 +291,7 @@ mod comprehensive_tests {
     // Rapid partition/heal cycles (historically flaky under OpenRaft assertions)
     #[tokio::test(flavor = "current_thread")]
     async fn network_faults_flapping_connectivity() {
-        let params = ClusterParams::new(5, 200003, 0.0, FaultProfile::FlappingConnectivity);
+        let mut params = ClusterParams::new(5, 200003, 0.0, FaultProfile::FlappingConnectivity);
         let mut harness = ClusterHarness::new(params).await;
         let leader = harness.wait_for_leader().await;
         assert!(leader.is_some(), "leader election failed");
@@ -273,7 +304,7 @@ mod comprehensive_tests {
     async fn network_faults_reorder_timeout_bandwidth() {
         let (start, count) = seed_range();
         for seed in start..(start + count) {
-            let params = ClusterParams::new(3, seed, 0.0, FaultProfile::ReorderTimeoutBandwidth);
+            let mut params = ClusterParams::new(3, seed, 0.0, FaultProfile::ReorderTimeoutBandwidth);
             let mut harness = ClusterHarness::new(params).await;
             let leader = harness.wait_for_leader().await;
             assert!(leader.is_some(), "leader election failed for seed {}", seed);
@@ -292,7 +323,7 @@ mod comprehensive_tests {
         let (start, count) = seed_range();
         for seed in start..(start + count) {
             let error_rate = walrus_error_rate(seed, 0.08);
-            let params = ClusterParams::new(5, seed, error_rate, FaultProfile::CombinedNetworkAndIo);
+            let mut params = ClusterParams::new(5, seed, error_rate, FaultProfile::CombinedNetworkAndIo);
             let mut harness = ClusterHarness::new(params).await;
             let leader = harness.wait_for_leader().await;
             assert!(leader.is_some(), "leader election failed for seed {}", seed);
@@ -349,7 +380,7 @@ mod comprehensive_tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn crash_recovery_leader() {
-        let params = ClusterParams::new(5, 300002, 0.05, FaultProfile::None);
+        let mut params = ClusterParams::new(5, 300002, 0.05, FaultProfile::None);
         let mut harness = ClusterHarness::new(params).await;
         let leader = harness.wait_for_leader().await;
         assert!(leader.is_some(), "leader election failed");
@@ -376,7 +407,7 @@ mod comprehensive_tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn crash_recovery_cycles_3() {
-        let params = ClusterParams::new(5, 300003, 0.05, FaultProfile::None);
+        let mut params = ClusterParams::new(5, 300003, 0.05, FaultProfile::None);
         let mut harness = ClusterHarness::new(params).await;
 
         for cycle in 0..3 {
@@ -395,7 +426,7 @@ mod comprehensive_tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn crash_recovery_cycles_5() {
-        let params = ClusterParams::new(5, 300004, 0.0, FaultProfile::None);
+        let mut params = ClusterParams::new(5, 300004, 0.0, FaultProfile::None);
         let mut harness = ClusterHarness::new(params).await;
 
         for cycle in 0..5 {
@@ -413,7 +444,7 @@ mod comprehensive_tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn crash_recovery_cycles_8() {
-        let params = ClusterParams::new(5, 300005, 0.05, FaultProfile::None);
+        let mut params = ClusterParams::new(5, 300005, 0.05, FaultProfile::None);
         let mut harness = ClusterHarness::new(params).await;
 
         for cycle in 0..8 {
@@ -432,7 +463,7 @@ mod comprehensive_tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn crash_during_recovery_single_node() {
-        let params = ClusterParams::new(3, 300006, 0.0, FaultProfile::None);
+        let mut params = ClusterParams::new(3, 300006, 0.0, FaultProfile::None);
         let mut harness = ClusterHarness::new(params).await;
         let leader = harness.wait_for_leader().await;
         assert!(leader.is_some(), "leader election failed");
@@ -466,7 +497,7 @@ mod comprehensive_tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn double_crash_recovery_cycles() {
-        let params = ClusterParams::new(3, 300007, 0.0, FaultProfile::None);
+        let mut params = ClusterParams::new(3, 300007, 0.0, FaultProfile::None);
         let mut harness = ClusterHarness::new(params).await;
         let leader = harness.wait_for_leader().await;
         assert!(leader.is_some(), "leader election failed");
@@ -500,8 +531,8 @@ mod comprehensive_tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn durability_must_survive_after_crash() {
-        std::env::set_var("CLUSTER_VERIFY_DURABILITY", "1");
-        let params = ClusterParams::new(3, 300008, 0.0, FaultProfile::None);
+        let mut params = ClusterParams::new(3, 300008, 0.0, FaultProfile::None);
+        enable_durability(&mut params);
         let mut harness = ClusterHarness::new(params).await;
         let leader = harness.wait_for_leader().await;
         assert!(leader.is_some(), "leader election failed");
@@ -514,17 +545,35 @@ mod comprehensive_tests {
 
         harness.verify_must_survive().await;
         harness.cleanup();
-        std::env::remove_var("CLUSTER_VERIFY_DURABILITY");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn durability_partial_writes_crash_cycles_smoke() {
+        let seed = 300009;
+        let error_rate = walrus_error_rate(seed, 0.08);
+        let mut params = ClusterParams::new(3, seed, error_rate, FaultProfile::PartialWrites);
+        enable_durability(&mut params);
+        params.enable_partial_writes = true;
+        let mut harness = ClusterHarness::new(params).await;
+        let leader = harness.wait_for_leader().await;
+        assert!(leader.is_some(), "leader election failed");
+
+        for _ in 0..3 {
+            harness.run_oracle_workload(small_ops_count() / 4).await;
+            harness.crash_and_recover_node(1, CrashReason::Scheduled).await;
+            harness.verify_must_survive().await;
+        }
+
+        harness.run_oracle_workload(small_ops_count() / 4).await;
+        harness.verify_must_survive().await;
+        harness.cleanup();
     }
 
     #[tokio::test(flavor = "current_thread")]
     async fn full_verification_seed_smoke() {
-        std::env::set_var("CLUSTER_VERIFY_FULL", "1");
-        std::env::set_var("CLUSTER_VERIFY_INVARIANTS", "1");
-        std::env::set_var("CLUSTER_INVARIANT_INTERVAL", "25");
-        std::env::set_var("CLUSTER_VERIFY_LOGS", "1");
         let seed = 500010;
-        let params = ClusterParams::new(3, seed, 0.0, FaultProfile::None);
+        let mut params = ClusterParams::new(3, seed, 0.0, FaultProfile::None);
+        enable_full_verification(&mut params);
         let mut harness = ClusterHarness::new(params).await;
         let leader = harness.wait_for_leader().await;
         assert!(leader.is_some(), "leader election failed");
@@ -532,21 +581,14 @@ mod comprehensive_tests {
         harness.run_oracle_workload(small_ops_count() / 2).await;
 
         harness.cleanup();
-        std::env::remove_var("CLUSTER_VERIFY_FULL");
-        std::env::remove_var("CLUSTER_VERIFY_INVARIANTS");
-        std::env::remove_var("CLUSTER_INVARIANT_INTERVAL");
-        std::env::remove_var("CLUSTER_VERIFY_LOGS");
     }
 
     #[tokio::test(flavor = "current_thread")]
     async fn full_verification_io_faults_smoke() {
-        std::env::set_var("CLUSTER_VERIFY_FULL", "1");
-        std::env::set_var("CLUSTER_VERIFY_INVARIANTS", "1");
-        std::env::set_var("CLUSTER_INVARIANT_INTERVAL", "25");
-        std::env::set_var("CLUSTER_VERIFY_LOGS", "1");
         let seed = 500011;
         let error_rate = walrus_error_rate(seed, 0.05);
-        let params = ClusterParams::new(3, seed, error_rate, FaultProfile::IoErrorsLight);
+        let mut params = ClusterParams::new(3, seed, error_rate, FaultProfile::IoErrorsLight);
+        enable_full_verification(&mut params);
         let mut harness = ClusterHarness::new(params).await;
         let leader = harness.wait_for_leader().await;
         assert!(leader.is_some(), "leader election failed");
@@ -554,21 +596,14 @@ mod comprehensive_tests {
         harness.run_oracle_workload(small_ops_count() / 3).await;
 
         harness.cleanup();
-        std::env::remove_var("CLUSTER_VERIFY_FULL");
-        std::env::remove_var("CLUSTER_VERIFY_INVARIANTS");
-        std::env::remove_var("CLUSTER_INVARIANT_INTERVAL");
-        std::env::remove_var("CLUSTER_VERIFY_LOGS");
     }
 
     #[tokio::test(flavor = "current_thread")]
     async fn full_verification_partial_writes_smoke() {
-        std::env::set_var("CLUSTER_VERIFY_FULL", "1");
-        std::env::set_var("CLUSTER_VERIFY_INVARIANTS", "1");
-        std::env::set_var("CLUSTER_INVARIANT_INTERVAL", "25");
-        std::env::set_var("CLUSTER_VERIFY_LOGS", "1");
         let seed = 500012;
         let error_rate = walrus_error_rate(seed, 0.05);
         let mut params = ClusterParams::new(3, seed, error_rate, FaultProfile::PartialWrites);
+        enable_full_verification(&mut params);
         params.enable_partial_writes = true;
         let mut harness = ClusterHarness::new(params).await;
         let leader = harness.wait_for_leader().await;
@@ -577,20 +612,13 @@ mod comprehensive_tests {
         harness.run_oracle_workload(small_ops_count() / 3).await;
 
         harness.cleanup();
-        std::env::remove_var("CLUSTER_VERIFY_FULL");
-        std::env::remove_var("CLUSTER_VERIFY_INVARIANTS");
-        std::env::remove_var("CLUSTER_INVARIANT_INTERVAL");
-        std::env::remove_var("CLUSTER_VERIFY_LOGS");
     }
 
     #[tokio::test(flavor = "current_thread")]
     async fn full_verification_crash_recovery_smoke() {
-        std::env::set_var("CLUSTER_VERIFY_FULL", "1");
-        std::env::set_var("CLUSTER_VERIFY_INVARIANTS", "1");
-        std::env::set_var("CLUSTER_INVARIANT_INTERVAL", "25");
-        std::env::set_var("CLUSTER_VERIFY_LOGS", "1");
         let seed = 500013;
-        let params = ClusterParams::new(3, seed, 0.0, FaultProfile::None);
+        let mut params = ClusterParams::new(3, seed, 0.0, FaultProfile::None);
+        enable_full_verification(&mut params);
         let mut harness = ClusterHarness::new(params).await;
         let leader = harness.wait_for_leader().await;
         assert!(leader.is_some(), "leader election failed");
@@ -600,64 +628,43 @@ mod comprehensive_tests {
         harness.run_oracle_workload(small_ops_count() / 3).await;
 
         harness.cleanup();
-        std::env::remove_var("CLUSTER_VERIFY_FULL");
-        std::env::remove_var("CLUSTER_VERIFY_INVARIANTS");
-        std::env::remove_var("CLUSTER_INVARIANT_INTERVAL");
-        std::env::remove_var("CLUSTER_VERIFY_LOGS");
     }
 
     #[tokio::test(flavor = "current_thread")]
     async fn full_verification_seed_sweep_smoke() {
-        std::env::set_var("CLUSTER_VERIFY_FULL", "1");
-        std::env::set_var("CLUSTER_VERIFY_INVARIANTS", "1");
-        std::env::set_var("CLUSTER_INVARIANT_INTERVAL", "25");
-        std::env::set_var("CLUSTER_VERIFY_LOGS", "1");
         let seeds = walrus_seed_sequence(0x9e3779b97f4a7c15, 20);
         for seed in seeds {
-            let params = ClusterParams::new(3, seed, 0.0, FaultProfile::None);
+            let mut params = ClusterParams::new(3, seed, 0.0, FaultProfile::None);
+            enable_full_verification(&mut params);
             let mut harness = ClusterHarness::new(params).await;
             let leader = harness.wait_for_leader().await;
             assert!(leader.is_some(), "leader election failed for seed {}", seed);
             harness.run_oracle_workload(small_ops_count() / 3).await;
             harness.cleanup();
         }
-        std::env::remove_var("CLUSTER_VERIFY_FULL");
-        std::env::remove_var("CLUSTER_VERIFY_INVARIANTS");
-        std::env::remove_var("CLUSTER_INVARIANT_INTERVAL");
-        std::env::remove_var("CLUSTER_VERIFY_LOGS");
     }
 
     #[tokio::test(flavor = "current_thread")]
     async fn full_verification_fault_seed_sweep_smoke() {
-        std::env::set_var("CLUSTER_VERIFY_FULL", "1");
-        std::env::set_var("CLUSTER_VERIFY_INVARIANTS", "1");
-        std::env::set_var("CLUSTER_INVARIANT_INTERVAL", "25");
-        std::env::set_var("CLUSTER_VERIFY_LOGS", "1");
         let seeds = walrus_seed_sequence(0xd1b54a32d192ed03, 20);
         for seed in seeds {
             let error_rate = walrus_error_rate(seed, 0.05);
-            let params = ClusterParams::new(3, seed, error_rate, FaultProfile::IoErrorsLight);
+            let mut params = ClusterParams::new(3, seed, error_rate, FaultProfile::IoErrorsLight);
+            enable_full_verification(&mut params);
             let mut harness = ClusterHarness::new(params).await;
             let leader = harness.wait_for_leader().await;
             assert!(leader.is_some(), "leader election failed for seed {}", seed);
             harness.run_oracle_workload(small_ops_count() / 3).await;
             harness.cleanup();
         }
-        std::env::remove_var("CLUSTER_VERIFY_FULL");
-        std::env::remove_var("CLUSTER_VERIFY_INVARIANTS");
-        std::env::remove_var("CLUSTER_INVARIANT_INTERVAL");
-        std::env::remove_var("CLUSTER_VERIFY_LOGS");
     }
 
     #[tokio::test(flavor = "current_thread")]
     async fn full_verification_combined_faults_smoke() {
-        std::env::set_var("CLUSTER_VERIFY_FULL", "1");
-        std::env::set_var("CLUSTER_VERIFY_INVARIANTS", "1");
-        std::env::set_var("CLUSTER_INVARIANT_INTERVAL", "25");
-        std::env::set_var("CLUSTER_VERIFY_LOGS", "1");
         let seed = 500014;
         let error_rate = walrus_error_rate(seed, 0.05);
         let mut params = ClusterParams::new(3, seed, error_rate, FaultProfile::CombinedNetworkAndIo);
+        enable_full_verification(&mut params);
         params.enable_partial_writes = true;
         params.require_all_nodes = false;
         let mut harness = ClusterHarness::new(params).await;
@@ -667,19 +674,12 @@ mod comprehensive_tests {
         harness.run_oracle_workload(small_ops_count() / 3).await;
 
         harness.cleanup();
-        std::env::remove_var("CLUSTER_VERIFY_FULL");
-        std::env::remove_var("CLUSTER_VERIFY_INVARIANTS");
-        std::env::remove_var("CLUSTER_INVARIANT_INTERVAL");
-        std::env::remove_var("CLUSTER_VERIFY_LOGS");
     }
 
     #[tokio::test(flavor = "current_thread")]
     async fn full_verification_membership_smoke() {
-        std::env::set_var("CLUSTER_VERIFY_FULL", "1");
-        std::env::set_var("CLUSTER_VERIFY_INVARIANTS", "1");
-        std::env::set_var("CLUSTER_INVARIANT_INTERVAL", "25");
-        std::env::set_var("CLUSTER_VERIFY_LOGS", "1");
-        let params = ClusterParams::new(3, 500015, 0.0, FaultProfile::None);
+        let mut params = ClusterParams::new(3, 500015, 0.0, FaultProfile::None);
+        enable_full_verification(&mut params);
         let mut harness = ClusterHarness::new(params).await;
         let leader = harness.wait_for_leader().await;
         assert!(leader.is_some(), "leader election failed");
@@ -690,21 +690,14 @@ mod comprehensive_tests {
         harness.run_oracle_workload(small_ops_count() / 3).await;
 
         harness.cleanup();
-        std::env::remove_var("CLUSTER_VERIFY_FULL");
-        std::env::remove_var("CLUSTER_VERIFY_INVARIANTS");
-        std::env::remove_var("CLUSTER_INVARIANT_INTERVAL");
-        std::env::remove_var("CLUSTER_VERIFY_LOGS");
     }
 
     #[tokio::test(flavor = "current_thread")]
     async fn full_verification_membership_io_faults_smoke() {
-        std::env::set_var("CLUSTER_VERIFY_FULL", "1");
-        std::env::set_var("CLUSTER_VERIFY_INVARIANTS", "1");
-        std::env::set_var("CLUSTER_INVARIANT_INTERVAL", "25");
-        std::env::set_var("CLUSTER_VERIFY_LOGS", "1");
         let seed = 500019;
         let error_rate = walrus_error_rate(seed, 0.05);
-        let params = ClusterParams::new(3, seed, error_rate, FaultProfile::IoErrorsLight);
+        let mut params = ClusterParams::new(3, seed, error_rate, FaultProfile::IoErrorsLight);
+        enable_full_verification(&mut params);
         let mut harness = ClusterHarness::new(params).await;
         let leader = harness.wait_for_leader().await;
         assert!(leader.is_some(), "leader election failed");
@@ -715,20 +708,13 @@ mod comprehensive_tests {
         harness.run_oracle_workload(small_ops_count() / 3).await;
 
         harness.cleanup();
-        std::env::remove_var("CLUSTER_VERIFY_FULL");
-        std::env::remove_var("CLUSTER_VERIFY_INVARIANTS");
-        std::env::remove_var("CLUSTER_INVARIANT_INTERVAL");
-        std::env::remove_var("CLUSTER_VERIFY_LOGS");
     }
 
     #[tokio::test(flavor = "current_thread")]
     async fn full_verification_network_faults_smoke() {
-        std::env::set_var("CLUSTER_VERIFY_FULL", "1");
-        std::env::set_var("CLUSTER_VERIFY_INVARIANTS", "1");
-        std::env::set_var("CLUSTER_INVARIANT_INTERVAL", "25");
-        std::env::set_var("CLUSTER_VERIFY_LOGS", "1");
         let seed = 500016;
-        let params = ClusterParams::new(3, seed, 0.0, FaultProfile::ReorderTimeoutBandwidth);
+        let mut params = ClusterParams::new(3, seed, 0.0, FaultProfile::ReorderTimeoutBandwidth);
+        enable_full_verification(&mut params);
         let mut harness = ClusterHarness::new(params).await;
         let leader = harness.wait_for_leader().await;
         assert!(leader.is_some(), "leader election failed");
@@ -736,21 +722,14 @@ mod comprehensive_tests {
         harness.run_oracle_workload(small_ops_count() / 3).await;
 
         harness.cleanup();
-        std::env::remove_var("CLUSTER_VERIFY_FULL");
-        std::env::remove_var("CLUSTER_VERIFY_INVARIANTS");
-        std::env::remove_var("CLUSTER_INVARIANT_INTERVAL");
-        std::env::remove_var("CLUSTER_VERIFY_LOGS");
     }
 
     #[tokio::test(flavor = "current_thread")]
     async fn full_verification_crash_recovery_io_faults_smoke() {
-        std::env::set_var("CLUSTER_VERIFY_FULL", "1");
-        std::env::set_var("CLUSTER_VERIFY_INVARIANTS", "1");
-        std::env::set_var("CLUSTER_INVARIANT_INTERVAL", "25");
-        std::env::set_var("CLUSTER_VERIFY_LOGS", "1");
         let seed = 500020;
         let error_rate = walrus_error_rate(seed, 0.05);
-        let params = ClusterParams::new(3, seed, error_rate, FaultProfile::IoErrorsLight);
+        let mut params = ClusterParams::new(3, seed, error_rate, FaultProfile::IoErrorsLight);
+        enable_full_verification(&mut params);
         let mut harness = ClusterHarness::new(params).await;
         let leader = harness.wait_for_leader().await;
         assert!(leader.is_some(), "leader election failed");
@@ -760,19 +739,12 @@ mod comprehensive_tests {
         harness.run_oracle_workload(small_ops_count() / 3).await;
 
         harness.cleanup();
-        std::env::remove_var("CLUSTER_VERIFY_FULL");
-        std::env::remove_var("CLUSTER_VERIFY_INVARIANTS");
-        std::env::remove_var("CLUSTER_INVARIANT_INTERVAL");
-        std::env::remove_var("CLUSTER_VERIFY_LOGS");
     }
 
     #[tokio::test(flavor = "current_thread")]
     async fn full_verification_snapshot_smoke() {
-        std::env::set_var("CLUSTER_VERIFY_FULL", "1");
-        std::env::set_var("CLUSTER_VERIFY_INVARIANTS", "1");
-        std::env::set_var("CLUSTER_INVARIANT_INTERVAL", "25");
-        std::env::set_var("CLUSTER_VERIFY_LOGS", "1");
         let mut params = ClusterParams::new(3, 500017, 0.0, FaultProfile::None);
+        enable_full_verification(&mut params);
         params.snapshot_lag_threshold = 20;
         let mut harness = ClusterHarness::new(params).await;
         let leader = harness.wait_for_leader().await;
@@ -781,19 +753,12 @@ mod comprehensive_tests {
         harness.run_oracle_workload(small_ops_count()).await;
 
         harness.cleanup();
-        std::env::remove_var("CLUSTER_VERIFY_FULL");
-        std::env::remove_var("CLUSTER_VERIFY_INVARIANTS");
-        std::env::remove_var("CLUSTER_INVARIANT_INTERVAL");
-        std::env::remove_var("CLUSTER_VERIFY_LOGS");
     }
 
     #[tokio::test(flavor = "current_thread")]
     async fn full_verification_snapshot_partition_smoke() {
-        std::env::set_var("CLUSTER_VERIFY_FULL", "1");
-        std::env::set_var("CLUSTER_VERIFY_INVARIANTS", "1");
-        std::env::set_var("CLUSTER_INVARIANT_INTERVAL", "25");
-        std::env::set_var("CLUSTER_VERIFY_LOGS", "1");
         let mut params = ClusterParams::new(5, 500018, 0.0, FaultProfile::PartitionChurn);
+        enable_full_verification(&mut params);
         params.snapshot_lag_threshold = 20;
         let mut harness = ClusterHarness::new(params).await;
         let leader = harness.wait_for_leader().await;
@@ -802,10 +767,6 @@ mod comprehensive_tests {
         harness.run_oracle_workload(small_ops_count() / 2).await;
 
         harness.cleanup();
-        std::env::remove_var("CLUSTER_VERIFY_FULL");
-        std::env::remove_var("CLUSTER_VERIFY_INVARIANTS");
-        std::env::remove_var("CLUSTER_INVARIANT_INTERVAL");
-        std::env::remove_var("CLUSTER_VERIFY_LOGS");
     }
 
     // =========================================================================
@@ -814,7 +775,7 @@ mod comprehensive_tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn stress_crash_multiple_nodes() {
-        let params = ClusterParams::new(5, 400001, 0.05, FaultProfile::None);
+        let mut params = ClusterParams::new(5, 400001, 0.05, FaultProfile::None);
         let mut harness = ClusterHarness::new(params).await;
         let leader = harness.wait_for_leader().await;
         assert!(leader.is_some(), "leader election failed");
@@ -839,7 +800,7 @@ mod comprehensive_tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn stress_crash_majority_and_recover() {
-        let params = ClusterParams::new(5, 400002, 0.0, FaultProfile::None);
+        let mut params = ClusterParams::new(5, 400002, 0.0, FaultProfile::None);
         let mut harness = ClusterHarness::new(params).await;
         let leader = harness.wait_for_leader().await;
         assert!(leader.is_some(), "leader election failed");
@@ -867,7 +828,7 @@ mod comprehensive_tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn stress_crash_recovery_cycles_10() {
-        let params = ClusterParams::new(5, 400003, 0.05, FaultProfile::None);
+        let mut params = ClusterParams::new(5, 400003, 0.05, FaultProfile::None);
         let mut harness = ClusterHarness::new(params).await;
 
         for cycle in 0..10 {
@@ -890,7 +851,7 @@ mod comprehensive_tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn membership_add_learner() {
-        let params = ClusterParams::new(3, 500001, 0.0, FaultProfile::None);
+        let mut params = ClusterParams::new(3, 500001, 0.0, FaultProfile::None);
         let mut harness = ClusterHarness::new(params).await;
         let leader = harness.wait_for_leader().await;
         assert!(leader.is_some(), "leader election failed");
@@ -909,7 +870,7 @@ mod comprehensive_tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn membership_promote_learner() {
-        let params = ClusterParams::new(3, 500002, 0.0, FaultProfile::None);
+        let mut params = ClusterParams::new(3, 500002, 0.0, FaultProfile::None);
         let mut harness = ClusterHarness::new(params).await;
         let leader = harness.wait_for_leader().await;
         assert!(leader.is_some(), "leader election failed");
@@ -949,7 +910,7 @@ mod comprehensive_tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn membership_scale_3_to_5() {
-        let params = ClusterParams::new(3, 500004, 0.0, FaultProfile::None);
+        let mut params = ClusterParams::new(3, 500004, 0.0, FaultProfile::None);
         let mut harness = ClusterHarness::new(params).await;
         let leader = harness.wait_for_leader().await;
         assert!(leader.is_some(), "leader election failed");
@@ -1025,10 +986,10 @@ mod comprehensive_tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn stress_cluster_seed_sweep() {
-        let seeds = walrus_seed_sequence(0x9e3779b97f4a7c15, 5);
+        let seeds = walrus_seed_sequence(0x9e3779b97f4a7c15, stress_seed_count());
         for seed in seeds {
             let error_rate = walrus_error_rate(seed, 0.05);
-            let params = ClusterParams::new(5, seed, error_rate, FaultProfile::ReorderTimeoutBandwidth);
+            let mut params = ClusterParams::new(5, seed, error_rate, FaultProfile::ReorderTimeoutBandwidth);
             let mut harness = ClusterHarness::new(params).await;
             let leader = harness.wait_for_leader().await;
             assert!(leader.is_some(), "leader election failed for seed {}", seed);
@@ -1044,10 +1005,10 @@ mod comprehensive_tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn stress_cluster_io_errors_high() {
-        let seeds = walrus_seed_sequence(0xd1b54a32d192ed03, 5);
+        let seeds = walrus_seed_sequence(0xd1b54a32d192ed03, stress_seed_count());
         for seed in seeds {
             let error_rate = walrus_error_rate(seed, 0.15);
-            let params = ClusterParams::new(5, seed, error_rate, FaultProfile::IoErrorsHeavy);
+            let mut params = ClusterParams::new(5, seed, error_rate, FaultProfile::IoErrorsHeavy);
             let mut harness = ClusterHarness::new(params).await;
             let leader = harness.wait_for_leader().await;
             assert!(leader.is_some(), "leader election failed for seed {}", seed);
@@ -1093,9 +1054,9 @@ mod comprehensive_tests {
     /// 8 random seeds with 1000+ ops each, no faults - matches Walrus pattern
     #[tokio::test(flavor = "current_thread")]
     async fn deterministic_random_seeds_8_no_faults() {
-        let seeds = walrus_seed_sequence(0x9e3779b97f4a7c15, 8);
+        let seeds = walrus_seed_sequence(0x9e3779b97f4a7c15, walrus_seed_count());
         for seed in seeds {
-            let params = ClusterParams::new(3, seed, 0.0, FaultProfile::None);
+            let mut params = ClusterParams::new(3, seed, 0.0, FaultProfile::None);
             let mut harness = ClusterHarness::new(params).await;
             let leader = harness.wait_for_leader().await;
             assert!(leader.is_some(), "leader election failed for seed {}", seed);
@@ -1113,10 +1074,10 @@ mod comprehensive_tests {
     /// 8 random seeds with I/O errors - matches Walrus fault injection pattern
     #[tokio::test(flavor = "current_thread")]
     async fn deterministic_random_seeds_8_io_errors() {
-        let seeds = walrus_seed_sequence(0xd1b54a32d192ed03, 8);
+        let seeds = walrus_seed_sequence(0xd1b54a32d192ed03, walrus_seed_count());
         for seed in seeds {
             let error_rate = walrus_error_rate(seed, 0.05);
-            let params = ClusterParams::new(3, seed, error_rate, FaultProfile::IoErrorsLight);
+            let mut params = ClusterParams::new(3, seed, error_rate, FaultProfile::IoErrorsLight);
             let mut harness = ClusterHarness::new(params).await;
             let leader = harness.wait_for_leader().await;
             assert!(leader.is_some(), "leader election failed for seed {}", seed);
@@ -1133,7 +1094,7 @@ mod comprehensive_tests {
     /// 8 random seeds with partial writes - matches Walrus partial write pattern
     #[tokio::test(flavor = "current_thread")]
     async fn deterministic_random_seeds_8_partial_writes() {
-        let seeds = walrus_seed_sequence(0x517cc1b727220a95, 8);
+        let seeds = walrus_seed_sequence(0x517cc1b727220a95, walrus_seed_count());
         for seed in seeds {
             let error_rate = walrus_error_rate(seed, 0.05);
             let mut params = ClusterParams::new(3, seed, error_rate, FaultProfile::PartialWrites);
@@ -1154,7 +1115,7 @@ mod comprehensive_tests {
     /// Long-running no-faults stress test - matches Walrus stress_ tests
     #[tokio::test(flavor = "current_thread")]
     async fn stress_no_faults_long() {
-        let params = ClusterParams::new(5, 0x1234567890abcdef, 0.0, FaultProfile::None);
+        let mut params = ClusterParams::new(5, 0x1234567890abcdef, 0.0, FaultProfile::None);
         let mut harness = ClusterHarness::new(params).await;
         let leader = harness.wait_for_leader().await;
         assert!(leader.is_some(), "leader election failed");
@@ -1174,7 +1135,7 @@ mod comprehensive_tests {
     async fn stress_io_faults_long() {
         let seed = 0xfedcba0987654321;
         let error_rate = walrus_error_rate(seed, 0.07);
-        let params = ClusterParams::new(5, seed, error_rate, FaultProfile::IoErrorsMedium);
+        let mut params = ClusterParams::new(5, seed, error_rate, FaultProfile::IoErrorsMedium);
         let mut harness = ClusterHarness::new(params).await;
         let leader = harness.wait_for_leader().await;
         assert!(leader.is_some(), "leader election failed");

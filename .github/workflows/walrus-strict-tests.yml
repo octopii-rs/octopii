@@ -40,7 +40,7 @@ jobs:
           cargo test --features simulation,openraft --lib strictly_at_once_wal_log_store_recovery -- --test-threads=1
       - name: Run StrictlyAtOnce cluster simulation tests
         run: |
-          cargo test --features simulation,openraft --test cluster_simulation -- --test-threads=1
-          cargo test --features simulation,openraft --test cluster_simulation_stress stress_cluster_fault_sweep -- --test-threads=1
+          cargo test --features simulation,openraft --test cluster_simulation -- --test-threads=5
+          cargo test --features simulation,openraft --test cluster_simulation_stress stress_cluster_fault_sweep -- --test-threads=5
       - if: always()
         run: rm -rf /tmp/walrus_strict_* /tmp/walrus_sim_* /tmp/walrus_raft_storage_* /tmp/walrus_snapshot_* /tmp/walrus_openraft_* /tmp/walrus_durability_* /tmp/walrus_crash_* /tmp/walrus_double_* /tmp/walrus_peer_addr_* /tmp/walrus_sm_* /tmp/walrus_log_store_* /tmp/walrus_two_phase_* /tmp/walrus_compaction_* /tmp/walrus_raft_metadata_* /tmp/walrus_purge_* /tmp/octopii_sim_cluster_* || true

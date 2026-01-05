@@ -15,6 +15,7 @@ use std::hash::{Hash, Hasher};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::task::yield_now;
 use tokio::time::Duration;
 
@@ -57,10 +58,40 @@ pub struct ClusterParams {
     pub enable_partial_writes: bool,
     pub snapshot_lag_threshold: u64,
     pub require_all_nodes: bool,
+    pub verify_invariants: bool,
+    pub invariant_interval: u64,
+    pub verify_full: bool,
+    pub verify_each_op: bool,
+    pub verify_durability: bool,
+    pub verify_logs: bool,
 }
 
 impl ClusterParams {
     pub fn new(size: usize, seed: u64, io_error_rate: f64, profile: FaultProfile) -> Self {
+        let verify_invariants = std::env::var("CLUSTER_VERIFY_INVARIANTS")
+            .ok()
+            .as_deref()
+            == Some("1");
+        let invariant_interval = std::env::var("CLUSTER_INVARIANT_INTERVAL")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(50);
+        let verify_full = std::env::var("CLUSTER_VERIFY_FULL")
+            .ok()
+            .as_deref()
+            == Some("1");
+        let verify_each_op = std::env::var("CLUSTER_VERIFY_EACH_OP")
+            .ok()
+            .as_deref()
+            == Some("1");
+        let verify_durability = std::env::var("CLUSTER_VERIFY_DURABILITY")
+            .ok()
+            .as_deref()
+            == Some("1");
+        let verify_logs = std::env::var("CLUSTER_VERIFY_LOGS")
+            .ok()
+            .as_deref()
+            == Some("1");
         Self {
             size,
             seed,
@@ -69,6 +100,12 @@ impl ClusterParams {
             enable_partial_writes: false,
             snapshot_lag_threshold: 500,
             require_all_nodes: true,
+            verify_invariants,
+            invariant_interval,
+            verify_full,
+            verify_each_op,
+            verify_durability,
+            verify_logs,
         }
     }
 }
@@ -96,7 +133,11 @@ pub struct ClusterHarness {
     invariant_interval: u64,
     full_verify_enabled: bool,
     durability_enabled: bool,
+    log_verify_enabled: bool,
+    per_op_verify_enabled: bool,
 }
+
+static NEXT_CLUSTER_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone, Copy)]
 pub enum ValidationMode {
@@ -108,41 +149,6 @@ pub enum ValidationMode {
 impl ClusterHarness {
     fn debug_enabled() -> bool {
         std::env::var("CLUSTER_DEBUG").ok().as_deref() == Some("1")
-    }
-
-    fn invariants_enabled() -> bool {
-        std::env::var("CLUSTER_VERIFY_INVARIANTS")
-            .ok()
-            .as_deref()
-            == Some("1")
-    }
-
-    fn invariant_interval() -> u64 {
-        std::env::var("CLUSTER_INVARIANT_INTERVAL")
-            .ok()
-            .and_then(|v| v.parse::<u64>().ok())
-            .unwrap_or(50)
-    }
-
-    fn full_verify_enabled() -> bool {
-        std::env::var("CLUSTER_VERIFY_FULL")
-            .ok()
-            .as_deref()
-            == Some("1")
-    }
-
-    fn durability_enabled() -> bool {
-        std::env::var("CLUSTER_VERIFY_DURABILITY")
-            .ok()
-            .as_deref()
-            == Some("1")
-    }
-
-    fn log_verify_enabled() -> bool {
-        std::env::var("CLUSTER_VERIFY_LOGS")
-            .ok()
-            .as_deref()
-            == Some("1")
     }
 
     fn debug_dump_metrics(&self, label: &str) {
@@ -173,9 +179,10 @@ impl ClusterHarness {
         }
     }
     pub async fn new(params: ClusterParams) -> Self {
+        let run_id = NEXT_CLUSTER_ID.fetch_add(1, Ordering::Relaxed);
         let base = std::env::temp_dir().join(format!(
-            "octopii_sim_cluster_{}_n{}",
-            params.seed, params.size
+            "octopii_sim_cluster_{}_n{}_{}",
+            params.seed, params.size, run_id
         ));
         let _ = std::fs::remove_dir_all(&base);
 
@@ -260,10 +267,12 @@ impl ClusterHarness {
             enable_partial_writes: params.enable_partial_writes,
             next_node_id: (params.size + 1) as u64,
             invariants: InvariantChecker::new(),
-            invariants_enabled: Self::invariants_enabled(),
-            invariant_interval: Self::invariant_interval(),
-            full_verify_enabled: Self::full_verify_enabled(),
-            durability_enabled: Self::durability_enabled(),
+            invariants_enabled: params.verify_invariants,
+            invariant_interval: params.invariant_interval,
+            full_verify_enabled: params.verify_full,
+            durability_enabled: params.verify_durability,
+            log_verify_enabled: params.verify_logs,
+            per_op_verify_enabled: params.verify_each_op,
         }
     }
 
@@ -736,10 +745,16 @@ impl ClusterHarness {
     /// Propose a SET command and track in oracle
     pub async fn propose_set(&mut self, key: &str, value: &str) -> octopii::Result<()> {
         let cmd = format!("SET {key} {value}");
+        let partial_before = sim::get_partial_write_count();
         match self.propose_with_leader(cmd.into_bytes()).await {
             Ok(()) => {
-                if self.durability_enabled && !self.enable_partial_writes {
-                    self.oracle.record_must_survive(key, value);
+                let partial_after = sim::get_partial_write_count();
+                if self.durability_enabled {
+                    if partial_before == partial_after {
+                        self.oracle.record_must_survive(key, value);
+                    } else {
+                        self.oracle.record_may_be_lost(key, value);
+                    }
                 } else {
                     self.oracle.record_commit(key, value);
                 }
@@ -781,6 +796,12 @@ impl ClusterHarness {
             let key = format!("key{i}");
             let value = format!("val{i}");
             self.propose_set(&key, &value).await.expect("propose");
+            if self.per_op_verify_enabled {
+                let query = format!("GET {key}");
+                self.wait_for_leader_value(query.as_bytes(), value.as_bytes())
+                    .await;
+                self.query_and_verify(&key).await.expect("query");
+            }
         }
 
         // Verify all values
@@ -827,6 +848,21 @@ impl ClusterHarness {
                     "must-survive verification failed for key '{}': only {} nodes matched (required {})",
                     key, match_count, required
                 );
+            }
+        }
+
+        if let Some(leader_id) = self.wait_for_leader().await {
+            if let Some(leader) = self.nodes.iter().find(|n| n.id() == leader_id) {
+                for (key, value) in self.oracle.may_be_lost_snapshot() {
+                    let cmd = format!("GET {key}");
+                    if let Ok(bytes) = leader.query(cmd.as_bytes()).await {
+                        if let Ok(actual) = String::from_utf8(bytes.to_vec()) {
+                            if actual == value {
+                                self.oracle.promote_may_be_lost(&key, &value);
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -958,7 +994,7 @@ impl ClusterHarness {
     }
 
     async fn check_log_consistency(&mut self) {
-        if !Self::log_verify_enabled() {
+        if !self.log_verify_enabled {
             return;
         }
 

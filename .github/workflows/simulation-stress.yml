@@ -20,6 +20,6 @@ jobs:
         env:
           CLUSTER_SEED_START: "0"
           CLUSTER_SEED_COUNT: "20"
-        run: cargo test --features simulation,openraft --test cluster_simulation_stress --no-fail-fast stress_cluster_ -- --test-threads=1
+        run: cargo test --features simulation,openraft --test cluster_simulation_stress --no-fail-fast stress_cluster_ -- --test-threads=5
       - if: always()
         run: rm -rf /tmp/octopii_sim_cluster_* /tmp/walrus_sim_* || true

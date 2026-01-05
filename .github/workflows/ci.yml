@@ -18,6 +18,6 @@ jobs:
       - name: Run deterministic simulation tests (exclude stress + raft storage)
         run: cargo test --features simulation --test simulation --no-fail-fast -- --test-threads=15 --skip stress_ --skip raft_storage_recovery_roundtrip_with_snapshot
       - name: Run deterministic cluster simulation tests
-        run: cargo test --features simulation,openraft --test cluster_simulation --no-fail-fast -- --test-threads=1
+        run: cargo test --features simulation,openraft --test cluster_simulation --no-fail-fast -- --test-threads=5
       - if: always()
         run: rm -rf /tmp/walrus_sim_* /tmp/octopii_sim_cluster_* || true
