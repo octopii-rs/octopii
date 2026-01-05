@@ -39,22 +39,25 @@ async fn test_rpc_storm_with_handler_flaps() {
     let drop_rate = Arc::new(AtomicBool::new(true));
     rpc2.set_request_handler({
         let drop_rate = Arc::clone(&drop_rate);
-        move |req: RpcRequest| async move {
-            if drop_rate.load(Ordering::SeqCst) {
-                ResponsePayload::CustomResponse {
-                    success: false,
-                    data: Bytes::from_static(b"dropped"),
-                }
-            } else {
-                let payload = match &req.payload {
-                    RequestPayload::Custom { operation, .. } => {
-                        Bytes::from(format!("ack-{operation}"))
+        move |req: RpcRequest| {
+            let drop_rate = Arc::clone(&drop_rate);
+            async move {
+                if drop_rate.load(Ordering::SeqCst) {
+                    ResponsePayload::CustomResponse {
+                        success: false,
+                        data: Bytes::from_static(b"dropped"),
                     }
-                    _ => Bytes::from_static(b"ack"),
-                };
-                ResponsePayload::CustomResponse {
-                    success: true,
-                    data: payload,
+                } else {
+                    let payload = match &req.payload {
+                        RequestPayload::Custom { operation, .. } => {
+                            Bytes::from(format!("ack-{operation}"))
+                        }
+                        _ => Bytes::from_static(b"ack"),
+                    };
+                    ResponsePayload::CustomResponse {
+                        success: true,
+                        data: payload,
+                    }
                 }
             }
         }
@@ -68,7 +71,7 @@ async fn test_rpc_storm_with_handler_flaps() {
             match t2_clone.accept().await {
                 Ok((addr, peer)) => {
                     let rpc = Arc::clone(&rpc2_clone);
-                    let peer = Arc::new(peer);
+                    let peer = peer as Arc<dyn octopii::transport::Peer>;
                     tokio::spawn(async move {
                         while let Ok(Some(data)) = peer.recv().await {
                             if let Ok(msg) = deserialize::<RpcMessage>(&data) {
@@ -92,7 +95,7 @@ async fn test_rpc_storm_with_handler_flaps() {
             match t1_clone.accept().await {
                 Ok((addr, peer)) => {
                     let rpc = Arc::clone(&rpc1_clone);
-                    let peer = Arc::new(peer);
+                    let peer = peer as Arc<dyn octopii::transport::Peer>;
                     tokio::spawn(async move {
                         while let Ok(Some(data)) = peer.recv().await {
                             if let Ok(msg) = deserialize::<RpcMessage>(&data) {
@@ -118,7 +121,7 @@ async fn test_rpc_storm_with_handler_flaps() {
         }
     });
 
-    let client_peer = Arc::new(transport1.connect(addr2).await.unwrap());
+    let client_peer = transport1.connect(addr2).await.unwrap() as Arc<dyn octopii::transport::Peer>;
     let rpc1_for_recv = Arc::clone(&rpc1);
     let client_peer_for_recv = Arc::clone(&client_peer);
     tokio::spawn(async move {

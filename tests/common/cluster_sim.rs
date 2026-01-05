@@ -1716,35 +1716,43 @@ async fn new_node_with_retry(
     rt: OctopiiRuntime,
     transport: Arc<dyn Transport>,
 ) -> Arc<OpenRaftNode> {
-    for attempt in 0..10 {
+    let mut last_err: Option<String> = None;
+    for attempt in 0..20 {
         let prev_rate = sim::get_io_error_rate();
+        let prev_partial = sim::get_partial_writes_enabled();
         sim::set_io_error_rate(0.0);
+        sim::set_partial_writes_enabled(false);
         let node_res = OpenRaftNode::new_sim(config.clone(), rt.clone(), Arc::clone(&transport))
             .await;
         let node_err = node_res.as_ref().err().map(|e| e.to_string());
         let node = node_res.ok().map(Arc::new);
-        let started = if let Some(node) = node.as_ref() {
-            node.start().await.is_ok()
+        let start_err = if let Some(node) = node.as_ref() {
+            node.start().await.err().map(|e| e.to_string())
         } else {
-            false
+            None
         };
         sim::set_io_error_rate(prev_rate);
-        if let (Some(node), true) = (node, started) {
+        sim::set_partial_writes_enabled(prev_partial);
+        if let (Some(node), None) = (node, start_err.as_ref()) {
             return node;
         }
+        last_err = start_err.clone().or(node_err.clone());
         if ClusterHarness::debug_enabled() {
             eprintln!(
-                "[cluster_debug] new_node_with_retry attempt={} failed: new_res={:?} started={}",
+                "[cluster_debug] new_node_with_retry attempt={} failed: new_res={:?} start_err={:?}",
                 attempt,
                 node_err.as_deref(),
-                started
+                start_err.as_deref()
             );
         }
         let _ = std::fs::remove_dir_all(&config.wal_dir);
-        sim_runtime::advance_time(Duration::from_millis(50));
+        sim_runtime::advance_time(Duration::from_millis(100));
         yield_now().await;
-        if attempt == 9 {
-            panic!("failed to create node after retries");
+        if attempt == 19 {
+            panic!(
+                "failed to create node after retries: last_err={:?}",
+                last_err.as_deref()
+            );
         }
     }
     unreachable!()

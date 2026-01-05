@@ -243,13 +243,18 @@ pub struct StateMachineData {
     pub data: BTreeMap<String, String>,
 }
 
-/// WAL record for state machine metadata (membership and applied log)
+/// WAL record for state machine metadata (membership and snapshot)
 #[derive(Serialize, Deserialize)]
 enum SmMetaRecord {
     /// Membership change: (log_id, membership)
     Membership {
         log_id: Option<LogId<AppTypeConfig>>,
         membership: openraft::Membership<AppTypeConfig>,
+    },
+    /// Snapshot data (meta + serialized state)
+    Snapshot {
+        meta: SnapshotMeta<AppTypeConfig>,
+        data: Vec<u8>,
     },
 }
 
@@ -283,13 +288,39 @@ impl MemStateMachine {
     /// Recovers last_membership and last_applied_log from WAL on construction.
     pub async fn new_with_wal(sm: StateMachine, wal: Arc<WriteAheadLog>) -> Arc<Self> {
         let mut data = StateMachineData::default();
+        let mut snapshot: Option<StoredSnapshot> = None;
+        let mut snapshot_state: Option<BTreeMap<String, String>> = None;
 
         // Recover metadata from WAL
         if let Ok(entries) = wal.read_all().await {
             for raw in entries {
                 if let Ok(record) = bincode::deserialize::<SmMetaRecord>(&raw) {
-                    let SmMetaRecord::Membership { log_id, membership } = record;
-                    data.last_membership = StoredMembership::new(log_id, membership);
+                    match record {
+                        SmMetaRecord::Membership { log_id, membership } => {
+                            data.last_membership = StoredMembership::new(log_id, membership);
+                        }
+                        SmMetaRecord::Snapshot { meta, data: snap_data } => {
+                            if let Ok(restored) =
+                                bincode::deserialize::<BTreeMap<String, String>>(&snap_data)
+                            {
+                                data.last_applied_log = meta.last_log_id;
+                                data.last_membership = meta.last_membership.clone();
+                                snapshot_state = Some(restored);
+                                snapshot = Some(StoredSnapshot {
+                                    meta,
+                                    data: snap_data,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if let Some(state) = snapshot_state {
+            if let Ok(snapshot_bytes) = bincode::serialize(&state) {
+                if sm.restore(&snapshot_bytes).is_ok() {
+                    data.data = state;
                 }
             }
         }
@@ -298,7 +329,7 @@ impl MemStateMachine {
             sm,
             state_machine: tokio::sync::RwLock::new(data),
             snapshot_idx: AtomicU64::new(0),
-            current_snapshot: tokio::sync::RwLock::new(None),
+            current_snapshot: tokio::sync::RwLock::new(snapshot),
             meta_wal: Some(wal),
         })
     }
@@ -365,6 +396,12 @@ impl RaftSnapshotBuilder<AppTypeConfig> for Arc<MemStateMachine> {
         };
 
         *current_snapshot = Some(snapshot);
+
+        self.persist_meta(&SmMetaRecord::Snapshot {
+            meta: meta.clone(),
+            data: data.clone(),
+        })
+        .await?;
 
         Ok(Snapshot {
             meta,
@@ -489,6 +526,12 @@ impl RaftStateMachine<AppTypeConfig> for Arc<MemStateMachine> {
             log_id: membership_log_id,
             membership: membership_to_persist,
         }).await?;
+
+        self.persist_meta(&SmMetaRecord::Snapshot {
+            meta: meta.clone(),
+            data: snapshot_bytes,
+        })
+        .await?;
 
         Ok(())
     }

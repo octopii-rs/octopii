@@ -1157,7 +1157,7 @@ mod comprehensive_tests {
         assert!(leader.is_some(), "leader election failed");
 
         // Run with periodic crashes
-        for cycle in 0..5 {
+        for cycle in 0..10 {
             harness.run_oracle_workload(stress_ops() / 10).await;
 
             // Crash and recover a node each cycle

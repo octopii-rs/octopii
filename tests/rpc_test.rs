@@ -48,7 +48,7 @@ async fn test_rpc_request_response() {
             match t2_clone.accept().await {
                 Ok((addr, peer)) => {
                     let rpc = Arc::clone(&rpc2_clone);
-                    let peer = Arc::new(peer);
+                    let peer = peer as Arc<dyn octopii::transport::Peer>;
                     tokio::spawn(async move {
                         while let Ok(Some(data)) = peer.recv().await {
                             if let Ok(msg) = deserialize::<RpcMessage>(&data) {
@@ -70,7 +70,7 @@ async fn test_rpc_request_response() {
             match t1_clone.accept().await {
                 Ok((addr, peer)) => {
                     let rpc = Arc::clone(&rpc1_clone);
-                    let peer = Arc::new(peer);
+                    let peer = peer as Arc<dyn octopii::transport::Peer>;
                     tokio::spawn(async move {
                         while let Ok(Some(data)) = peer.recv().await {
                             if let Ok(msg) = deserialize::<RpcMessage>(&data) {
@@ -87,7 +87,7 @@ async fn test_rpc_request_response() {
     tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
 
     // Client needs to establish connection and spawn recv loop on it to receive responses
-    let client_peer = Arc::new(transport1.connect(addr2).await.unwrap());
+    let client_peer = transport1.connect(addr2).await.unwrap() as Arc<dyn octopii::transport::Peer>;
     let rpc1_for_recv = Arc::clone(&rpc1);
     let client_peer_for_recv = Arc::clone(&client_peer);
     tokio::spawn(async move {
@@ -157,7 +157,7 @@ async fn test_rpc_one_way_message() {
             match t2_clone.accept().await {
                 Ok((addr, peer)) => {
                     let rpc = Arc::clone(&rpc2_clone);
-                    let peer = Arc::new(peer);
+                    let peer = peer as Arc<dyn octopii::transport::Peer>;
                     tokio::spawn(async move {
                         while let Ok(Some(data)) = peer.recv().await {
                             if let Ok(msg) = deserialize::<RpcMessage>(&data) {
@@ -227,7 +227,7 @@ async fn test_rpc_request_timeout_and_recovery() {
             match t2_clone.accept().await {
                 Ok((addr, peer_raw)) => {
                     let rpc = Arc::clone(&rpc2_clone);
-                    let peer = Arc::new(peer_raw);
+                    let peer = peer_raw as Arc<dyn octopii::transport::Peer>;
                     let drop_flag = Arc::clone(&drop_clone);
                     tokio::spawn(async move {
                         while let Ok(Some(data)) = peer.recv().await {
@@ -256,7 +256,7 @@ async fn test_rpc_request_timeout_and_recovery() {
             match t1_clone.accept().await {
                 Ok((addr, peer_raw)) => {
                     let rpc = Arc::clone(&rpc1_clone);
-                    let peer = Arc::new(peer_raw);
+                    let peer = peer_raw as Arc<dyn octopii::transport::Peer>;
                     tokio::spawn(async move {
                         while let Ok(Some(data)) = peer.recv().await {
                             if let Ok(msg) = deserialize::<RpcMessage>(&data) {
@@ -301,7 +301,7 @@ async fn test_rpc_request_timeout_and_recovery() {
     tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
 
     // Establish a client-side receive loop for responses
-    let client_peer = Arc::new(transport1.connect(addr2).await.unwrap());
+    let client_peer = transport1.connect(addr2).await.unwrap() as Arc<dyn octopii::transport::Peer>;
     let rpc1_for_recv = Arc::clone(&rpc1);
     let client_peer_for_recv = Arc::clone(&client_peer);
     tokio::spawn(async move {
