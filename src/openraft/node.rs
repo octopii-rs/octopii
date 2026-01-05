@@ -17,11 +17,13 @@ use bytes::Bytes;
 use once_cell::sync::Lazy;
 use openraft::impls::BasicNode;
 use openraft::metrics::RaftMetrics;
+use openraft::storage::{LogState, RaftLogReader, RaftLogStorage};
 use openraft::{Config as RaftConfig, Raft, ServerState};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::net::SocketAddr;
 use std::sync::{Arc, RwLock as StdRwLock};
+use std::io;
 use tokio::sync::RwLock;
 use tokio::time::Duration;
 
@@ -116,6 +118,7 @@ pub struct OpenRaftNode {
     transport: Arc<dyn Transport>,
     quic_transport: Option<Arc<crate::transport::QuicTransport>>,
     raft: Arc<Raft<AppTypeConfig>>,
+    log_store: crate::openraft::storage::WalLogStore,
     state_machine: StateMachine,
     peer_addrs: Arc<RwLock<std::collections::HashMap<u64, SocketAddr>>>,
     peer_addr_wal: Arc<WriteAheadLog>,
@@ -159,6 +162,7 @@ impl OpenRaftNode {
             .await?,
         ))
         .await?;
+        let log_store_for_raft = log_store.clone();
 
         let peer_addr_wal = Arc::new(
             WriteAheadLog::new(
@@ -303,7 +307,7 @@ impl OpenRaftNode {
             config.node_id,
             raft_config,
             network_factory,
-            log_store,
+            log_store_for_raft,
             state_machine_store.clone(),
         )
         .await
@@ -316,6 +320,7 @@ impl OpenRaftNode {
             transport,
             quic_transport,
             raft: Arc::new(raft),
+            log_store,
             state_machine,
             peer_addrs,
             peer_addr_wal,
@@ -364,6 +369,19 @@ impl OpenRaftNode {
         let mut node = Self::new(config, runtime).await?;
         node.state_machine = state_machine;
         Ok(node)
+    }
+
+    pub async fn log_state(&self) -> std::result::Result<LogState<AppTypeConfig>, io::Error> {
+        let mut store = self.log_store.clone();
+        store.get_log_state().await
+    }
+
+    pub async fn log_entries(
+        &self,
+        range: std::ops::RangeInclusive<u64>,
+    ) -> std::result::Result<Vec<openraft::Entry<AppTypeConfig>>, io::Error> {
+        let mut store = self.log_store.clone();
+        store.try_get_log_entries(range).await
     }
 
     async fn persist_peer_addr_if_needed(&self, peer_id: u64, addr: SocketAddr) -> Result<()> {

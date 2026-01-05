@@ -46,6 +46,8 @@ pub struct InvariantChecker {
     committed_entries: HashMap<u64, (u64, u64)>,
     /// Last known committed index per node
     node_committed: HashMap<u64, u64>,
+    /// Last known term per node
+    node_terms: HashMap<u64, u64>,
     /// Current tick
     current_tick: u64,
 }
@@ -62,6 +64,7 @@ impl InvariantChecker {
             leaders_by_term: HashMap::new(),
             committed_entries: HashMap::new(),
             node_committed: HashMap::new(),
+            node_terms: HashMap::new(),
             current_tick: 0,
         }
     }
@@ -311,6 +314,37 @@ impl InvariantChecker {
         Ok(())
     }
 
+    /// Check term monotonicity per node
+    ///
+    /// A node's current term should never decrease.
+    pub fn check_term_monotonicity(
+        &mut self,
+        node_id: u64,
+        new_term: u64,
+    ) -> Result<(), InvariantViolation> {
+        if let Some(&prev_term) = self.node_terms.get(&node_id) {
+            if new_term < prev_term {
+                let mut details = HashMap::new();
+                details.insert("node_id".to_string(), node_id.to_string());
+                details.insert("previous_term".to_string(), prev_term.to_string());
+                details.insert("new_term".to_string(), new_term.to_string());
+                details.insert("tick".to_string(), self.current_tick.to_string());
+
+                return Err(InvariantViolation {
+                    invariant: "TermMonotonicity",
+                    message: format!(
+                        "Node {}'s term decreased from {} to {}",
+                        node_id, prev_term, new_term
+                    ),
+                    details,
+                });
+            }
+        }
+
+        self.node_terms.insert(node_id, new_term);
+        Ok(())
+    }
+
     /// Run all invariant checks
     pub fn check_all(
         &mut self,
@@ -328,6 +362,7 @@ impl InvariantChecker {
         self.leaders_by_term.clear();
         self.committed_entries.clear();
         self.node_committed.clear();
+        self.node_terms.clear();
         self.current_tick = 0;
     }
 

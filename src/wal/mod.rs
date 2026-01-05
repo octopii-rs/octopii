@@ -77,7 +77,9 @@ impl WriteAheadLog {
         // Create Walrus instance using block_in_place in production, direct call in simulation.
         // We use a global lock to prevent race conditions when setting WALRUS_DATA_DIR.
         let create_walrus = move || {
-            let _guard = WAL_CREATION_LOCK.lock().unwrap();
+            let _guard = WAL_CREATION_LOCK
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
 
             std::env::set_var("WALRUS_DATA_DIR", &root_dir_str);
             let result = wal::Walrus::with_consistency_and_schedule_for_key(

@@ -37,6 +37,8 @@ pub struct ClusterOracle {
     failed_ops: Vec<FailedOp>,
     /// Current tick for timing info
     current_tick: u64,
+    /// Keys written without partial writes (must survive crashes)
+    must_survive: HashMap<String, String>,
 }
 
 impl Default for ClusterOracle {
@@ -54,6 +56,7 @@ impl ClusterOracle {
             verify_count: 0,
             failed_ops: Vec::new(),
             current_tick: 0,
+            must_survive: HashMap::new(),
         }
     }
 
@@ -65,6 +68,13 @@ impl ClusterOracle {
     /// Record a successful commit - updates expected state
     pub fn record_commit(&mut self, key: &str, value: &str) {
         self.expected_state.insert(key.to_string(), value.to_string());
+        self.commit_count += 1;
+    }
+
+    /// Record a must-survive commit (written without partial writes)
+    pub fn record_must_survive(&mut self, key: &str, value: &str) {
+        self.expected_state.insert(key.to_string(), value.to_string());
+        self.must_survive.insert(key.to_string(), value.to_string());
         self.commit_count += 1;
     }
 
@@ -87,6 +97,14 @@ impl ClusterOracle {
     /// Get the expected value for a key
     pub fn expected_value(&self, key: &str) -> Option<&String> {
         self.expected_state.get(key)
+    }
+
+    /// Snapshot expected state for full verification
+    pub fn expected_state_snapshot(&self) -> Vec<(String, String)> {
+        self.expected_state
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect()
     }
 
     /// Verify a read matches expected state
@@ -127,6 +145,22 @@ impl ClusterOracle {
         }
     }
 
+    /// Verify a read and panic on failure, with node context
+    pub fn assert_read_with_node(&mut self, node_id: u64, key: &str, actual: Option<&str>) {
+        if let Err(failure) = self.verify_read(key, actual) {
+            self.dump_diagnostics();
+            panic!(
+                "ORACLE VERIFICATION FAILED at tick {} (node {}):\n  Key: '{}'\n  Expected: {:?}\n  Actual: {:?}\n  {}",
+                self.current_tick,
+                node_id,
+                failure.key,
+                failure.expected,
+                failure.actual,
+                failure.message
+            );
+        }
+    }
+
     /// Get statistics (committed, failed, verified)
     pub fn stats(&self) -> (u64, usize, u64) {
         (self.commit_count, self.failed_ops.len(), self.verify_count)
@@ -149,6 +183,7 @@ impl ClusterOracle {
         self.verify_count = 0;
         self.failed_ops.clear();
         self.current_tick = 0;
+        self.must_survive.clear();
     }
 
     /// Dump diagnostic information (useful when debugging failures)
@@ -158,6 +193,7 @@ impl ClusterOracle {
         eprintln!("Committed ops: {}", self.commit_count);
         eprintln!("Verified reads: {}", self.verify_count);
         eprintln!("Failed ops: {}", self.failed_ops.len());
+        eprintln!("Must-survive keys: {}", self.must_survive.len());
         eprintln!("Keys in state: {}", self.expected_state.len());
 
         if !self.failed_ops.is_empty() {
@@ -183,6 +219,14 @@ impl ClusterOracle {
             eprintln!("  ... and {} more keys", self.expected_state.len() - 20);
         }
         eprintln!("==================================\n");
+    }
+
+    /// Snapshot must-survive keys for post-recovery verification
+    pub fn must_survive_snapshot(&self) -> Vec<(String, String)> {
+        self.must_survive
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect()
     }
 
     /// Verify all keys in expected state exist on a node

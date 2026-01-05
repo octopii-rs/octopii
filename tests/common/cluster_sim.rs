@@ -1,5 +1,6 @@
 #![cfg(all(feature = "simulation", feature = "openraft"))]
 
+use crate::common::cluster_invariants::InvariantChecker;
 use crate::common::cluster_oracle::ClusterOracle;
 use octopii::config::Config;
 use octopii::openraft::node::OpenRaftNode;
@@ -8,6 +9,9 @@ use octopii::runtime::OctopiiRuntime;
 use octopii::transport::{SimConfig, SimRouter, SimTransport, Transport};
 use octopii::wal::wal::vfs::sim::{self, SimConfig as VfsSimConfig};
 use octopii::wal::wal;
+use std::collections::HashMap;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -87,17 +91,58 @@ pub struct ClusterHarness {
     pub tick_count: u64,
     enable_partial_writes: bool,
     next_node_id: u64,
+    invariants: InvariantChecker,
+    invariants_enabled: bool,
+    invariant_interval: u64,
+    full_verify_enabled: bool,
+    durability_enabled: bool,
 }
 
 #[derive(Clone, Copy)]
 pub enum ValidationMode {
     Cluster,
     Leader,
+    Full,
 }
 
 impl ClusterHarness {
     fn debug_enabled() -> bool {
         std::env::var("CLUSTER_DEBUG").ok().as_deref() == Some("1")
+    }
+
+    fn invariants_enabled() -> bool {
+        std::env::var("CLUSTER_VERIFY_INVARIANTS")
+            .ok()
+            .as_deref()
+            == Some("1")
+    }
+
+    fn invariant_interval() -> u64 {
+        std::env::var("CLUSTER_INVARIANT_INTERVAL")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(50)
+    }
+
+    fn full_verify_enabled() -> bool {
+        std::env::var("CLUSTER_VERIFY_FULL")
+            .ok()
+            .as_deref()
+            == Some("1")
+    }
+
+    fn durability_enabled() -> bool {
+        std::env::var("CLUSTER_VERIFY_DURABILITY")
+            .ok()
+            .as_deref()
+            == Some("1")
+    }
+
+    fn log_verify_enabled() -> bool {
+        std::env::var("CLUSTER_VERIFY_LOGS")
+            .ok()
+            .as_deref()
+            == Some("1")
     }
 
     fn debug_dump_metrics(&self, label: &str) {
@@ -214,6 +259,11 @@ impl ClusterHarness {
             tick_count: 0,
             enable_partial_writes: params.enable_partial_writes,
             next_node_id: (params.size + 1) as u64,
+            invariants: InvariantChecker::new(),
+            invariants_enabled: Self::invariants_enabled(),
+            invariant_interval: Self::invariant_interval(),
+            full_verify_enabled: Self::full_verify_enabled(),
+            durability_enabled: Self::durability_enabled(),
         }
     }
 
@@ -225,6 +275,12 @@ impl ClusterHarness {
             sim_runtime::advance_time(Duration::from_millis(step_ms));
             self.tick_count += 1;
             self.oracle.set_tick(self.tick_count);
+            if self.invariants_enabled {
+                self.invariants.set_tick(self.tick_count);
+                if self.tick_count % self.invariant_interval == 0 {
+                    self.check_invariants_light();
+                }
+            }
             yield_now().await;
         }
     }
@@ -304,7 +360,15 @@ impl ClusterHarness {
                     self.wait_for_leader_value(key.as_bytes(), expected.as_bytes())
                         .await;
                 }
+                ValidationMode::Full => {
+                    self.wait_for_value(key.as_bytes(), expected.as_bytes())
+                        .await;
+                }
             }
+        }
+
+        if matches!(mode, ValidationMode::Full) || self.full_verify_enabled {
+            self.verify_oracle_full().await;
         }
     }
 
@@ -674,7 +738,11 @@ impl ClusterHarness {
         let cmd = format!("SET {key} {value}");
         match self.propose_with_leader(cmd.into_bytes()).await {
             Ok(()) => {
-                self.oracle.record_commit(key, value);
+                if self.durability_enabled && !self.enable_partial_writes {
+                    self.oracle.record_must_survive(key, value);
+                } else {
+                    self.oracle.record_commit(key, value);
+                }
                 Ok(())
             }
             Err(e) => {
@@ -721,11 +789,45 @@ impl ClusterHarness {
             let key = format!("key{i}");
             self.query_and_verify(&key).await.expect("query");
         }
+        if self.full_verify_enabled {
+            self.verify_oracle_full().await;
+        }
         if Self::debug_enabled() {
             eprintln!(
                 "\n[cluster_debug] run_oracle_workload end ops={} tick={}",
                 ops, self.tick_count
             );
+        }
+    }
+
+    /// Verify must-survive keys after crash recovery
+    pub async fn verify_must_survive(&mut self) {
+        if !self.durability_enabled {
+            return;
+        }
+        let required = if self.require_all_nodes {
+            self.nodes.len()
+        } else {
+            (self.nodes.len() / 2) + 1
+        };
+        for (key, value) in self.oracle.must_survive_snapshot() {
+            let mut match_count = 0usize;
+            for node in &self.nodes {
+                let cmd = format!("GET {key}");
+                if let Ok(bytes) = node.query(cmd.as_bytes()).await {
+                    if let Ok(actual) = String::from_utf8(bytes.to_vec()) {
+                        if actual == value {
+                            match_count += 1;
+                        }
+                    }
+                }
+            }
+            if match_count < required {
+                panic!(
+                    "must-survive verification failed for key '{}': only {} nodes matched (required {})",
+                    key, match_count, required
+                );
+            }
         }
     }
 
@@ -738,6 +840,222 @@ impl ClusterHarness {
     pub fn crash_history(&self) -> &[CrashEvent] {
         &self.crash_history
     }
+
+    fn check_invariants_light(&mut self) {
+        for node in &self.nodes {
+            let metrics = node.raft_metrics();
+            if metrics.state == openraft::ServerState::Leader {
+                self.invariants
+                    .record_leader(node.id(), metrics.current_term);
+            }
+            if let Err(e) = self
+                .invariants
+                .check_term_monotonicity(node.id(), metrics.current_term)
+            {
+                self.invariants.reset();
+                panic!("{e}");
+            }
+            if let Some(log_id) = metrics.last_applied {
+                if let Err(e) = self
+                    .invariants
+                    .check_commit_monotonicity(node.id(), log_id.index)
+                {
+                    self.invariants.reset();
+                    panic!("{e}");
+                }
+            }
+        }
+        if let Err(e) = self.invariants.check_single_leader() {
+            self.invariants.reset();
+            panic!("{e}");
+        }
+    }
+
+    async fn verify_oracle_full(&mut self) {
+        let expected = self.oracle.expected_state_snapshot();
+        let required = if self.require_all_nodes {
+            self.nodes.len()
+        } else {
+            (self.nodes.len() / 2) + 1
+        };
+
+        for (key, value) in &expected {
+            let mut match_count = 0usize;
+            for node in &self.nodes {
+                let cmd = format!("GET {key}");
+                let result = node.query(cmd.as_bytes()).await;
+                let actual = result
+                    .ok()
+                    .and_then(|bytes| String::from_utf8(bytes.to_vec()).ok());
+                if actual.as_deref() == Some(value.as_str()) {
+                    match_count += 1;
+                } else if actual.is_some() {
+                    self.oracle
+                        .assert_read_with_node(node.id(), key, actual.as_deref());
+                }
+            }
+            if match_count < required {
+                panic!(
+                    "full verification failed for key '{}': only {} nodes matched (required {})",
+                    key, match_count, required
+                );
+            }
+        }
+
+        self.check_membership_consistency(required);
+        self.check_state_machine_consistency(&expected).await;
+        self.check_log_consistency().await;
+    }
+
+    fn check_membership_consistency(&self, required: usize) {
+        let mut counts: HashMap<Vec<Vec<u64>>, usize> = HashMap::new();
+        for node in &self.nodes {
+            let metrics = node.raft_metrics();
+            let mut joint = Vec::new();
+            for cfg in metrics.membership_config.membership().get_joint_config() {
+                let mut members = cfg.iter().copied().collect::<Vec<_>>();
+                members.sort_unstable();
+                joint.push(members);
+            }
+            joint.sort();
+            *counts.entry(joint).or_insert(0) += 1;
+        }
+
+        let max = counts.values().copied().max().unwrap_or(0);
+        if max < required {
+            panic!(
+                "membership consistency failed: only {} nodes share the same membership (required {})",
+                max, required
+            );
+        }
+    }
+
+    async fn check_state_machine_consistency(&mut self, expected: &[(String, String)]) {
+        if !self.require_all_nodes {
+            return;
+        }
+        let mut node_states = Vec::with_capacity(self.nodes.len());
+        for node in &self.nodes {
+            let mut state = HashMap::new();
+            for (key, _) in expected {
+                let cmd = format!("GET {key}");
+                if let Ok(bytes) = node.query(cmd.as_bytes()).await {
+                    if let Ok(val) = String::from_utf8(bytes.to_vec()) {
+                        state.insert(key.clone(), val);
+                    }
+                }
+            }
+            node_states.push((node.id(), state));
+        }
+
+        if let Err(e) = self
+            .invariants
+            .check_state_machine_consistency(&node_states)
+        {
+            self.invariants.reset();
+            panic!("{e}");
+        }
+    }
+
+    async fn check_log_consistency(&mut self) {
+        if !Self::log_verify_enabled() {
+            return;
+        }
+
+        let active_nodes: Vec<_> = self
+            .nodes
+            .iter()
+            .filter(|n| n.raft_metrics().state != openraft::ServerState::Shutdown)
+            .collect();
+        if active_nodes.len() < 2 {
+            return;
+        }
+
+        let mut min_applied: Option<u64> = None;
+        for node in &active_nodes {
+            let metrics = node.raft_metrics();
+            let Some(log_id) = metrics.last_applied else {
+                return;
+            };
+            min_applied = Some(match min_applied {
+                Some(cur) => cur.min(log_id.index),
+                None => log_id.index,
+            });
+        }
+
+        let Some(end_idx) = min_applied else {
+            return;
+        };
+
+        let mut start_idx = 1u64;
+        for node in &active_nodes {
+            let state = node.log_state().await.expect("log_state");
+            if let Some(purged) = state.last_purged_log_id {
+                start_idx = start_idx.max(purged.index + 1);
+            }
+        }
+
+        if start_idx > end_idx {
+            return;
+        }
+
+        let expected_count = (end_idx - start_idx + 1) as usize;
+        let mut baseline: Option<Vec<(u64, u64, u64)>> = None;
+
+        for node in &active_nodes {
+            let entries = node
+                .log_entries(start_idx..=end_idx)
+                .await
+                .expect("log_entries");
+
+            if entries.len() != expected_count {
+                panic!(
+                    "log contiguity failed for node {}: expected {} entries ({}..={}), got {}",
+                    node.id(),
+                    expected_count,
+                    start_idx,
+                    end_idx,
+                    entries.len()
+                );
+            }
+
+            let mut fingerprint = Vec::with_capacity(entries.len());
+            for (i, entry) in entries.iter().enumerate() {
+                let expected_idx = start_idx + i as u64;
+                if entry.log_id.index != expected_idx {
+                    panic!(
+                        "log index gap for node {}: expected {}, got {}",
+                        node.id(),
+                        expected_idx,
+                        entry.log_id.index
+                    );
+                }
+                let term = entry.log_id.leader_id.term as u64;
+                let payload_hash = hash_payload(&entry.payload);
+                fingerprint.push((entry.log_id.index, term, payload_hash));
+            }
+
+            if let Some(ref base) = baseline {
+                if base != &fingerprint {
+                    panic!(
+                        "log equivalence failed: node {} diverged from baseline in {}..={}",
+                        node.id(),
+                        start_idx,
+                        end_idx
+                    );
+                }
+            } else {
+                baseline = Some(fingerprint);
+            }
+        }
+    }
+}
+
+fn hash_payload(payload: &openraft::EntryPayload<octopii::openraft::types::AppTypeConfig>) -> u64 {
+    let encoded = bincode::serialize(payload).unwrap_or_default();
+    let mut hasher = DefaultHasher::new();
+    encoded.hash(&mut hasher);
+    hasher.finish()
 }
 
 pub fn walrus_seed_sequence(init: u64, count: usize) -> Vec<u64> {
