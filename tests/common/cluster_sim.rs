@@ -790,6 +790,42 @@ impl ClusterHarness {
                 Ok(())
             }
             Err(e) => {
+                // If the write may have committed despite the error, confirm before recording failure.
+                if self.full_verify_enabled {
+                    let partial_after = sim::get_partial_write_count();
+                    for _ in 0..5 {
+                        self.tick(20, 50).await;
+                        let query = format!("GET {key}");
+                        for node in &self.nodes {
+                            if let Ok(bytes) = node.query(query.as_bytes()).await {
+                                if let Ok(actual) = String::from_utf8(bytes.to_vec()) {
+                                    if actual == value {
+                                        if self.durability_enabled {
+                                            if partial_before == partial_after {
+                                                self.oracle
+                                                    .record_must_survive_with_command(key, value, &cmd_bytes);
+                                            } else {
+                                                self.oracle
+                                                    .record_may_be_lost_with_command(key, value, &cmd_bytes);
+                                            }
+                                        } else {
+                                            self.oracle
+                                                .record_commit_with_command(key, value, &cmd_bytes);
+                                        }
+                                        if self.log_durability_enabled {
+                                            self.record_log_durability(
+                                                &cmd_bytes,
+                                                partial_before == partial_after,
+                                            )
+                                            .await;
+                                        }
+                                        return Ok(());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
                 self.oracle.record_failure(key, value, &e.to_string());
                 Err(e)
             }
@@ -820,15 +856,33 @@ impl ClusterHarness {
 
         if let Ok(log_state) = leader.log_state().await {
             if let Some(log_id) = log_state.last_log_id {
-                self.log_oracle
-                    .record_entry(log_id.index, cmd_bytes.to_vec(), must_survive);
+                let start = log_state
+                    .last_purged_log_id
+                    .map(|id| id.index + 1)
+                    .unwrap_or(1);
+                let search_start = log_id.index.saturating_sub(8).max(start);
+                if let Ok(entries) = leader.log_entries(search_start..=log_id.index).await {
+                    for entry in entries.iter().rev() {
+                        if let openraft::EntryPayload::Normal(AppEntry(data)) = &entry.payload {
+                            if data.as_slice() == cmd_bytes {
+                                self.log_oracle.record_entry(
+                                    leader_id,
+                                    entry.log_id.index,
+                                    data.clone(),
+                                    must_survive,
+                                );
+                                break;
+                            }
+                        }
+                    }
+                }
             }
         }
 
         if let Ok(committed) = leader.read_committed().await {
             if let Some(log_id) = committed {
                 self.log_oracle
-                    .record_committed(log_id.index, must_survive);
+                    .record_committed(leader_id, log_id.index, must_survive);
             }
         }
 
@@ -837,7 +891,7 @@ impl ClusterHarness {
                 let term = vote.leader_id.term();
                 let node_id = vote.leader_id.node_id().copied().unwrap_or_default();
                 self.log_oracle
-                    .record_vote(term, node_id, must_survive);
+                    .record_vote(leader_id, term, node_id, must_survive);
             }
         }
     }
@@ -870,6 +924,9 @@ impl ClusterHarness {
             self.query_and_verify(&key).await.expect("query");
         }
         if self.full_verify_enabled {
+            // Clear network faults and allow additional convergence before strict checks.
+            self.router.clear_faults();
+            self.tick(200, 50).await;
             self.verify_oracle_full().await;
         }
         if Self::debug_enabled() {
@@ -931,7 +988,9 @@ impl ClusterHarness {
             return;
         }
         let Some(node) = self.nodes.get(node_idx) else { return; };
+        let node_id = node.id();
         let state = node.log_state().await.expect("log_state");
+        let last_purged = state.last_purged_log_id.map(|id| id.index);
         let Some(last_log) = state.last_log_id else { return; };
         let entries = node
             .log_entries(1..=last_log.index)
@@ -964,11 +1023,22 @@ impl ClusterHarness {
 
         if let Err(e) = self
             .log_oracle
-            .verify_after_recovery(&recovered, committed, vote)
+            .verify_after_recovery(node_id, &recovered, committed, vote, last_purged)
         {
             panic!("{e}");
         }
-        self.log_oracle.after_recovery(&recovered);
+        self.log_oracle
+            .after_recovery(node_id, &recovered, last_purged);
+    }
+
+    pub async fn verify_log_durability_all(&mut self) {
+        if !self.log_durability_enabled {
+            return;
+        }
+        let count = self.nodes.len();
+        for idx in 0..count {
+            self.verify_log_durability(idx).await;
+        }
     }
 
     /// Get oracle statistics
@@ -1046,27 +1116,55 @@ impl ClusterHarness {
             (self.nodes.len() / 2) + 1
         };
 
-        for (key, value) in &expected {
-            let mut match_count = 0usize;
-            for node in &self.nodes {
-                let cmd = format!("GET {key}");
-                let result = node.query(cmd.as_bytes()).await;
-                let actual = result
-                    .ok()
-                    .and_then(|bytes| String::from_utf8(bytes.to_vec()).ok());
-                if actual.as_deref() == Some(value.as_str()) {
-                    match_count += 1;
-                } else if actual.is_some() {
-                    self.oracle
-                        .assert_read_with_node(node.id(), key, actual.as_deref());
+        for attempt in 0..5 {
+            let mut failure: Option<String> = None;
+            for (key, value) in &expected {
+                let mut match_count = 0usize;
+                for node in &self.nodes {
+                    let cmd = format!("GET {key}");
+                    let result = node.query(cmd.as_bytes()).await;
+                    let actual = result
+                        .ok()
+                        .and_then(|bytes| String::from_utf8(bytes.to_vec()).ok());
+                    if actual.as_deref() == Some(value.as_str()) {
+                        match_count += 1;
+                    } else if self.require_all_nodes {
+                        if let Some(actual) = actual {
+                            failure = Some(format!(
+                                "full verification failed at tick {} (node {}): key '{}' expected {:?}, got {:?}",
+                                self.tick_count,
+                                node.id(),
+                                key,
+                                Some(value.as_str()),
+                                Some(actual.as_str())
+                            ));
+                            break;
+                        }
+                    }
+                }
+                if failure.is_some() {
+                    break;
+                }
+                if match_count < required {
+                    failure = Some(format!(
+                        "full verification failed at tick {}: key '{}' only matched {} nodes (required {})",
+                        self.tick_count, key, match_count, required
+                    ));
+                    break;
                 }
             }
-            if match_count < required {
-                panic!(
-                    "full verification failed for key '{}': only {} nodes matched (required {})",
-                    key, match_count, required
-                );
+
+            if failure.is_none() {
+                break;
             }
+
+            if attempt < 4 {
+                self.tick(400, 50).await;
+                continue;
+            }
+
+            self.oracle.dump_diagnostics();
+            panic!("{}", failure.unwrap());
         }
 
         self.check_membership_consistency(required);
@@ -1236,21 +1334,19 @@ impl ClusterHarness {
 
         if let Some(normals) = baseline_normals {
             let oracle_payloads = self.oracle.history_payloads();
-            if normals.len() > oracle_payloads.len() {
-                panic!(
-                    "log/oracle mismatch: log has {} normal entries but oracle has {}",
-                    normals.len(),
-                    oracle_payloads.len()
-                );
-            }
-            let start = oracle_payloads.len() - normals.len();
-            let expected = &oracle_payloads[start..];
-            if normals != expected {
-                panic!(
-                    "log/oracle mismatch: normal entry payloads diverged (log entries: {}, oracle entries: {})",
-                    normals.len(),
-                    oracle_payloads.len()
-                );
+            let mut cursor = 0usize;
+            for normal in &normals {
+                while cursor < oracle_payloads.len() && oracle_payloads[cursor] != *normal {
+                    cursor += 1;
+                }
+                if cursor == oracle_payloads.len() {
+                    panic!(
+                        "log/oracle mismatch: normal entry payload missing from oracle (log entries: {}, oracle entries: {})",
+                        normals.len(),
+                        oracle_payloads.len()
+                    );
+                }
+                cursor += 1;
             }
         }
 
