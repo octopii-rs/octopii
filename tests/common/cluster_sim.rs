@@ -1,9 +1,11 @@
 #![cfg(all(feature = "simulation", feature = "openraft"))]
 
 use crate::common::cluster_invariants::InvariantChecker;
+use crate::common::cluster_log_oracle::LogDurabilityOracle;
 use crate::common::cluster_oracle::ClusterOracle;
 use octopii::config::Config;
 use octopii::openraft::node::OpenRaftNode;
+use octopii::openraft::types::AppEntry;
 use octopii::openraft::sim_runtime;
 use octopii::runtime::OctopiiRuntime;
 use octopii::transport::{SimConfig, SimRouter, SimTransport, Transport};
@@ -18,6 +20,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::task::yield_now;
 use tokio::time::Duration;
+use openraft::vote::RaftLeaderId;
 
 #[derive(Clone, Copy, Debug)]
 pub enum FaultProfile {
@@ -64,6 +67,8 @@ pub struct ClusterParams {
     pub verify_each_op: bool,
     pub verify_durability: bool,
     pub verify_logs: bool,
+    pub verify_history: bool,
+    pub verify_log_durability: bool,
 }
 
 impl ClusterParams {
@@ -92,6 +97,14 @@ impl ClusterParams {
             .ok()
             .as_deref()
             == Some("1");
+        let verify_history = std::env::var("CLUSTER_VERIFY_HISTORY")
+            .ok()
+            .as_deref()
+            == Some("1");
+        let verify_log_durability = std::env::var("CLUSTER_VERIFY_LOG_DURABILITY")
+            .ok()
+            .as_deref()
+            == Some("1");
         Self {
             size,
             seed,
@@ -106,6 +119,8 @@ impl ClusterParams {
             verify_each_op,
             verify_durability,
             verify_logs,
+            verify_history,
+            verify_log_durability,
         }
     }
 }
@@ -124,6 +139,7 @@ pub struct ClusterHarness {
     rt: OctopiiRuntime,
     // New fields for comprehensive testing
     pub oracle: ClusterOracle,
+    pub log_oracle: LogDurabilityOracle,
     pub crash_history: Vec<CrashEvent>,
     pub tick_count: u64,
     enable_partial_writes: bool,
@@ -135,6 +151,8 @@ pub struct ClusterHarness {
     durability_enabled: bool,
     log_verify_enabled: bool,
     per_op_verify_enabled: bool,
+    history_verify_enabled: bool,
+    log_durability_enabled: bool,
 }
 
 static NEXT_CLUSTER_ID: AtomicU64 = AtomicU64::new(1);
@@ -262,6 +280,7 @@ impl ClusterHarness {
             configs,
             rt,
             oracle: ClusterOracle::new(),
+            log_oracle: LogDurabilityOracle::new(),
             crash_history: Vec::new(),
             tick_count: 0,
             enable_partial_writes: params.enable_partial_writes,
@@ -273,6 +292,8 @@ impl ClusterHarness {
             durability_enabled: params.verify_durability,
             log_verify_enabled: params.verify_logs,
             per_op_verify_enabled: params.verify_each_op,
+            history_verify_enabled: params.verify_history,
+            log_durability_enabled: params.verify_log_durability,
         }
     }
 
@@ -745,18 +766,26 @@ impl ClusterHarness {
     /// Propose a SET command and track in oracle
     pub async fn propose_set(&mut self, key: &str, value: &str) -> octopii::Result<()> {
         let cmd = format!("SET {key} {value}");
+        let cmd_bytes = cmd.as_bytes().to_vec();
         let partial_before = sim::get_partial_write_count();
-        match self.propose_with_leader(cmd.into_bytes()).await {
+        match self.propose_with_leader(cmd_bytes.clone()).await {
             Ok(()) => {
                 let partial_after = sim::get_partial_write_count();
                 if self.durability_enabled {
                     if partial_before == partial_after {
-                        self.oracle.record_must_survive(key, value);
+                        self.oracle
+                            .record_must_survive_with_command(key, value, &cmd_bytes);
                     } else {
-                        self.oracle.record_may_be_lost(key, value);
+                        self.oracle
+                            .record_may_be_lost_with_command(key, value, &cmd_bytes);
                     }
                 } else {
-                    self.oracle.record_commit(key, value);
+                    self.oracle
+                        .record_commit_with_command(key, value, &cmd_bytes);
+                }
+                if self.log_durability_enabled {
+                    self.record_log_durability(&cmd_bytes, partial_before == partial_after)
+                        .await;
                 }
                 Ok(())
             }
@@ -780,7 +809,37 @@ impl ClusterHarness {
         let actual = std::str::from_utf8(&result).ok();
 
         self.oracle.assert_read(key, actual);
+        self.oracle.record_read_observation(key, actual);
         Ok(())
+    }
+
+    async fn record_log_durability(&mut self, cmd_bytes: &[u8], must_survive: bool) {
+        let leader_id = self.wait_for_leader().await;
+        let Some(leader_id) = leader_id else { return; };
+        let Some(leader) = self.nodes.iter().find(|n| n.id() == leader_id) else { return; };
+
+        if let Ok(log_state) = leader.log_state().await {
+            if let Some(log_id) = log_state.last_log_id {
+                self.log_oracle
+                    .record_entry(log_id.index, cmd_bytes.to_vec(), must_survive);
+            }
+        }
+
+        if let Ok(committed) = leader.read_committed().await {
+            if let Some(log_id) = committed {
+                self.log_oracle
+                    .record_committed(log_id.index, must_survive);
+            }
+        }
+
+        if let Ok(vote) = leader.read_vote().await {
+            if let Some(vote) = vote {
+                let term = vote.leader_id.term();
+                let node_id = vote.leader_id.node_id().copied().unwrap_or_default();
+                self.log_oracle
+                    .record_vote(term, node_id, must_survive);
+            }
+        }
     }
 
     /// Run a workload with oracle tracking
@@ -867,6 +926,51 @@ impl ClusterHarness {
         }
     }
 
+    pub async fn verify_log_durability(&mut self, node_idx: usize) {
+        if !self.log_durability_enabled {
+            return;
+        }
+        let Some(node) = self.nodes.get(node_idx) else { return; };
+        let state = node.log_state().await.expect("log_state");
+        let Some(last_log) = state.last_log_id else { return; };
+        let entries = node
+            .log_entries(1..=last_log.index)
+            .await
+            .expect("log_entries");
+        let mut recovered = std::collections::BTreeMap::new();
+        for entry in entries {
+            if let openraft::EntryPayload::Normal(AppEntry(data)) = entry.payload {
+                recovered.insert(entry.log_id.index, data);
+            }
+        }
+
+        let committed = node
+            .read_committed()
+            .await
+            .ok()
+            .flatten()
+            .map(|id| id.index);
+        let vote = node
+            .read_vote()
+            .await
+            .ok()
+            .flatten()
+            .map(|v| {
+                (
+                    v.leader_id.term(),
+                    v.leader_id.node_id().copied().unwrap_or_default(),
+                )
+            });
+
+        if let Err(e) = self
+            .log_oracle
+            .verify_after_recovery(&recovered, committed, vote)
+        {
+            panic!("{e}");
+        }
+        self.log_oracle.after_recovery(&recovered);
+    }
+
     /// Get oracle statistics
     pub fn oracle_stats(&self) -> (u64, usize, u64) {
         self.oracle.stats()
@@ -898,6 +1002,33 @@ impl ClusterHarness {
                 {
                     self.invariants.reset();
                     panic!("{e}");
+                }
+            }
+            if let (Some(committed), Some(applied)) = (
+                metrics.last_log_index,
+                metrics.last_applied.map(|id| id.index),
+            ) {
+                if committed < applied {
+                    self.invariants.reset();
+                    panic!(
+                        "INVARIANT VIOLATION [CommitAppliedOrder]: node {} committed {} behind last_applied {}",
+                        node.id(),
+                        committed,
+                        applied
+                    );
+                }
+            }
+            if let Some(last_applied) = metrics.last_applied.as_ref().map(|id| id.index) {
+                if let Some(snapshot) = metrics.snapshot.as_ref().map(|s| s.index) {
+                    if snapshot > last_applied {
+                        self.invariants.reset();
+                        panic!(
+                            "INVARIANT VIOLATION [SnapshotMonotonicity]: node {} snapshot index {} ahead of last_applied {}",
+                            node.id(),
+                            snapshot,
+                            last_applied
+                        );
+                    }
                 }
             }
         }
@@ -941,6 +1072,11 @@ impl ClusterHarness {
         self.check_membership_consistency(required);
         self.check_state_machine_consistency(&expected).await;
         self.check_log_consistency().await;
+        if self.history_verify_enabled {
+            if let Err(e) = self.oracle.verify_linearizable() {
+                panic!("{e}");
+            }
+        }
     }
 
     fn check_membership_consistency(&self, required: usize) {
@@ -1037,6 +1173,11 @@ impl ClusterHarness {
 
         let expected_count = (end_idx - start_idx + 1) as usize;
         let mut baseline: Option<Vec<(u64, u64, u64)>> = None;
+        let mut baseline_normals: Option<Vec<Vec<u8>>> = None;
+        let leader_term = active_nodes
+            .iter()
+            .find(|n| n.raft_metrics().state == openraft::ServerState::Leader)
+            .map(|n| n.raft_metrics().current_term);
 
         for node in &active_nodes {
             let entries = node
@@ -1082,6 +1223,43 @@ impl ClusterHarness {
                 }
             } else {
                 baseline = Some(fingerprint);
+                let normals = entries
+                    .iter()
+                    .filter_map(|entry| match &entry.payload {
+                        openraft::EntryPayload::Normal(AppEntry(data)) => Some(data.clone()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+                baseline_normals = Some(normals);
+            }
+        }
+
+        if let Some(normals) = baseline_normals {
+            let oracle_payloads = self.oracle.history_payloads();
+            if normals.len() > oracle_payloads.len() {
+                panic!(
+                    "log/oracle mismatch: log has {} normal entries but oracle has {}",
+                    normals.len(),
+                    oracle_payloads.len()
+                );
+            }
+            let start = oracle_payloads.len() - normals.len();
+            let expected = &oracle_payloads[start..];
+            if normals != expected {
+                panic!(
+                    "log/oracle mismatch: normal entry payloads diverged (log entries: {}, oracle entries: {})",
+                    normals.len(),
+                    oracle_payloads.len()
+                );
+            }
+        }
+
+        if let Some(term) = leader_term {
+            if let Some(ref base) = baseline {
+                if let Err(e) = self.invariants.check_leader_completeness(term, base) {
+                    self.invariants.reset();
+                    panic!("{e}");
+                }
             }
         }
     }

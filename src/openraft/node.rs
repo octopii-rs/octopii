@@ -18,7 +18,7 @@ use once_cell::sync::Lazy;
 use openraft::impls::BasicNode;
 use openraft::metrics::RaftMetrics;
 use openraft::storage::{LogState, RaftLogReader, RaftLogStorage};
-use openraft::{Config as RaftConfig, Raft, ServerState};
+use openraft::{Config as RaftConfig, LogId, Raft, ServerState, Vote};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::net::SocketAddr;
@@ -382,6 +382,18 @@ impl OpenRaftNode {
     ) -> std::result::Result<Vec<openraft::Entry<AppTypeConfig>>, io::Error> {
         let mut store = self.log_store.clone();
         store.try_get_log_entries(range).await
+    }
+
+    pub async fn read_vote(&self) -> std::result::Result<Option<Vote<AppTypeConfig>>, io::Error> {
+        let mut store = self.log_store.clone();
+        store.read_vote().await
+    }
+
+    pub async fn read_committed(
+        &self,
+    ) -> std::result::Result<Option<LogId<AppTypeConfig>>, io::Error> {
+        let mut store = self.log_store.clone();
+        store.read_committed().await
     }
 
     async fn persist_peer_addr_if_needed(&self, peer_id: u64, addr: SocketAddr) -> Result<()> {

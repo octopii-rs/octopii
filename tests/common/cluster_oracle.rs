@@ -6,6 +6,20 @@
 
 use std::collections::HashMap;
 
+#[derive(Debug, Clone)]
+enum OpKind {
+    Write { value: Option<String> },
+    Read { observed: Option<String> },
+}
+
+#[derive(Debug, Clone)]
+struct OpRecord {
+    id: u64,
+    key: String,
+    kind: OpKind,
+    tick: u64,
+}
+
 /// A failed operation record for debugging
 #[derive(Debug, Clone)]
 pub struct FailedOp {
@@ -29,6 +43,11 @@ pub struct VerificationFailure {
 pub struct ClusterOracle {
     /// Expected KV state after all commits
     expected_state: HashMap<String, String>,
+    /// Ordered history of committed commands (for log verification)
+    history: Vec<Vec<u8>>,
+    /// Operation history for linearizability checks
+    ops: Vec<OpRecord>,
+    next_op_id: u64,
     /// Committed operation count
     commit_count: u64,
     /// Verified read count
@@ -56,6 +75,9 @@ impl ClusterOracle {
     pub fn new() -> Self {
         Self {
             expected_state: HashMap::new(),
+            history: Vec::new(),
+            ops: Vec::new(),
+            next_op_id: 1,
             commit_count: 0,
             verify_count: 0,
             failed_ops: Vec::new(),
@@ -73,27 +95,59 @@ impl ClusterOracle {
 
     /// Record a successful commit - updates expected state
     pub fn record_commit(&mut self, key: &str, value: &str) {
+        let cmd = format!("SET {key} {value}");
+        self.record_commit_with_command(key, value, cmd.as_bytes());
+    }
+
+    /// Record a successful commit with explicit command payload
+    pub fn record_commit_with_command(&mut self, key: &str, value: &str, command: &[u8]) {
         self.expected_state.insert(key.to_string(), value.to_string());
+        self.history.push(command.to_vec());
+        self.record_write_op(key, Some(value.to_string()));
         self.commit_count += 1;
     }
 
     /// Record a must-survive commit (written without partial writes)
     pub fn record_must_survive(&mut self, key: &str, value: &str) {
+        let cmd = format!("SET {key} {value}");
+        self.record_must_survive_with_command(key, value, cmd.as_bytes());
+    }
+
+    /// Record a must-survive commit with explicit command payload
+    pub fn record_must_survive_with_command(&mut self, key: &str, value: &str, command: &[u8]) {
         self.expected_state.insert(key.to_string(), value.to_string());
         self.must_survive.insert(key.to_string(), value.to_string());
+        self.history.push(command.to_vec());
+        self.record_write_op(key, Some(value.to_string()));
         self.commit_count += 1;
     }
 
     /// Record a commit that may be lost after crash (partial write observed)
     pub fn record_may_be_lost(&mut self, key: &str, value: &str) {
+        let cmd = format!("SET {key} {value}");
+        self.record_may_be_lost_with_command(key, value, cmd.as_bytes());
+    }
+
+    /// Record a may-be-lost commit with explicit command payload
+    pub fn record_may_be_lost_with_command(&mut self, key: &str, value: &str, command: &[u8]) {
         self.expected_state.insert(key.to_string(), value.to_string());
         self.may_be_lost.insert(key.to_string(), value.to_string());
+        self.history.push(command.to_vec());
+        self.record_write_op(key, Some(value.to_string()));
         self.commit_count += 1;
     }
 
     /// Record a delete operation
     pub fn record_delete(&mut self, key: &str) {
+        let cmd = format!("DELETE {key}");
+        self.record_delete_with_command(key, cmd.as_bytes());
+    }
+
+    /// Record a delete operation with explicit command payload
+    pub fn record_delete_with_command(&mut self, key: &str, command: &[u8]) {
         self.expected_state.remove(key);
+        self.history.push(command.to_vec());
+        self.record_write_op(key, None);
         self.commit_count += 1;
     }
 
@@ -118,6 +172,25 @@ impl ClusterOracle {
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect()
+    }
+
+    /// Snapshot command history for log verification
+    pub fn history_payloads(&self) -> Vec<Vec<u8>> {
+        self.history.clone()
+    }
+
+    /// Record a read observation for history checks
+    pub fn record_read_observation(&mut self, key: &str, observed: Option<&str>) {
+        let id = self.next_op_id;
+        self.next_op_id += 1;
+        self.ops.push(OpRecord {
+            id,
+            key: key.to_string(),
+            kind: OpKind::Read {
+                observed: observed.map(|s| s.to_string()),
+            },
+            tick: self.current_tick,
+        });
     }
 
     /// Verify a read matches expected state
@@ -192,6 +265,9 @@ impl ClusterOracle {
     /// Reset the oracle for a new test run
     pub fn reset(&mut self) {
         self.expected_state.clear();
+        self.history.clear();
+        self.ops.clear();
+        self.next_op_id = 1;
         self.commit_count = 0;
         self.verify_count = 0;
         self.failed_ops.clear();
@@ -212,6 +288,7 @@ impl ClusterOracle {
         eprintln!("May-be-lost keys: {}", self.may_be_lost.len());
         eprintln!("Recovery cycle: {}", self.recovery_cycle);
         eprintln!("Keys in state: {}", self.expected_state.len());
+        eprintln!("Recorded ops: {}", self.ops.len());
 
         if !self.failed_ops.is_empty() {
             eprintln!("\nRecent failures (last 10):");
@@ -252,6 +329,41 @@ impl ClusterOracle {
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect()
+    }
+
+    /// Verify per-key linearizability in recorded history (sequential order).
+    pub fn verify_linearizable(&self) -> Result<(), String> {
+        let mut last_write: HashMap<&str, Option<&str>> = HashMap::new();
+
+        for op in &self.ops {
+            match &op.kind {
+                OpKind::Write { value } => {
+                    last_write.insert(&op.key, value.as_deref());
+                }
+                OpKind::Read { observed } => {
+                    let expected = last_write.get(op.key.as_str()).copied().flatten();
+                    if expected != observed.as_deref() {
+                        return Err(format!(
+                            "linearizability violation for key '{}': expected {:?}, got {:?} (op_id={}, tick={})",
+                            op.key, expected, observed, op.id, op.tick
+                        ));
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn record_write_op(&mut self, key: &str, value: Option<String>) {
+        let id = self.next_op_id;
+        self.next_op_id += 1;
+        self.ops.push(OpRecord {
+            id,
+            key: key.to_string(),
+            kind: OpKind::Write { value },
+            tick: self.current_tick,
+        });
     }
 
     /// Promote a may-be-lost key to must-survive if the expected value is present

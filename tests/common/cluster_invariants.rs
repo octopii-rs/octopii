@@ -162,6 +162,33 @@ impl InvariantChecker {
         Ok(())
     }
 
+    /// Check leader completeness (candidate's term must be >= max committed term).
+    pub fn check_leader_completeness(
+        &self,
+        leader_term: u64,
+        committed_entries: &[(u64, u64, u64)],
+    ) -> Result<(), InvariantViolation> {
+        let max_term = committed_entries
+            .iter()
+            .map(|(_, term, _)| *term)
+            .max()
+            .unwrap_or(0);
+        if leader_term < max_term {
+            let mut details = HashMap::new();
+            details.insert("leader_term".to_string(), leader_term.to_string());
+            details.insert("max_committed_term".to_string(), max_term.to_string());
+            return Err(InvariantViolation {
+                invariant: "LeaderCompleteness",
+                message: format!(
+                    "Leader term {} is behind max committed term {}",
+                    leader_term, max_term
+                ),
+                details,
+            });
+        }
+        Ok(())
+    }
+
     /// Check state machine consistency across nodes
     ///
     /// All nodes should have the same state machine state for entries

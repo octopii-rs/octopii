@@ -32,6 +32,9 @@ mod comprehensive_tests {
     // - CLUSTER_SEED_START / CLUSTER_SEED_COUNT
     // - CLUSTER_OPS / CLUSTER_STRESS_OPS
     // - CLUSTER_STRESS_SEED_COUNT / CLUSTER_WALRUS_SEED_COUNT
+    // - CLUSTER_VERIFY_FULL / CLUSTER_VERIFY_INVARIANTS / CLUSTER_INVARIANT_INTERVAL
+    // - CLUSTER_VERIFY_LOGS / CLUSTER_VERIFY_EACH_OP / CLUSTER_VERIFY_DURABILITY / CLUSTER_VERIFY_HISTORY
+    // - CLUSTER_VERIFY_LOG_DURABILITY
 
     fn seed_range() -> (u64, u64) {
         let start = std::env::var("CLUSTER_SEED_START")
@@ -65,6 +68,8 @@ mod comprehensive_tests {
         params.invariant_interval = 25;
         params.verify_logs = true;
         params.verify_each_op = true;
+        params.verify_history = true;
+        params.verify_log_durability = true;
     }
 
     fn enable_durability(params: &mut ClusterParams) {
@@ -579,6 +584,27 @@ mod comprehensive_tests {
         assert!(leader.is_some(), "leader election failed");
 
         harness.run_oracle_workload(small_ops_count() / 2).await;
+
+        harness.cleanup();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn log_durability_single_node_cycles() {
+        let seed = 300010;
+        let error_rate = walrus_error_rate(seed, 0.10);
+        let mut params = ClusterParams::new(1, seed, error_rate, FaultProfile::PartialWrites);
+        params.enable_partial_writes = true;
+        params.verify_log_durability = true;
+        let mut harness = ClusterHarness::new(params).await;
+
+        for _cycle in 0..3 {
+            harness.run_oracle_workload(small_ops_count() / 4).await;
+            harness.crash_node(0, CrashReason::Scheduled).await;
+            harness.tick(50, 50).await;
+            harness.recover_node(0).await;
+            harness.tick(50, 50).await;
+            harness.verify_log_durability(0).await;
+        }
 
         harness.cleanup();
     }
