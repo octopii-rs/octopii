@@ -15,6 +15,6 @@ jobs:
       - name: Set vendored protoc
         run: echo "PROTOC=$(cargo run --quiet --bin protoc_path)" >> "$GITHUB_ENV"
       - name: Run cluster simulation tests
-        run: cargo test --features simulation,openraft --test cluster_simulation --no-fail-fast -- --test-threads=5 --nocapture
+        run: cargo test --features simulation,openraft --test cluster_simulation --no-fail-fast -- --test-threads=15 --nocapture
       - if: always()
         run: rm -rf /tmp/octopii_sim_cluster_* || true

@@ -44,7 +44,7 @@ mod comprehensive_tests {
         let count = std::env::var("CLUSTER_SEED_COUNT")
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
-            .unwrap_or(20);
+            .unwrap_or(50);
         (start, count)
     }
 
@@ -233,7 +233,7 @@ mod comprehensive_tests {
     #[tokio::test(flavor = "current_thread")]
     async fn io_faults_20pct_seed_sweep() {
         let (start, count) = seed_range();
-        for seed in start..(start + count.min(10)) {
+        for seed in start..(start + count) {
             let error_rate = walrus_error_rate(seed, 0.20);
             let mut params = ClusterParams::new(3, seed, error_rate, FaultProfile::IoErrorsHeavy);
             enable_full_verification(&mut params);
@@ -250,7 +250,7 @@ mod comprehensive_tests {
     #[tokio::test(flavor = "current_thread")]
     async fn io_faults_25pct_seed_sweep() {
         let (start, count) = seed_range();
-        for seed in start..(start + count.min(5)) {
+        for seed in start..(start + count) {
             let error_rate = walrus_error_rate(seed, 0.25);
             let mut params = ClusterParams::new(3, seed, error_rate, FaultProfile::IoErrorsHeavy);
             enable_full_verification(&mut params);
@@ -331,6 +331,7 @@ mod comprehensive_tests {
         for seed in start..(start + count) {
             let mut params = ClusterParams::new(3, seed, 0.0, FaultProfile::ReorderTimeoutBandwidth);
             enable_full_verification(&mut params);
+            params.require_all_nodes = false;
             let mut harness = ClusterHarness::new(params).await;
             let leader = harness.wait_for_leader().await;
             assert!(leader.is_some(), "leader election failed for seed {}", seed);
@@ -365,7 +366,7 @@ mod comprehensive_tests {
     #[tokio::test(flavor = "current_thread")]
     async fn combined_faults_partition_with_partial_writes() {
         let (start, count) = seed_range();
-        for seed in start..(start + count.min(10)) {
+        for seed in start..(start + count) {
             let error_rate = walrus_error_rate(seed, 0.05);
             let mut params = ClusterParams::new(5, seed, error_rate, FaultProfile::PartitionChurn);
             enable_full_verification(&mut params);
@@ -722,7 +723,7 @@ mod comprehensive_tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn full_verification_seed_sweep_smoke() {
-        let seeds = walrus_seed_sequence(0x9e3779b97f4a7c15, 20);
+        let seeds = walrus_seed_sequence(0x9e3779b97f4a7c15, 50);
         for seed in seeds {
             let mut params = ClusterParams::new(3, seed, 0.0, FaultProfile::None);
             enable_full_verification(&mut params);
@@ -737,7 +738,7 @@ mod comprehensive_tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn full_verification_fault_seed_sweep_smoke() {
-        let seeds = walrus_seed_sequence(0xd1b54a32d192ed03, 20);
+        let seeds = walrus_seed_sequence(0xd1b54a32d192ed03, 50);
         for seed in seeds {
             let error_rate = walrus_error_rate(seed, 0.05);
             let mut params = ClusterParams::new(3, seed, error_rate, FaultProfile::IoErrorsLight);

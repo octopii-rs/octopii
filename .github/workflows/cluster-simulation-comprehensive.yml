@@ -22,52 +22,52 @@ jobs:
           CLUSTER_SEED_START: "0"
           CLUSTER_SEED_COUNT: "20"
           CLUSTER_OPS: "1000"
-        run: cargo test --features simulation,openraft --test cluster_simulation_comprehensive basic_correctness_ -- --test-threads=5
+        run: cargo test --features simulation,openraft --test cluster_simulation_comprehensive basic_correctness_ -- --test-threads=15
       - name: Run I/O fault tests
         env:
           CLUSTER_SEED_START: "0"
           CLUSTER_SEED_COUNT: "20"
           CLUSTER_OPS: "500"
-        run: cargo test --features simulation,openraft --test cluster_simulation_comprehensive io_faults_ -- --test-threads=5
+        run: cargo test --features simulation,openraft --test cluster_simulation_comprehensive io_faults_ -- --test-threads=15
       - name: Run network fault tests
         env:
           CLUSTER_SEED_START: "0"
           CLUSTER_SEED_COUNT: "20"
           CLUSTER_OPS: "500"
-        run: cargo test --features simulation,openraft --test cluster_simulation_comprehensive network_faults_ -- --test-threads=5
+        run: cargo test --features simulation,openraft --test cluster_simulation_comprehensive network_faults_ -- --test-threads=15
       - name: Run combined fault tests
         env:
           CLUSTER_SEED_START: "0"
           CLUSTER_SEED_COUNT: "20"
           CLUSTER_OPS: "500"
-        run: cargo test --features simulation,openraft --test cluster_simulation_comprehensive combined_faults_ -- --test-threads=5
+        run: cargo test --features simulation,openraft --test cluster_simulation_comprehensive combined_faults_ -- --test-threads=15
       - name: Run crash recovery tests
         env:
           CLUSTER_SEED_START: "0"
           CLUSTER_SEED_COUNT: "10"
           CLUSTER_OPS: "500"
-        run: cargo test --features simulation,openraft --test cluster_simulation_comprehensive crash_recovery_ -- --test-threads=5
+        run: cargo test --features simulation,openraft --test cluster_simulation_comprehensive crash_recovery_ -- --test-threads=15
       - name: Run membership tests
         env:
           CLUSTER_OPS: "500"
-        run: cargo test --features simulation,openraft --test cluster_simulation_comprehensive membership_ -- --test-threads=5
+        run: cargo test --features simulation,openraft --test cluster_simulation_comprehensive membership_ -- --test-threads=15
       - name: Run snapshot tests
         env:
           CLUSTER_OPS: "500"
-        run: cargo test --features simulation,openraft --test cluster_simulation_comprehensive snapshot_ -- --test-threads=5
+        run: cargo test --features simulation,openraft --test cluster_simulation_comprehensive snapshot_ -- --test-threads=15
       - name: Run stress crash tests
         env:
           CLUSTER_OPS: "500"
-        run: cargo test --features simulation,openraft --test cluster_simulation_comprehensive stress_crash_ -- --test-threads=5
+        run: cargo test --features simulation,openraft --test cluster_simulation_comprehensive stress_crash_ -- --test-threads=10
       - name: Run stress cluster tests
         env:
           CLUSTER_STRESS_OPS: "5000"
-        run: cargo test --features simulation,openraft --test cluster_simulation_comprehensive stress_cluster_ -- --test-threads=5 --nocapture
+        run: cargo test --features simulation,openraft --test cluster_simulation_comprehensive stress_cluster_ -- --test-threads=10 --nocapture
       - name: Run deterministic seed sweep tests
         env:
           CLUSTER_OPS: "1000"
           CLUSTER_STRESS_OPS: "5000"
-        run: cargo test --features simulation,openraft --test cluster_simulation_comprehensive deterministic_ -- --test-threads=5
+        run: cargo test --features simulation,openraft --test cluster_simulation_comprehensive deterministic_ -- --test-threads=15
       - if: failure()
         uses: actions/upload-artifact@v4
         with:
