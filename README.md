@@ -10,8 +10,6 @@
 
 </div>
 
----
-
 ## Overview
 
 Octopii is a distributed systems kernel that provides the fundamental primitives for building replicated, crash-resistant services. Unlike typical frameworks that glue libraries together, Octopii abstracts over time, storage, network, and randomness to enable both production deployment and rigorous deterministic testing.
