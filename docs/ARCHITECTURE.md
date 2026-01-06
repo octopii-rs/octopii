@@ -2058,10 +2058,10 @@ OpenRaft integration:
 - `network.rs`: `QuinnNetwork`, `QuinnNetworkFactory`
 
 ### src/raft/
-Alternative raft-rs integration (legacy):
+raft-rs integration for simulation mode (`simulation` feature):
 - `node.rs`: `RaftNode` (TiKV-style RawNode API)
-- `storage.rs`: `MemStorage`, `WalStorage`
-- `network.rs`: `RaftNetwork`
+- `storage.rs`: `WalStorage` with two-phase commit for crash recovery testing
+- Used by DST harness for deterministic fault injection
 
 ### src/chunk.rs
 Chunk transfer primitives:
@@ -2070,6 +2070,17 @@ Chunk transfer primitives:
 
 ### src/shipping_lane.rs
 High-level file/memory transfer API.
+
+### src/simulation.rs
+DST harness (`simulation` feature):
+- `SimRng`: Seeded XORshift PRNG
+- `DurabilityOracle`: Tracks entries across crash cycles
+- `Oracle`: Verifies read consistency
+
+### src/sim_time.rs
+Time abstraction for DST:
+- `SimInstant`: Controlled time in simulation
+- `now()`, `sleep()`, `timeout()`: Dual-mode time functions
 
 ---
 
@@ -2124,24 +2135,39 @@ Linearizable read: ~3ms (heartbeat round)
 
 ## Testing
 
-Octopii includes comprehensive tests:
+Octopii includes comprehensive tests with Deterministic Simulation Testing (DST):
 
-**Unit Tests:**
+**Standard Tests:**
 ```bash
-cargo test --lib
+cargo test --features openraft
 ```
 
-**Integration Tests:**
+**Deterministic Simulation Tests (`simulation` feature):**
 ```bash
-cargo test --test '*'
+cargo test --features simulation
 ```
+
+DST abstracts over all sources of non-determinism (time, I/O, randomness) to enable reproducible fault injection:
+
+| Component | Production | Simulation |
+|-----------|------------|------------|
+| Time | `tokio::time::Instant` | `SimInstant` (controlled) |
+| Randomness | System RNG | `SimRng` (seeded XORshift) |
+| File I/O | Real filesystem | `VFS` with fault injection |
+| Network | QUIC/TCP | In-memory with partitions |
+
+**Fault Injection Capabilities:**
+- I/O errors at configurable rates (5-25%)
+- Partial writes (torn pages)
+- fsync failures
+- Network partitions and delays
 
 **Network Failure Injection (requires `openraft-filters` feature):**
 ```rust
 #[cfg(feature = "openraft-filters")]
-network.drop_packets(1, 2); // Drop all packets from node 1 to node 2
-network.delay_packets(1, 2, Duration::from_millis(500));
-network.partition(vec![1], vec![2, 3]); // Split cluster
+node.add_send_drop_to(2);  // Drop all messages to node 2
+node.add_send_delay_to(2, Duration::from_millis(500));
+node.add_partition(vec![1], vec![2, 3]); // Split cluster
 ```
 
 ---

@@ -1,8 +1,8 @@
 <div align="center">
-  <img src="./assets/octopii.png"
+  <img src="./assets/octopii4.svg"
        alt="octopii"
        width="20%">
-  <div>Octopii: A batteries-included framework for building distributed systems</div>
+  <div>Octopii: A distributed systems kernel for building replicated, fault-tolerant services</div>
   <br>
 
 [![CI](https://github.com/octopii-rs/octopii/actions/workflows/ci.yml/badge.svg)](https://github.com/octopii-rs/octopii/actions)
@@ -12,17 +12,17 @@
 
 ---
 
-## What's Included
+## Overview
 
-Octopii provides everything you need to build replicated, fault-tolerant systems:
+Octopii is a distributed systems kernel that provides the fundamental primitives for building replicated, crash-resistant services. Unlike typical frameworks that glue libraries together, Octopii abstracts over time, storage, network, and randomness to enable both production deployment and rigorous deterministic testing.
 
-- **Raft Consensus** - Leader election, log replication, and membership changes via OpenRaft
-- **QUIC Transport** - Fast, encrypted, multiplexed networking with Quinn
-- **Durable Persistence** - Crash-resistant Write-Ahead Log (Walrus) with checksums
-- **Pluggable State Machines** - Bring your own replication logic (KV stores, counters, registries, etc.)
-- **Large File Transfers** - P2P streaming with automatic checksum verification (Shipping Lane)
-- **RPC Framework** - Request/response messaging with correlation and timeouts
-- **Runtime Management** - Flexible async execution with Tokio
+### Core Components
+
+- **Raft Consensus** - Two implementations: OpenRaft (async, production) and raft-rs (simulation mode)
+- **Walrus WAL** - Custom Write-Ahead Log with two-phase commit, dual-topic durability, and crash recovery
+- **QUIC Transport** - Encrypted, multiplexed networking with connection pooling via Quinn
+- **Deterministic Simulation** - Controlled time, I/O fault injection, and reproducible randomness for crash testing
+- **Durability Verification** - Multi-cycle crash recovery validation with invariant checking
 
 ## Architecture
 
@@ -32,17 +32,20 @@ Octopii provides everything you need to build replicated, fault-tolerant systems
        width="70%">
 </div>
 
-## Quick Start
+## Features
 
-Add Octopii to your `Cargo.toml`:
+| Feature | Description |
+|---------|-------------|
+| `openraft` (default) | Production mode with async Raft and QUIC transport |
+| `simulation` | DST mode with fault injection and controlled time |
+| `openraft-filters` | Network partition and delay simulation |
 
 ```toml
 [dependencies]
-octopii = { version = "0.1.0", features = ["openraft"] }
-tokio = { version = "1", features = ["full"] }
+octopii = { git = "https://github.com/octopii-rs/octopii", features = ["openraft"] }
 ```
 
-Create a simple replicated key-value store:
+## Quick Start
 
 ```rust
 use octopii::{Config, OctopiiNode, OctopiiRuntime};
@@ -74,71 +77,89 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-## Building Your Distributed System
+## Custom State Machines
 
-Octopii makes it easy to replicate custom application logic:
-
-1. **Implement your state machine** - Define how commands are applied to your application state
-2. **Configure your cluster** - Specify node IDs, addresses, and persistence settings
-3. **Start your nodes** - Octopii handles leader election, replication, and failover
-4. **Use the API** - Propose writes, query state, manage membership
+Implement `StateMachineTrait` to replicate your own logic:
 
 ```rust
-use octopii::StateMachineTrait;
-use bytes::Bytes;
-
-struct MyStateMachine {
-    // Your application state
-}
-
 impl StateMachineTrait for MyStateMachine {
-    fn apply(&self, command: &[u8]) -> Result<Bytes, String> {
-        // Execute command deterministically
-        // This will be replicated across all nodes
-    }
-
-    fn snapshot(&self) -> Vec<u8> {
-        // Serialize your state for fast catch-up
-    }
-
-    fn restore(&self, data: &[u8]) -> Result<(), String> {
-        // Restore from snapshot
-    }
+    fn apply(&self, command: &[u8]) -> Result<Bytes, String> { /* deterministic execution */ }
+    fn snapshot(&self) -> Vec<u8> { /* serialize state */ }
+    fn restore(&self, data: &[u8]) -> Result<(), String> { /* restore from snapshot */ }
+    fn compact(&self) -> Result<(), String> { Ok(()) } // optional
 }
 ```
 
+## Durability Model
+
+Two-phase commit with dual topics for crash resistance:
+
+1. Write to main topic → 2. Write to recovery topic → 3. Write commit marker
+
+On recovery, only entries with a commit marker are visible. Prevents partial write corruption even with mid-operation crashes.
+
 ## Documentation
 
-Comprehensive guides are available in the `docs/` directory:
-
-- **[API.md](docs/API.md)** - Complete API reference with examples
-- **[ARCHITECTURE.md](docs/ARCHITECTURE.md)** - System design, data flow, and internals
-- **[CUSTOM_STATE_MACHINES.md](docs/CUSTOM_STATE_MACHINES.md)** - Guide to implementing custom replication logic
-- **[SHIPPING_LANE.md](docs/SHIPPING_LANE.md)** - P2P file transfer and bulk data streaming
+- [API.md](docs/API.md) - API reference
+- [ARCHITECTURE.md](docs/ARCHITECTURE.md) - System internals
+- [CUSTOM_STATE_MACHINES.md](docs/CUSTOM_STATE_MACHINES.md) - State machine guide
+- [SHIPPING_LANE.md](docs/SHIPPING_LANE.md) - P2P file transfers
 
 ## Examples
 
-Working examples are available in the `examples/` directory:
-
-- `examples/node/` - Three-node cluster setup
-- `examples/custom_state_machine/` - Custom state machine implementation
-- `examples/shipping_lane/` - Large file transfers
-- `examples/rpc/` - Custom RPC messaging
-- `examples/wal/` - Direct WAL usage
-
-Run an example:
+`node/`, `custom_state_machine/`, `shipping_lane/`, `rpc/`, `rpc_shipping_lane/`, `wal/`, `runtime/`
 
 ```bash
 cargo run --example node --features openraft
 ```
 
-## Why Octopii?
+## Deterministic Simulation Testing (DST)
 
-Most distributed systems require assembling multiple components: a consensus library, network transport, persistence layer, RPC framework, and data transfer mechanisms. Octopii provides all of these integrated and tested together, so you can focus on your application logic instead of infrastructure plumbing.
+Octopii implements DST, the methodology pioneered by FoundationDB and adopted by TigerBeetle. Find bugs that would take years to surface in production by running millions of fault-injected operations in minutes.
+
+### Abstraction Layer
+
+| Component | Production | Simulation |
+|-----------|------------|------------|
+| Time | `tokio::time::Instant` | `SimInstant` (controlled) |
+| Randomness | System RNG | `SimRng` (seeded XORshift) |
+| File I/O | Real filesystem | `VFS` with fault injection |
+| Network | QUIC/TCP | In-memory with partitions |
+
+Given a seed, tests are fully reproducible.
+
+### Fault Injection
+
+I/O errors, partial writes (torn pages), fsync failures, artificial latency.
+
+### Verification
+
+Consistency, durability (`DurabilityOracle`), Raft invariants, recovery idempotence.
+
+## Test Coverage
+
+11,000+ lines of tests across 19 test files. The cluster simulation suite covers:
+
+| Category | Coverage |
+|----------|----------|
+| Basic correctness | 3, 5, 7-node clusters |
+| I/O faults | 5%, 10%, 15%, 20%, 25% error rates |
+| Network faults | Partitions, leader isolation, flapping connectivity |
+| Combined faults | I/O errors + network partitions |
+| Crash recovery | Single node, leader, multi-cycle (3, 5, 8, 10 cycles) |
+| Stress | Majority crash, full chaos mode |
+
+Each category runs across 50 seeds by default, 1000 operations per run (5000 for stress).
+
+```bash
+cargo test --features openraft                           # Standard tests
+cargo test --features simulation                         # DST with fault injection
+CLUSTER_SEED_COUNT=200 cargo test --features simulation  # Extended coverage
+```
 
 ## Project Status
 
-Octopii is currently in early development (v0.1.0). The API may change as the project evolves.
+Under active development. The DST infrastructure has validated crash recovery across hundreds of thousands of fault-injected operations.
 
 ## License
 

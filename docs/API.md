@@ -37,7 +37,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-octopii = { version = "*", features = ["openraft"] }
+octopii = { git = "https://github.com/octopii-rs/octopii", features = ["openraft"] }
 tokio = { version = "1", features = ["full"] }
 ```
 
@@ -2013,7 +2013,7 @@ Enables OpenRaft integration and the `OctopiiNode` API.
 
 ```toml
 [dependencies]
-octopii = { version = "*", features = ["openraft"] }
+octopii = { git = "https://github.com/octopii-rs/octopii", features = ["openraft"] }
 ```
 
 #### `openraft-filters`
@@ -2022,7 +2022,7 @@ Enables network failure simulation for testing.
 
 ```toml
 [dependencies]
-octopii = { version = "*", features = ["openraft", "openraft-filters"] }
+octopii = { git = "https://github.com/octopii-rs/octopii", features = ["openraft", "openraft-filters"] }
 ```
 
 **Usage:**

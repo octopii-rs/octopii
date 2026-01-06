@@ -23,9 +23,12 @@ pub use config::Config;
 pub use error::{OctopiiError, Result};
 #[cfg(feature = "openraft")]
 pub use openraft::node::OpenRaftNode as OctopiiNode;
+pub use rpc::RpcHandler;
 pub use runtime::OctopiiRuntime;
 pub use shipping_lane::ShippingLane;
 pub use state_machine::{KvStateMachine, StateMachine, StateMachineTrait, WalBackedStateMachine};
+pub use transport::{QuicTransport, Transport};
+pub use wal::WriteAheadLog;
 
 #[cfg(test)]
 mod tests {
