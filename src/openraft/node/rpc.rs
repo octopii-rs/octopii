@@ -37,7 +37,9 @@ impl OpenRaftNode {
                                         openraft::raft::AppendEntriesResponse<AppTypeConfig>,
                                         _,
                                         _,
-                                    >(&data, |req| raft.append_entries(req))
+                                    >(&data, |req| {
+                                        raft.append_entries(req)
+                                    })
                                     .await
                                 }
                                 "vote" => {
@@ -46,7 +48,9 @@ impl OpenRaftNode {
                                         openraft::raft::VoteResponse<AppTypeConfig>,
                                         _,
                                         _,
-                                    >(&data, |req| raft.vote(req))
+                                    >(&data, |req| {
+                                        raft.vote(req)
+                                    })
                                     .await
                                 }
                                 "install_snapshot" => {
@@ -55,7 +59,9 @@ impl OpenRaftNode {
                                         openraft::raft::InstallSnapshotResponse<AppTypeConfig>,
                                         _,
                                         _,
-                                    >(&data, |req| raft.install_snapshot(req))
+                                    >(&data, |req| {
+                                        raft.install_snapshot(req)
+                                    })
                                     .await
                                 }
                                 _ => None,

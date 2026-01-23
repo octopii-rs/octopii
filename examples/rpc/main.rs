@@ -38,7 +38,10 @@ pub async fn run_rpc_example() -> Result<String, Box<dyn Error>> {
         })
         .await;
 
-    let server_loop = tokio::spawn(run_server(Arc::clone(&server_transport), Arc::clone(&server_rpc)));
+    let server_loop = tokio::spawn(run_server(
+        Arc::clone(&server_transport),
+        Arc::clone(&server_rpc),
+    ));
 
     let client_addr: SocketAddr = "127.0.0.1:0".parse()?;
     let client_transport = Arc::new(QuicTransport::new(client_addr).await?);
@@ -70,10 +73,7 @@ pub async fn run_rpc_example() -> Result<String, Box<dyn Error>> {
     }
 }
 
-async fn run_server(
-    transport: Arc<QuicTransport>,
-    rpc: Arc<RpcHandler>,
-) {
+async fn run_server(transport: Arc<QuicTransport>, rpc: Arc<RpcHandler>) {
     while let Ok((addr, peer)) = transport.accept().await {
         let rpc = Arc::clone(&rpc);
         let peer = peer as Arc<dyn Peer>;

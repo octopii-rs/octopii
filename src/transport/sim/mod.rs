@@ -7,7 +7,6 @@ mod config;
 mod fault;
 mod peer;
 mod router;
-mod rng;
 
 pub use config::SimConfig;
 pub use peer::{SimPeer, SimTransport};

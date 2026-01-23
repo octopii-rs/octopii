@@ -1,6 +1,6 @@
+use crate::invariants::sim_assert;
 use crate::wal::wal::block::Block;
 use crate::wal::wal::config::{debug_print, DEFAULT_BLOCK_SIZE, MAX_ALLOC, MAX_FILE_SIZE};
-use crate::invariants::sim_assert;
 use crate::wal::wal::paths::WalPathManager;
 use crate::wal::wal::storage::{SharedMmap, SharedMmapKeeper};
 use std::cell::UnsafeCell;
@@ -106,10 +106,10 @@ impl BlockAllocator {
                 "invalid allocation size, a single entry can't be more than 1gb",
             ));
         }
-        let alloc_units = (want_bytes + DEFAULT_BLOCK_SIZE - 1) / DEFAULT_BLOCK_SIZE;
+        let alloc_units = want_bytes.div_ceil(DEFAULT_BLOCK_SIZE);
         let alloc_size = alloc_units * DEFAULT_BLOCK_SIZE;
         sim_assert(
-            alloc_size % DEFAULT_BLOCK_SIZE == 0,
+            alloc_size.is_multiple_of(DEFAULT_BLOCK_SIZE),
             "alloc size not aligned to default block size",
         );
         debug_print!(
@@ -143,12 +143,18 @@ impl BlockAllocator {
             mmap: data.mmap.clone(),
             used: 0,
         };
-        sim_assert(ret.offset % DEFAULT_BLOCK_SIZE == 0, "block offset not aligned");
+        sim_assert(
+            ret.offset.is_multiple_of(DEFAULT_BLOCK_SIZE),
+            "block offset not aligned",
+        );
         sim_assert(
             ret.offset + ret.limit <= MAX_FILE_SIZE,
             "block exceeds max file size",
         );
-        sim_assert(ret.limit >= want_bytes, "block limit smaller than requested");
+        sim_assert(
+            ret.limit >= want_bytes,
+            "block limit smaller than requested",
+        );
         // register the new block before handing it out
         BlockStateTracker::register_block(ret.id as usize, &ret.file_path);
         FileStateTracker::register_file_if_absent(&ret.file_path);
@@ -259,10 +265,10 @@ impl BlockStateTracker {
     pub(super) fn get_file_path_for_block(block_id: usize) -> Option<String> {
         #[cfg(feature = "simulation")]
         {
-            return BLOCK_STATE_MAP.with(|map| {
+            BLOCK_STATE_MAP.with(|map| {
                 let map = map.borrow();
                 map.get(&block_id).map(|b| b.file_path.clone())
-            });
+            })
         }
         #[cfg(not(feature = "simulation"))]
         {
@@ -337,12 +343,13 @@ impl FileStateTracker {
         {
             FILE_STATE_MAP.with(|map| {
                 let mut map = map.borrow_mut();
-                map.entry(file_path.to_string()).or_insert_with(|| FileState {
-                    locked_block_ctr: AtomicU16::new(0),
-                    checkpoint_block_ctr: AtomicU16::new(0),
-                    total_blocks: AtomicU16::new(0),
-                    is_fully_allocated: AtomicBool::new(false),
-                });
+                map.entry(file_path.to_string())
+                    .or_insert_with(|| FileState {
+                        locked_block_ctr: AtomicU16::new(0),
+                        checkpoint_block_ctr: AtomicU16::new(0),
+                        total_blocks: AtomicU16::new(0),
+                        is_fully_allocated: AtomicBool::new(false),
+                    });
             });
         }
         #[cfg(not(feature = "simulation"))]
@@ -480,7 +487,7 @@ impl FileStateTracker {
     pub(super) fn get_state_snapshot(file_path: &str) -> Option<(u16, u16, u16, bool)> {
         #[cfg(feature = "simulation")]
         {
-            return FILE_STATE_MAP.with(|map| {
+            FILE_STATE_MAP.with(|map| {
                 let map = map.borrow();
                 let st = map.get(file_path)?;
                 let locked = st.locked_block_ctr.load(Ordering::Acquire);
@@ -488,7 +495,7 @@ impl FileStateTracker {
                 let total = st.total_blocks.load(Ordering::Acquire);
                 let fully = st.is_fully_allocated.load(Ordering::Acquire);
                 Some((locked, checkpointed, total, fully))
-            });
+            })
         }
         #[cfg(not(feature = "simulation"))]
         {

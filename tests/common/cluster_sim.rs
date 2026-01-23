@@ -5,22 +5,22 @@ use crate::common::cluster_log_oracle::LogDurabilityOracle;
 use crate::common::cluster_oracle::ClusterOracle;
 use octopii::config::Config;
 use octopii::openraft::node::OpenRaftNode;
-use octopii::openraft::types::AppEntry;
 use octopii::openraft::sim_runtime;
+use octopii::openraft::types::AppEntry;
 use octopii::runtime::OctopiiRuntime;
 use octopii::transport::{SimConfig, SimRouter, SimTransport, Transport};
-use octopii::wal::wal::vfs::sim::{self, SimConfig as VfsSimConfig};
 use octopii::wal::wal;
-use std::collections::HashMap;
+use octopii::wal::wal::vfs::sim::{self, SimConfig as VfsSimConfig};
+use openraft::vote::RaftLeaderId;
 use std::collections::hash_map::DefaultHasher;
+use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use tokio::task::yield_now;
 use tokio::time::Duration;
-use openraft::vote::RaftLeaderId;
 
 #[derive(Clone, Copy, Debug)]
 pub enum FaultProfile {
@@ -28,12 +28,12 @@ pub enum FaultProfile {
     ReorderTimeoutBandwidth,
     PartitionChurn,
     // Extended fault profiles
-    IoErrorsLight,      // 5% I/O error rate
-    IoErrorsMedium,     // 10% I/O error rate
-    IoErrorsHeavy,      // 15-20% I/O error rate
-    PartialWrites,      // Enable torn writes
+    IoErrorsLight,        // 5% I/O error rate
+    IoErrorsMedium,       // 10% I/O error rate
+    IoErrorsHeavy,        // 15-20% I/O error rate
+    PartialWrites,        // Enable torn writes
     CombinedNetworkAndIo, // Network faults + I/O errors
-    SplitBrain,         // Partition isolating leader
+    SplitBrain,           // Partition isolating leader
     FlappingConnectivity, // Rapid partition/heal cycles
 }
 
@@ -73,34 +73,18 @@ pub struct ClusterParams {
 
 impl ClusterParams {
     pub fn new(size: usize, seed: u64, io_error_rate: f64, profile: FaultProfile) -> Self {
-        let verify_invariants = std::env::var("CLUSTER_VERIFY_INVARIANTS")
-            .ok()
-            .as_deref()
-            == Some("1");
+        let verify_invariants =
+            std::env::var("CLUSTER_VERIFY_INVARIANTS").ok().as_deref() == Some("1");
         let invariant_interval = std::env::var("CLUSTER_INVARIANT_INTERVAL")
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
             .unwrap_or(50);
-        let verify_full = std::env::var("CLUSTER_VERIFY_FULL")
-            .ok()
-            .as_deref()
-            == Some("1");
-        let verify_each_op = std::env::var("CLUSTER_VERIFY_EACH_OP")
-            .ok()
-            .as_deref()
-            == Some("1");
-        let verify_durability = std::env::var("CLUSTER_VERIFY_DURABILITY")
-            .ok()
-            .as_deref()
-            == Some("1");
-        let verify_logs = std::env::var("CLUSTER_VERIFY_LOGS")
-            .ok()
-            .as_deref()
-            == Some("1");
-        let verify_history = std::env::var("CLUSTER_VERIFY_HISTORY")
-            .ok()
-            .as_deref()
-            == Some("1");
+        let verify_full = std::env::var("CLUSTER_VERIFY_FULL").ok().as_deref() == Some("1");
+        let verify_each_op = std::env::var("CLUSTER_VERIFY_EACH_OP").ok().as_deref() == Some("1");
+        let verify_durability =
+            std::env::var("CLUSTER_VERIFY_DURABILITY").ok().as_deref() == Some("1");
+        let verify_logs = std::env::var("CLUSTER_VERIFY_LOGS").ok().as_deref() == Some("1");
+        let verify_history = std::env::var("CLUSTER_VERIFY_HISTORY").ok().as_deref() == Some("1");
         let verify_log_durability = std::env::var("CLUSTER_VERIFY_LOG_DURABILITY")
             .ok()
             .as_deref()
@@ -244,11 +228,7 @@ impl ClusterHarness {
             .map(|(idx, addr)| Config {
                 node_id: (idx + 1) as u64,
                 bind_addr: *addr,
-                peers: addrs
-                    .iter()
-                    .filter(|a| *a != addr)
-                    .copied()
-                    .collect(),
+                peers: addrs.iter().filter(|a| *a != addr).copied().collect(),
                 wal_dir: base.join(format!("n{}", idx + 1)),
                 worker_threads: 1,
                 wal_batch_size: 10,
@@ -546,7 +526,9 @@ impl ClusterHarness {
         let leader_id = self.wait_for_leader().await?;
         let leader_idx = self.nodes.iter().position(|n| n.id() == leader_id)?;
         let leader_addr = self.addrs[leader_idx];
-        let other_addrs: Vec<SocketAddr> = self.addrs.iter()
+        let other_addrs: Vec<SocketAddr> = self
+            .addrs
+            .iter()
             .filter(|&&a| a != leader_addr)
             .copied()
             .collect();
@@ -561,10 +543,12 @@ impl ClusterHarness {
 
     /// Create a partition between two groups of nodes
     pub fn partition_nodes(&self, group_a: &[usize], group_b: &[usize]) {
-        let addrs_a: Vec<SocketAddr> = group_a.iter()
+        let addrs_a: Vec<SocketAddr> = group_a
+            .iter()
             .filter_map(|&i| self.addrs.get(i).copied())
             .collect();
-        let addrs_b: Vec<SocketAddr> = group_b.iter()
+        let addrs_b: Vec<SocketAddr> = group_b
+            .iter()
             .filter_map(|&i| self.addrs.get(i).copied())
             .collect();
         self.router.add_partition(addrs_a, addrs_b);
@@ -668,7 +652,12 @@ impl ClusterHarness {
         };
 
         // Start the new node
-        let node = new_node_with_retry(config.clone(), self.rt.clone(), Arc::clone(&transport) as Arc<dyn Transport>).await;
+        let node = new_node_with_retry(
+            config.clone(),
+            self.rt.clone(),
+            Arc::clone(&transport) as Arc<dyn Transport>,
+        )
+        .await;
 
         // Add to cluster tracking
         self.addrs.push(new_addr);
@@ -677,9 +666,13 @@ impl ClusterHarness {
         self.nodes.push(node);
 
         // Tell the leader to add this node as a learner
-        let leader_id = self.wait_for_leader().await
+        let leader_id = self
+            .wait_for_leader()
+            .await
             .ok_or_else(|| octopii::error::OctopiiError::Rpc("no leader".to_string()))?;
-        let leader = self.nodes.iter()
+        let leader = self
+            .nodes
+            .iter()
             .find(|n| n.id() == leader_id)
             .ok_or_else(|| octopii::error::OctopiiError::Rpc("leader not found".to_string()))?;
 
@@ -694,15 +687,21 @@ impl ClusterHarness {
 
     /// Promote a learner to voter
     pub async fn promote_node(&mut self, idx: usize) -> octopii::Result<()> {
-        let node_id = self.nodes.get(idx)
+        let node_id = self
+            .nodes
+            .get(idx)
             .map(|n| n.id())
             .ok_or_else(|| octopii::error::OctopiiError::Rpc("node not found".to_string()))?;
 
         // Wait for the learner to catch up
         for _ in 0..100 {
-            let leader_id = self.wait_for_leader().await
+            let leader_id = self
+                .wait_for_leader()
+                .await
                 .ok_or_else(|| octopii::error::OctopiiError::Rpc("no leader".to_string()))?;
-            let leader = self.nodes.iter()
+            let leader = self
+                .nodes
+                .iter()
                 .find(|n| n.id() == leader_id)
                 .ok_or_else(|| octopii::error::OctopiiError::Rpc("leader not found".to_string()))?;
 
@@ -717,13 +716,17 @@ impl ClusterHarness {
             self.tick(10, 50).await;
         }
 
-        Err(octopii::error::OctopiiError::Rpc("learner did not catch up".to_string()))
+        Err(octopii::error::OctopiiError::Rpc(
+            "learner did not catch up".to_string(),
+        ))
     }
 
     /// Remove a node from the cluster (by crashing it and removing from membership)
     pub async fn remove_node(&mut self, idx: usize) -> octopii::Result<()> {
         if idx >= self.nodes.len() {
-            return Err(octopii::error::OctopiiError::Rpc("invalid node index".to_string()));
+            return Err(octopii::error::OctopiiError::Rpc(
+                "invalid node index".to_string(),
+            ));
         }
 
         // Crash the node
@@ -802,11 +805,13 @@ impl ClusterHarness {
                                     if actual == value {
                                         if self.durability_enabled {
                                             if partial_before == partial_after {
-                                                self.oracle
-                                                    .record_must_survive_with_command(key, value, &cmd_bytes);
+                                                self.oracle.record_must_survive_with_command(
+                                                    key, value, &cmd_bytes,
+                                                );
                                             } else {
-                                                self.oracle
-                                                    .record_may_be_lost_with_command(key, value, &cmd_bytes);
+                                                self.oracle.record_may_be_lost_with_command(
+                                                    key, value, &cmd_bytes,
+                                                );
                                             }
                                         } else {
                                             self.oracle
@@ -834,9 +839,13 @@ impl ClusterHarness {
 
     /// Query a value and verify against oracle
     pub async fn query_and_verify(&mut self, key: &str) -> octopii::Result<()> {
-        let leader_id = self.wait_for_leader().await
+        let leader_id = self
+            .wait_for_leader()
+            .await
             .ok_or_else(|| octopii::error::OctopiiError::Rpc("no leader".to_string()))?;
-        let leader = self.nodes.iter()
+        let leader = self
+            .nodes
+            .iter()
             .find(|n| n.id() == leader_id)
             .ok_or_else(|| octopii::error::OctopiiError::Rpc("leader not found".to_string()))?;
 
@@ -851,8 +860,12 @@ impl ClusterHarness {
 
     async fn record_log_durability(&mut self, cmd_bytes: &[u8], must_survive: bool) {
         let leader_id = self.wait_for_leader().await;
-        let Some(leader_id) = leader_id else { return; };
-        let Some(leader) = self.nodes.iter().find(|n| n.id() == leader_id) else { return; };
+        let Some(leader_id) = leader_id else {
+            return;
+        };
+        let Some(leader) = self.nodes.iter().find(|n| n.id() == leader_id) else {
+            return;
+        };
 
         if let Ok(log_state) = leader.log_state().await {
             if let Some(log_id) = log_state.last_log_id {
@@ -987,11 +1000,15 @@ impl ClusterHarness {
         if !self.log_durability_enabled {
             return;
         }
-        let Some(node) = self.nodes.get(node_idx) else { return; };
+        let Some(node) = self.nodes.get(node_idx) else {
+            return;
+        };
         let node_id = node.id();
         let state = node.log_state().await.expect("log_state");
         let last_purged = state.last_purged_log_id.map(|id| id.index);
-        let Some(last_log) = state.last_log_id else { return; };
+        let Some(last_log) = state.last_log_id else {
+            return;
+        };
         let entries = node
             .log_entries(1..=last_log.index)
             .await
@@ -1009,21 +1026,16 @@ impl ClusterHarness {
             .ok()
             .flatten()
             .map(|id| id.index);
-        let vote = node
-            .read_vote()
-            .await
-            .ok()
-            .flatten()
-            .map(|v| {
-                (
-                    v.leader_id.term(),
-                    v.leader_id.node_id().copied().unwrap_or_default(),
-                )
-            });
+        let vote = node.read_vote().await.ok().flatten().map(|v| {
+            (
+                v.leader_id.term(),
+                v.leader_id.node_id().copied().unwrap_or_default(),
+            )
+        });
 
-        if let Err(e) = self
-            .log_oracle
-            .verify_after_recovery(node_id, &recovered, committed, vote, last_purged)
+        if let Err(e) =
+            self.log_oracle
+                .verify_after_recovery(node_id, &recovered, committed, vote, last_purged)
         {
             panic!("{e}");
         }
@@ -1448,14 +1460,8 @@ impl FaultPlan {
                     let (group_a, group_b) = pick_partition(&mut rng, n);
                     events.push(FaultEvent::Partition {
                         at_ms: start_ms + t1,
-                        group_a: group_a
-                            .iter()
-                            .map(|i| addrs[*i])
-                            .collect::<Vec<_>>(),
-                        group_b: group_b
-                            .iter()
-                            .map(|i| addrs[*i])
-                            .collect::<Vec<_>>(),
+                        group_a: group_a.iter().map(|i| addrs[*i]).collect::<Vec<_>>(),
+                        group_b: group_b.iter().map(|i| addrs[*i]).collect::<Vec<_>>(),
                     });
                     events.push(FaultEvent::Clear {
                         at_ms: start_ms + t2,
@@ -1463,14 +1469,8 @@ impl FaultPlan {
                     let (group_c, group_d) = pick_partition(&mut rng, n);
                     events.push(FaultEvent::Partition {
                         at_ms: start_ms + t3,
-                        group_a: group_c
-                            .iter()
-                            .map(|i| addrs[*i])
-                            .collect::<Vec<_>>(),
-                        group_b: group_d
-                            .iter()
-                            .map(|i| addrs[*i])
-                            .collect::<Vec<_>>(),
+                        group_a: group_c.iter().map(|i| addrs[*i]).collect::<Vec<_>>(),
+                        group_b: group_d.iter().map(|i| addrs[*i]).collect::<Vec<_>>(),
                     });
                     events.push(FaultEvent::Clear {
                         at_ms: start_ms + t3 + 600,
@@ -1585,9 +1585,7 @@ impl FaultPlan {
                     router.set_bandwidth_pair(to, from, bytes_per_ms, burst_bytes);
                 }
                 FaultEvent::Partition {
-                    group_a,
-                    group_b,
-                    ..
+                    group_a, group_b, ..
                 } => {
                     router.add_partition(group_a, group_b);
                 }
@@ -1722,8 +1720,8 @@ async fn new_node_with_retry(
         let prev_partial = sim::get_partial_writes_enabled();
         sim::set_io_error_rate(0.0);
         sim::set_partial_writes_enabled(false);
-        let node_res = OpenRaftNode::new_sim(config.clone(), rt.clone(), Arc::clone(&transport))
-            .await;
+        let node_res =
+            OpenRaftNode::new_sim(config.clone(), rt.clone(), Arc::clone(&transport)).await;
         let node_err = node_res.as_ref().err().map(|e| e.to_string());
         let node = node_res.ok().map(Arc::new);
         let start_err = if let Some(node) = node.as_ref() {

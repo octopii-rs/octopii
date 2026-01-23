@@ -1,3 +1,6 @@
+/// Simple XorShift PRNG for deterministic simulation.
+/// Used by both simulation harness and transport/sim router.
+#[derive(Clone)]
 pub struct SimRng {
     state: u64,
 }
@@ -6,11 +9,12 @@ impl SimRng {
     pub fn new(seed: u64) -> Self {
         let mut rng = Self { state: 0 };
         rng.state = seed.wrapping_add(0x9E3779B97F4A7C15);
-        rng.next();
+        rng.next_u64();
         rng
     }
 
-    pub fn next(&mut self) -> u64 {
+    /// Generate next random u64
+    pub fn next_u64(&mut self) -> u64 {
         let mut x = self.state;
         x ^= x << 13;
         x ^= x >> 7;
@@ -19,25 +23,29 @@ impl SimRng {
         x
     }
 
+    /// Generate random u64 in range [0, upper_exclusive)
+    pub fn next_range(&mut self, upper_exclusive: u64) -> u64 {
+        if upper_exclusive <= 1 {
+            return 0;
+        }
+        self.next_u64() % upper_exclusive
+    }
+
+    /// Generate random usize in range [min, max)
     pub fn range(&mut self, min: usize, max: usize) -> usize {
         let range = max - min;
         if range == 0 {
             return min;
         }
-        min + (self.next() as usize % range)
+        min + (self.next_u64() as usize % range)
     }
 
-    #[allow(dead_code)]
-    pub fn bool(&mut self, probability: f64) -> bool {
-        let limit = (u64::MAX as f64 * probability) as u64;
-        self.next() < limit
-    }
-
+    /// Generate random payload of 1-20 bytes
     pub fn gen_payload(&mut self) -> Vec<u8> {
         let len = self.range(1, 21);
         let mut buf = Vec::with_capacity(len);
         for _ in 0..len {
-            buf.push(self.next() as u8);
+            buf.push(self.next_u64() as u8);
         }
         buf
     }

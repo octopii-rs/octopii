@@ -2,9 +2,7 @@ mod common;
 
 #[cfg(all(feature = "simulation", feature = "openraft"))]
 mod cluster_sim_tests {
-    use crate::common::cluster_sim::{
-        ClusterHarness, ClusterParams, FaultProfile, ValidationMode,
-    };
+    use crate::common::cluster_sim::{ClusterHarness, ClusterParams, FaultProfile, ValidationMode};
 
     #[tokio::test(flavor = "current_thread")]
     async fn cluster_three_nodes_faults_10pct() {
@@ -18,8 +16,7 @@ mod cluster_sim_tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn cluster_five_nodes_faults_10pct() {
-        let mut params =
-            ClusterParams::new(5, 271828, 0.10, FaultProfile::ReorderTimeoutBandwidth);
+        let mut params = ClusterParams::new(5, 271828, 0.10, FaultProfile::ReorderTimeoutBandwidth);
         params.require_all_nodes = false;
         let mut harness = ClusterHarness::new(params).await;
         let leader = harness.wait_for_leader().await;

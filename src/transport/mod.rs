@@ -8,16 +8,16 @@ pub use peer::PeerConnection;
 pub use sim::{SimConfig, SimRouter, SimTransport};
 
 use crate::error::{OctopiiError, Result};
+use crate::sim_time;
 use bytes::Bytes;
 use quinn::Endpoint;
-use std::future::Future;
 use std::collections::HashMap;
+use std::future::Future;
 use std::net::SocketAddr;
 use std::pin::Pin;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use tokio::sync::RwLock;
-use crate::sim_time;
 
 pub type TransportFut<'a, T> = Pin<Box<dyn Future<Output = Result<T>> + Send + 'a>>;
 

@@ -2,16 +2,16 @@ use super::{
     deserialize, serialize, MessageId, ResponsePayload, RpcMessage, RpcRequest, RpcResponse,
 };
 use crate::error::{OctopiiError, Result};
-use crate::transport::{Peer, Transport};
 use crate::sim_time;
-use tokio::time::timeout;
+use crate::transport::{Peer, Transport};
 use std::collections::HashMap;
+use std::future::Future;
 use std::net::SocketAddr;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::future::Future;
-use std::pin::Pin;
 use tokio::sync::{oneshot, Mutex, RwLock};
+use tokio::time::timeout;
 use tokio::time::Duration;
 
 pub type RequestHandlerFuture = Pin<Box<dyn Future<Output = ResponsePayload> + Send>>;
@@ -151,11 +151,7 @@ impl RpcHandler {
         })
     }
 
-    pub async fn register_peer_receiver(
-        self: &Arc<Self>,
-        addr: SocketAddr,
-        peer: Arc<dyn Peer>,
-    ) {
+    pub async fn register_peer_receiver(self: &Arc<Self>, addr: SocketAddr, peer: Arc<dyn Peer>) {
         self.ensure_peer_receiver(addr, peer).await;
     }
 
@@ -222,12 +218,7 @@ impl RpcHandler {
     }
 
     /// Handle an incoming request
-    async fn handle_request(
-        &self,
-        addr: SocketAddr,
-        req: RpcRequest,
-        peer: Option<Arc<dyn Peer>>,
-    ) {
+    async fn handle_request(&self, addr: SocketAddr, req: RpcRequest, peer: Option<Arc<dyn Peer>>) {
         let handler = self.request_handler.read().await;
 
         let response_payload = match handler.as_ref() {
@@ -246,10 +237,8 @@ impl RpcHandler {
                 if let Err(e) = peer.send(data).await {
                     tracing::error!("Failed to send response via peer: {}", e);
                 }
-            } else {
-                if let Err(e) = self.transport.send(addr, data).await {
-                    tracing::error!("Failed to send response to {}: {}", addr, e);
-                }
+            } else if let Err(e) = self.transport.send(addr, data).await {
+                tracing::error!("Failed to send response to {}: {}", addr, e);
             }
         }
     }

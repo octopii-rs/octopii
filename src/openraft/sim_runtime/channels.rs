@@ -112,15 +112,12 @@ impl<T> Clone for SimMpscUnboundedWeakSender<T> {
     }
 }
 
-impl<T> mpsc_unbounded::MpscUnboundedSender<SimMpscUnbounded, T>
-    for SimMpscUnboundedSender<T>
+impl<T> mpsc_unbounded::MpscUnboundedSender<SimMpscUnbounded, T> for SimMpscUnboundedSender<T>
 where
     T: OptionalSend,
 {
     fn send(&self, msg: T) -> Result<(), mpsc_unbounded::SendError<T>> {
-        self.0
-            .send(msg)
-            .map_err(|e| mpsc_unbounded::SendError(e.0))
+        self.0.send(msg).map_err(|e| mpsc_unbounded::SendError(e.0))
     }
 
     fn downgrade(&self) -> <SimMpscUnbounded as mpsc_unbounded::MpscUnbounded>::WeakSender<T> {
@@ -139,7 +136,9 @@ where
     fn try_recv(&mut self) -> Result<T, mpsc_unbounded::TryRecvError> {
         self.0.try_recv().map_err(|e| match e {
             tokio_mpsc::error::TryRecvError::Empty => mpsc_unbounded::TryRecvError::Empty,
-            tokio_mpsc::error::TryRecvError::Disconnected => mpsc_unbounded::TryRecvError::Disconnected,
+            tokio_mpsc::error::TryRecvError::Disconnected => {
+                mpsc_unbounded::TryRecvError::Disconnected
+            }
         })
     }
 }

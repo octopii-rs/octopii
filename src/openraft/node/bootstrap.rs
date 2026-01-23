@@ -74,23 +74,30 @@ pub(crate) async fn init_peer_addrs(
 
     register_global_peer_addr(cluster_namespace, config.node_id, config.bind_addr);
 
-    if persist_peer_addr(peers.as_ref(), peer_addr_wal, cluster_namespace, config.node_id, config.bind_addr).await.is_err() {
-    }
+    persist_peer_addr(
+        peers.as_ref(),
+        peer_addr_wal,
+        cluster_namespace,
+        config.node_id,
+        config.bind_addr,
+    )
+    .await
+    .is_err();
 
     Ok(peers)
 }
 
 pub(crate) fn build_raft_config() -> Result<Arc<RaftConfig>> {
-    let mut raft_config = RaftConfig::default();
-    raft_config.heartbeat_interval = 200;
-    raft_config.election_timeout_min = 800;
-    raft_config.election_timeout_max = 1600;
-    raft_config.allow_log_reversion = Some(true);
-    Ok(Arc::new(
-        raft_config
-            .validate()
-            .map_err(|e| crate::error::OctopiiError::Rpc(format!("raft config: {e}")))?,
-    ))
+    let raft_config = RaftConfig {
+        heartbeat_interval: 200,
+        election_timeout_min: 800,
+        election_timeout_max: 1600,
+        allow_log_reversion: Some(true),
+        ..Default::default()
+    };
+    Ok(Arc::new(raft_config.validate().map_err(|e| {
+        crate::error::OctopiiError::Rpc(format!("raft config: {e}"))
+    })?))
 }
 
 pub(crate) async fn new_with_transport(
@@ -102,7 +109,7 @@ pub(crate) async fn new_with_transport(
 ) -> Result<OpenRaftNode> {
     let rpc = Arc::new(crate::rpc::RpcHandler::new(Arc::clone(&transport)));
 
-    std::fs::create_dir_all(&config.wal_dir).map_err(|e| crate::error::OctopiiError::Io(e))?;
+    std::fs::create_dir_all(&config.wal_dir).map_err(crate::error::OctopiiError::Io)?;
 
     let cluster_namespace = Arc::new(cluster_namespace_from_wal_dir(&config.wal_dir));
     register_global_peer_addr(cluster_namespace.as_str(), config.node_id, config.bind_addr);
@@ -117,7 +124,8 @@ pub(crate) async fn new_with_transport(
     #[cfg(feature = "openraft-filters")]
     let filters = Arc::new(OpenRaftFilters::new());
 
-    let state_machine: StateMachine = custom_state_machine.unwrap_or_else(|| Arc::new(KvStateMachine::in_memory()));
+    let state_machine: StateMachine =
+        custom_state_machine.unwrap_or_else(|| Arc::new(KvStateMachine::in_memory()));
     let state_machine_store = MemStateMachine::new_with_wal(state_machine.clone(), meta_wal).await;
 
     let network_factory = QuinnNetworkFactory::new(
@@ -162,7 +170,8 @@ pub(crate) async fn seed_peer_addrs_from_config(node: &OpenRaftNode) -> Result<(
     for peer_addr in node.config.peers.iter() {
         let peer_id = OpenRaftNode::peer_id_from_addr(peer_addr);
         if peer_id != node.config.node_id && peer_id > 0 {
-            node.persist_peer_addr_if_needed(peer_id, *peer_addr).await?;
+            node.persist_peer_addr_if_needed(peer_id, *peer_addr)
+                .await?;
         }
     }
     Ok(())
@@ -197,8 +206,7 @@ pub(crate) async fn initialize_cluster_if_needed(node: &OpenRaftNode) -> Result<
             }
         }
 
-        node
-            .raft
+        node.raft
             .initialize(nodes)
             .await
             .map_err(|e| crate::error::OctopiiError::Rpc(format!("initialize: {e}")))?;

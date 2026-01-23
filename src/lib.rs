@@ -8,12 +8,12 @@ mod invariants;
 pub mod openraft;
 pub mod rpc;
 pub mod shipping_lane;
-pub mod state_machine;
-pub mod transport;
-pub mod wal;
 mod sim_time;
 #[cfg(feature = "simulation")]
 pub mod simulation;
+pub mod state_machine;
+pub mod transport;
+pub mod wal;
 
 // Re-export main types
 pub use chunk::{ChunkSource, TransferResult};

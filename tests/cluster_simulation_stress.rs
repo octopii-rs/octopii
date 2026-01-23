@@ -249,12 +249,16 @@ mod cluster_sim_stress {
         let mut harness = ClusterHarness::new(params).await;
         let leader = harness.wait_for_leader().await;
         assert!(leader.is_some(), "leader election did not complete");
-        harness.run_workload(ops_short(), ValidationMode::Leader).await;
+        harness
+            .run_workload(ops_short(), ValidationMode::Leader)
+            .await;
 
         harness.restart_node(1).await;
         let leader = harness.wait_for_leader().await;
         assert!(leader.is_some(), "leader election did not complete");
-        harness.run_workload(ops_short(), ValidationMode::Leader).await;
+        harness
+            .run_workload(ops_short(), ValidationMode::Leader)
+            .await;
         harness.cleanup();
     }
 }

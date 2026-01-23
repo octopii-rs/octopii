@@ -41,9 +41,10 @@ impl ChunkSink {
                 data.extend_from_slice(buf);
                 Ok(())
             }
-            ChunkSink::File(file) => file.write_all(buf).await.map_err(|e| {
-                OctopiiError::Transport(format!("File write failed: {}", e))
-            }),
+            ChunkSink::File(file) => file
+                .write_all(buf)
+                .await
+                .map_err(|e| OctopiiError::Transport(format!("File write failed: {}", e))),
         }
     }
 

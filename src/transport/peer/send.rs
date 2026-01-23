@@ -31,7 +31,7 @@ pub async fn send_chunk_verified(connection: &Connection, chunk: &ChunkSource) -
     let (data, size, checksum) = match chunk {
         ChunkSource::Memory(bytes) => {
             let mut hasher = Sha256::new();
-            hasher.update(&bytes);
+            hasher.update(bytes);
             let hash = hasher.finalize();
             (Some(bytes.clone()), bytes.len() as u64, hash.to_vec())
         }
@@ -47,12 +47,10 @@ pub async fn send_chunk_verified(connection: &Connection, chunk: &ChunkSource) -
     let final_checksum = if let Some(bytes) = data {
         send_stream.write_all(&bytes).await?;
         checksum
+    } else if let ChunkSource::File(path) = chunk {
+        stream_file(&mut send_stream, path).await?
     } else {
-        if let ChunkSource::File(path) = chunk {
-            stream_file(&mut send_stream, path).await?
-        } else {
-            unreachable!()
-        }
+        unreachable!()
     };
 
     send_stream.write_all(&final_checksum).await?;

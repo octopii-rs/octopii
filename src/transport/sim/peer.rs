@@ -61,13 +61,7 @@ impl SimTransport {
 
             // Create new connection and cache it
             let remote_epoch = router.epoch_of(addr);
-            let peer = Arc::new(SimPeer::new(
-                local,
-                local_epoch,
-                addr,
-                remote_epoch,
-                router,
-            ));
+            let peer = Arc::new(SimPeer::new(local, local_epoch, addr, remote_epoch, router));
 
             let mut peers = outgoing_peers.write().await;
             peers.insert(addr, Arc::clone(&peer));
@@ -83,11 +77,14 @@ impl SimTransport {
         Box::pin(async move {
             loop {
                 if router.is_closed(local, local_epoch) {
-                    return Err(crate::error::OctopiiError::Transport("sim transport closed".to_string()));
+                    return Err(crate::error::OctopiiError::Transport(
+                        "sim transport closed".to_string(),
+                    ));
                 }
                 if let Some(peer) = router.accept_peer(local)? {
                     let remote_epoch = router.epoch_of(peer);
-                    let sim_peer = SimPeer::new(local, local_epoch, peer, remote_epoch, router.clone());
+                    let sim_peer =
+                        SimPeer::new(local, local_epoch, peer, remote_epoch, router.clone());
                     return Ok((peer, Arc::new(sim_peer) as Arc<dyn Peer>));
                 }
                 if let Some(notify) = router.notify_handle(local, local_epoch) {
@@ -118,7 +115,13 @@ pub struct SimPeer {
 }
 
 impl SimPeer {
-    fn new(local: SocketAddr, local_epoch: u64, remote: SocketAddr, remote_epoch: u64, router: SimRouter) -> Self {
+    fn new(
+        local: SocketAddr,
+        local_epoch: u64,
+        remote: SocketAddr,
+        remote_epoch: u64,
+        router: SimRouter,
+    ) -> Self {
         Self {
             local,
             local_epoch,

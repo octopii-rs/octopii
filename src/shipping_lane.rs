@@ -1,11 +1,11 @@
 use crate::chunk::{ChunkSource, TransferResult};
 use crate::error::Result;
+use crate::sim_time;
 use crate::transport::QuicTransport;
 use bytes::Bytes;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
-use crate::sim_time;
 
 /// High-level helper for orchestrating chunk transfers between peers.
 pub struct ShippingLane {
@@ -17,15 +17,15 @@ impl ShippingLane {
         Self { transport }
     }
 
-    async fn send_chunk(
-        &self,
-        addr: SocketAddr,
-        chunk: ChunkSource,
-    ) -> Result<TransferResult> {
+    async fn send_chunk(&self, addr: SocketAddr, chunk: ChunkSource) -> Result<TransferResult> {
         let peer = self.transport.connect(addr).await?;
         let start = sim_time::now();
         match peer.send_chunk_verified(&chunk).await {
-            Ok(bytes) => Ok(TransferResult::success(addr, bytes, sim_time::elapsed(start))),
+            Ok(bytes) => Ok(TransferResult::success(
+                addr,
+                bytes,
+                sim_time::elapsed(start),
+            )),
             Err(err) => Ok(TransferResult::failure(addr, err.to_string())),
         }
     }
@@ -49,7 +49,11 @@ impl ShippingLane {
         let peer = self.transport.connect(addr).await?;
         let start = sim_time::now();
         match peer.recv_chunk_to_path(dest).await? {
-            Some(bytes) => Ok(TransferResult::success(addr, bytes, sim_time::elapsed(start))),
+            Some(bytes) => Ok(TransferResult::success(
+                addr,
+                bytes,
+                sim_time::elapsed(start),
+            )),
             None => Ok(TransferResult::failure(
                 addr,
                 "connection closed before data transfer".to_string(),

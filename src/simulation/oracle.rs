@@ -6,6 +6,12 @@ pub struct Oracle {
     read_cursors: HashMap<String, usize>,
 }
 
+impl Default for Oracle {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Oracle {
     pub fn should_log() -> bool {
         matches!(std::env::var("SIM_VERBOSE").as_deref(), Ok("1"))
@@ -26,7 +32,11 @@ impl Oracle {
         let history = self.history.entry(topic.to_string()).or_default();
         let idx = history.len();
         if topic == "orders" && Self::should_log() {
-            eprintln!("[ORACLE] Recording write for orders[{}] len={}", idx, data.len());
+            eprintln!(
+                "[ORACLE] Recording write for orders[{}] len={}",
+                idx,
+                data.len()
+            );
         }
         history.push(data);
     }
@@ -74,46 +84,16 @@ impl Oracle {
         *cursor += 1;
     }
 
+    /// Verify a batch of entries against oracle history
     pub fn verify_batch_read(&mut self, topic: &str, actual_entries: &[Vec<u8>]) {
-        if actual_entries.is_empty() {
-            return;
-        }
-
-        let history = self.history.entry(topic.to_string()).or_default();
-        let cursor = self.read_cursors.entry(topic.to_string()).or_default();
-
-        if *cursor >= history.len() {
-            panic!(
-                "ORACLE FAILURE: Walrus returned entries for topic '{}' but Oracle thinks stream is empty.",
-                topic
-            );
-        }
-
-        for entry in actual_entries {
-            let expected = &history[*cursor];
-            if expected != entry {
-                panic!(
-                    "ORACLE FAILURE: batch read mismatch for topic '{}' at cursor {}.\nExpected: {:?}\nGot: {:?}",
-                    topic,
-                    cursor,
-                    expected,
-                    entry
-                );
-            }
-            *cursor += 1;
+        for data in actual_entries {
+            self.verify_read(topic, data);
         }
     }
 
     pub fn reset_read_cursors(&mut self) {
         for cursor in self.read_cursors.values_mut() {
             *cursor = 0;
-        }
-    }
-
-    /// Verify a batch of entries (calls verify_read for each)
-    pub fn verify_batch(&mut self, topic: &str, entries: &[Vec<u8>]) {
-        for data in entries {
-            self.verify_read(topic, data);
         }
     }
 
@@ -141,12 +121,14 @@ struct TrackedEntry {
 #[derive(Debug, Clone)]
 pub struct DurabilityOracle {
     must_survive: HashMap<String, Vec<TrackedEntry>>,
-
     may_be_lost: HashMap<String, Vec<TrackedEntry>>,
-
     current_cycle: usize,
+}
 
-    verified_count: HashMap<String, usize>,
+impl Default for DurabilityOracle {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl DurabilityOracle {
@@ -155,7 +137,6 @@ impl DurabilityOracle {
             must_survive: HashMap::new(),
             may_be_lost: HashMap::new(),
             current_cycle: 0,
-            verified_count: HashMap::new(),
         }
     }
 
@@ -250,7 +231,6 @@ impl DurabilityOracle {
         }
 
         self.current_cycle += 1;
-        self.verified_count.clear();
     }
 
     /// Get counts for logging/debugging
@@ -270,6 +250,5 @@ impl DurabilityOracle {
         self.must_survive.clear();
         self.may_be_lost.clear();
         self.current_cycle = 0;
-        self.verified_count.clear();
     }
 }

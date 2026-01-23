@@ -34,7 +34,10 @@ impl LogDurabilityOracle {
     }
 
     pub fn record_entry(&mut self, node_id: u64, index: u64, payload: Vec<u8>, must_survive: bool) {
-        let node = self.per_node.entry(node_id).or_insert_with(NodeDurability::new);
+        let node = self
+            .per_node
+            .entry(node_id)
+            .or_insert_with(NodeDurability::new);
         if must_survive {
             node.must_survive_entries.insert(index, payload);
         } else {
@@ -44,14 +47,20 @@ impl LogDurabilityOracle {
 
     pub fn record_committed(&mut self, node_id: u64, index: u64, must_survive: bool) {
         if must_survive {
-            let node = self.per_node.entry(node_id).or_insert_with(NodeDurability::new);
+            let node = self
+                .per_node
+                .entry(node_id)
+                .or_insert_with(NodeDurability::new);
             node.must_survive_committed = Some(index);
         }
     }
 
     pub fn record_vote(&mut self, node_id: u64, term: u64, leader_id: u64, must_survive: bool) {
         if must_survive {
-            let node = self.per_node.entry(node_id).or_insert_with(NodeDurability::new);
+            let node = self
+                .per_node
+                .entry(node_id)
+                .or_insert_with(NodeDurability::new);
             node.must_survive_vote = Some((term, leader_id));
         }
     }
@@ -111,7 +120,8 @@ impl LogDurabilityOracle {
         if let Some((term, leader_id)) = node.must_survive_vote {
             match vote {
                 Some((actual_term, actual_node)) if actual_term > term => {}
-                Some((actual_term, actual_node)) if actual_term == term && actual_node == leader_id => {}
+                Some((actual_term, actual_node))
+                    if actual_term == term && actual_node == leader_id => {}
                 Some((actual_term, actual_node)) => {
                     return Err(format!(
                         "log durability violation: vote mismatch (expected {}:{}, got {}:{}) in cycle {}",

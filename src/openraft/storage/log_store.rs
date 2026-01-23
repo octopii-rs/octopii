@@ -10,7 +10,7 @@ use std::fmt::Debug;
 use std::io;
 use std::ops::RangeBounds;
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub(crate) struct MemLogStoreInner {
     pub(crate) last_purged_log_id: Option<LogId<AppTypeConfig>>,
     pub(crate) log: BTreeMap<u64, Entry<AppTypeConfig>>,
@@ -18,24 +18,9 @@ pub(crate) struct MemLogStoreInner {
     pub(crate) vote: Option<openraft::Vote<AppTypeConfig>>,
 }
 
-impl Default for MemLogStoreInner {
-    fn default() -> Self {
-        Self {
-            last_purged_log_id: None,
-            log: BTreeMap::new(),
-            committed: None,
-            vote: None,
-        }
-    }
-}
-
 impl MemLogStoreInner {
     pub(crate) fn remove_through(&mut self, end: u64) {
-        let keys = self
-            .log
-            .range(..=end)
-            .map(|(k, _v)| *k)
-            .collect::<Vec<_>>();
+        let keys = self.log.range(..=end).map(|(k, _v)| *k).collect::<Vec<_>>();
         for key in keys {
             self.log.remove(&key);
         }
@@ -67,10 +52,10 @@ impl MemLogStoreInner {
     pub(crate) async fn get_log_state(&mut self) -> Result<LogState<AppTypeConfig>, io::Error> {
         let last = self.log.iter().next_back().map(|(_, ent)| ent.log_id);
 
-        let last_purged = self.last_purged_log_id.clone();
+        let last_purged = self.last_purged_log_id;
 
         let last = match last {
-            None => last_purged.clone(),
+            None => last_purged,
             Some(x) => Some(x),
         };
 
@@ -88,17 +73,24 @@ impl MemLogStoreInner {
         Ok(())
     }
 
-    pub(crate) async fn read_committed(&mut self) -> Result<Option<LogId<AppTypeConfig>>, io::Error> {
-        Ok(self.committed.clone())
+    pub(crate) async fn read_committed(
+        &mut self,
+    ) -> Result<Option<LogId<AppTypeConfig>>, io::Error> {
+        Ok(self.committed)
     }
 
-    pub(crate) async fn save_vote(&mut self, vote: &openraft::Vote<AppTypeConfig>) -> Result<(), io::Error> {
-        self.vote = Some(vote.clone());
+    pub(crate) async fn save_vote(
+        &mut self,
+        vote: &openraft::Vote<AppTypeConfig>,
+    ) -> Result<(), io::Error> {
+        self.vote = Some(*vote);
         Ok(())
     }
 
-    pub(crate) async fn read_vote(&mut self) -> Result<Option<openraft::Vote<AppTypeConfig>>, io::Error> {
-        Ok(self.vote.clone())
+    pub(crate) async fn read_vote(
+        &mut self,
+    ) -> Result<Option<openraft::Vote<AppTypeConfig>>, io::Error> {
+        Ok(self.vote)
     }
 
     pub(crate) async fn append<I>(
@@ -125,7 +117,7 @@ impl MemLogStoreInner {
         {
             let ld = &mut self.last_purged_log_id;
             assert!(ld.as_ref() <= Some(&log_id));
-            *ld = Some(log_id.clone());
+            *ld = Some(log_id);
         }
 
         {

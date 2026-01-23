@@ -185,7 +185,11 @@ mod tests {
     /// Helper to create a node with custom state machine
     async fn setup_node_with_custom_sm(
         test_name: &str,
-    ) -> (OctopiiNode, Arc<TrackedCounterStateMachine>, tempfile::TempDir) {
+    ) -> (
+        OctopiiNode,
+        Arc<TrackedCounterStateMachine>,
+        tempfile::TempDir,
+    ) {
         let data_dir = tempfile::tempdir().unwrap();
         let wal_dir = data_dir.path().join(test_name);
         std::fs::create_dir_all(&wal_dir).unwrap();
@@ -303,7 +307,10 @@ mod tests {
 
         // All three views MUST be consistent
         assert_eq!(queried_value, 42, "query() should see proposed value");
-        assert_eq!(direct_value, 42, "Direct SM access should see proposed value");
+        assert_eq!(
+            direct_value, 42,
+            "Direct SM access should see proposed value"
+        );
         assert_eq!(
             queried_value, direct_value,
             "query() and direct access must return same value - proves same instance"
@@ -370,10 +377,7 @@ mod tests {
         // Snapshot should contain our value (100 as i64 little-endian)
         assert_eq!(snapshot.len(), 8, "Snapshot should be 8 bytes (i64)");
         let snapshot_value = i64::from_le_bytes(snapshot.try_into().unwrap());
-        assert_eq!(
-            snapshot_value, 100,
-            "Snapshot must capture custom SM state"
-        );
+        assert_eq!(snapshot_value, 100, "Snapshot must capture custom SM state");
 
         node.shutdown().await;
     }

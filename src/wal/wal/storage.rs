@@ -138,7 +138,7 @@ static GLOBAL_FSYNC_SCHEDULE: OnceLock<FsyncSchedule> = OnceLock::new();
 
 #[cfg(feature = "simulation")]
 thread_local! {
-    static GLOBAL_FSYNC_SCHEDULE: Cell<Option<FsyncSchedule>> = Cell::new(None);
+    static GLOBAL_FSYNC_SCHEDULE: Cell<Option<FsyncSchedule>> = const { Cell::new(None) };
 }
 
 fn should_use_o_sync() -> bool {

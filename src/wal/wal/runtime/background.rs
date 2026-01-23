@@ -7,10 +7,10 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-#[cfg(not(feature = "simulation"))]
-use super::DELETION_TX;
 #[cfg(feature = "simulation")]
 use super::set_deletion_tx;
+#[cfg(not(feature = "simulation"))]
+use super::DELETION_TX;
 
 #[cfg(target_os = "linux")]
 use std::os::unix::io::AsRawFd;
@@ -70,7 +70,7 @@ impl BackgroundWorker {
         // Phase 2: Open/map files if needed
         for path in unique.iter() {
             // Skip if file doesn't exist
-            if !fs::exists(&path) {
+            if !fs::exists(path) {
                 debug_print!("[flush] file does not exist, skipping: {}", path);
                 continue;
             }
@@ -259,10 +259,10 @@ pub(super) fn start_background_workers(fsync_schedule: FsyncSchedule) -> Backgro
     #[cfg(feature = "simulation")]
     {
         // In simulation mode, return the worker to the caller (Walrus) so it can be ticked manually
-        return BackgroundHandle {
+        BackgroundHandle {
             tx: tx_arc,
             worker: Some(Arc::new(Mutex::new(worker))),
-        };
+        }
     }
 
     #[cfg(not(feature = "simulation"))]

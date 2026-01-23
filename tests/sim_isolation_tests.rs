@@ -22,7 +22,8 @@ mod sim_isolation_tests {
 
         let file_path = root.join("probe.bin");
         let mut f = vfs::File::create(&file_path).expect("create file");
-        f.write_all(b"deterministic-payload").expect("write payload");
+        f.write_all(b"deterministic-payload")
+            .expect("write payload");
         f.sync_all().expect("sync payload");
 
         let mut f = vfs::File::open(&file_path).expect("open file");

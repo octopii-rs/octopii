@@ -104,8 +104,7 @@ thread_local! {
     static SIM_CLOCK: RefCell<SimClock> = RefCell::new(SimClock::new(1, 0));
 }
 
-static SIM_SLEEP_ID: std::sync::atomic::AtomicU64 =
-    std::sync::atomic::AtomicU64::new(1);
+static SIM_SLEEP_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 pub fn reset(seed: u64, now_ns: u64) {
     SIM_CLOCK.with(|clock| {

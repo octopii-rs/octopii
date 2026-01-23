@@ -8,7 +8,6 @@ use crate::transport::Peer;
 mod receive;
 mod send;
 
-
 pub struct PeerConnection {
     pub(crate) connection: Connection,
 }
@@ -51,10 +50,7 @@ impl PeerConnection {
     }
 
     /// Receive a chunk into a file (checksum verified)
-    pub async fn recv_chunk_verified_to_file(
-        &self,
-        path: &Path,
-    ) -> Result<Option<u64>> {
+    pub async fn recv_chunk_verified_to_file(&self, path: &Path) -> Result<Option<u64>> {
         receive::recv_chunk_verified_to_file(&self.connection, path).await
     }
 

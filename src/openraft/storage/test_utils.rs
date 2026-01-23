@@ -19,7 +19,9 @@ pub fn sync_oracle_from_store(
     oracle_last_purged: &mut Option<LogId<AppTypeConfig>>,
     next_index: &mut u64,
 ) {
-    let state = rt.block_on(store.get_log_state()).expect("read log state failed");
+    let state = rt
+        .block_on(store.get_log_state())
+        .expect("read log state failed");
     *oracle_last_purged = state.last_purged_log_id.clone();
 
     let first_index = state.last_purged_log_id.map(|p| p.index + 1).unwrap_or(1);
@@ -36,7 +38,9 @@ pub fn sync_oracle_from_store(
     }
 
     *oracle_vote = rt.block_on(store.read_vote()).expect("read vote failed");
-    *oracle_committed = rt.block_on(store.read_committed()).expect("read committed failed");
+    *oracle_committed = rt
+        .block_on(store.read_committed())
+        .expect("read committed failed");
     *next_index = last_index + 1;
 }
 
@@ -47,7 +51,11 @@ pub fn create_wal_with_retry(
     retries: usize,
 ) -> Arc<WriteAheadLog> {
     for attempt in 0..retries {
-        match rt.block_on(WriteAheadLog::new(wal_path.clone(), 0, Duration::from_millis(0))) {
+        match rt.block_on(WriteAheadLog::new(
+            wal_path.clone(),
+            0,
+            Duration::from_millis(0),
+        )) {
             Ok(wal) => return Arc::new(wal),
             Err(_) => {
                 sim::advance_time(Duration::from_millis(1));

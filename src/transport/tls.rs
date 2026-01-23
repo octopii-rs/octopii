@@ -18,7 +18,7 @@ fn default_transport_config() -> quinn::TransportConfig {
 /// Generate a self-signed certificate
 pub fn generate_self_signed_cert() -> Result<(CertificateDer<'static>, PrivateKeyDer<'static>)> {
     let cert = rcgen::generate_simple_self_signed(vec!["localhost".to_string()])
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        .map_err(std::io::Error::other)?;
 
     let key = PrivateKeyDer::Pkcs8(cert.key_pair.serialize_der().into());
     let cert_der = CertificateDer::from(cert.cert);
@@ -37,14 +37,13 @@ pub fn create_server_config(
     let mut crypto = rustls::ServerConfig::builder()
         .with_no_client_auth()
         .with_single_cert(vec![cert], key)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        .map_err(std::io::Error::other)?;
 
     // Allow TLS 1.3 only for performance
     crypto.alpn_protocols = vec![b"octopii".to_vec()];
 
     let mut server_config = ServerConfig::with_crypto(Arc::new(
-        quinn::crypto::rustls::QuicServerConfig::try_from(crypto)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?,
+        quinn::crypto::rustls::QuicServerConfig::try_from(crypto).map_err(std::io::Error::other)?,
     ));
 
     // Performance tuning
@@ -69,8 +68,7 @@ pub fn create_client_config() -> Result<ClientConfig> {
     crypto.alpn_protocols = vec![b"octopii".to_vec()];
 
     let mut client_config = ClientConfig::new(Arc::new(
-        quinn::crypto::rustls::QuicClientConfig::try_from(crypto)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?,
+        quinn::crypto::rustls::QuicClientConfig::try_from(crypto).map_err(std::io::Error::other)?,
     ));
 
     // Performance tuning

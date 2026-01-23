@@ -17,7 +17,11 @@ pub struct InvariantViolation {
 
 impl std::fmt::Display for InvariantViolation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "INVARIANT VIOLATION [{}]: {}", self.invariant, self.message)?;
+        write!(
+            f,
+            "INVARIANT VIOLATION [{}]: {}",
+            self.invariant, self.message
+        )?;
         if !self.details.is_empty() {
             write!(f, "\nDetails:")?;
             for (k, v) in &self.details {
@@ -81,10 +85,7 @@ impl InvariantChecker {
             term,
             tick: self.current_tick,
         };
-        self.leaders_by_term
-            .entry(term)
-            .or_default()
-            .push(record);
+        self.leaders_by_term.entry(term).or_default().push(record);
     }
 
     /// Record a committed entry observation
@@ -108,14 +109,8 @@ impl InvariantChecker {
             if unique_leaders.len() > 1 {
                 let mut details = HashMap::new();
                 details.insert("term".to_string(), term.to_string());
-                details.insert(
-                    "leaders".to_string(),
-                    format!("{:?}", unique_leaders),
-                );
-                details.insert(
-                    "observations".to_string(),
-                    format!("{:?}", records),
-                );
+                details.insert("leaders".to_string(), format!("{:?}", unique_leaders));
+                details.insert("observations".to_string(), format!("{:?}", records));
 
                 return Err(InvariantViolation {
                     invariant: "SingleLeaderPerTerm",
@@ -150,10 +145,7 @@ impl InvariantChecker {
 
                     return Err(InvariantViolation {
                         invariant: "CommitSafety",
-                        message: format!(
-                            "Committed entry at index {} was overwritten",
-                            index
-                        ),
+                        message: format!("Committed entry at index {} was overwritten", index),
                         details,
                     });
                 }
@@ -284,14 +276,8 @@ impl InvariantChecker {
                             details.insert("matching_index".to_string(), index.to_string());
                             details.insert("matching_term".to_string(), term_a.to_string());
                             details.insert("divergent_index".to_string(), prior_idx.to_string());
-                            details.insert(
-                                "term_in_node_a".to_string(),
-                                format!("{:?}", prior_a),
-                            );
-                            details.insert(
-                                "term_in_node_b".to_string(),
-                                format!("{:?}", prior_b),
-                            );
+                            details.insert("term_in_node_a".to_string(), format!("{:?}", prior_a));
+                            details.insert("term_in_node_b".to_string(), format!("{:?}", prior_b));
 
                             return Err(InvariantViolation {
                                 invariant: "LogMatching",

@@ -101,7 +101,8 @@ impl ClusterOracle {
 
     /// Record a successful commit with explicit command payload
     pub fn record_commit_with_command(&mut self, key: &str, value: &str, command: &[u8]) {
-        self.expected_state.insert(key.to_string(), value.to_string());
+        self.expected_state
+            .insert(key.to_string(), value.to_string());
         self.history.push(command.to_vec());
         self.record_write_op(key, Some(value.to_string()));
         self.commit_count += 1;
@@ -115,7 +116,8 @@ impl ClusterOracle {
 
     /// Record a must-survive commit with explicit command payload
     pub fn record_must_survive_with_command(&mut self, key: &str, value: &str, command: &[u8]) {
-        self.expected_state.insert(key.to_string(), value.to_string());
+        self.expected_state
+            .insert(key.to_string(), value.to_string());
         self.must_survive.insert(key.to_string(), value.to_string());
         self.history.push(command.to_vec());
         self.record_write_op(key, Some(value.to_string()));
@@ -130,7 +132,8 @@ impl ClusterOracle {
 
     /// Record a may-be-lost commit with explicit command payload
     pub fn record_may_be_lost_with_command(&mut self, key: &str, value: &str, command: &[u8]) {
-        self.expected_state.insert(key.to_string(), value.to_string());
+        self.expected_state
+            .insert(key.to_string(), value.to_string());
         self.may_be_lost.insert(key.to_string(), value.to_string());
         self.history.push(command.to_vec());
         self.record_write_op(key, Some(value.to_string()));
@@ -195,7 +198,11 @@ impl ClusterOracle {
 
     /// Verify a read matches expected state
     /// Returns Ok if the value matches, Err with details if not
-    pub fn verify_read(&mut self, key: &str, actual: Option<&str>) -> Result<(), VerificationFailure> {
+    pub fn verify_read(
+        &mut self,
+        key: &str,
+        actual: Option<&str>,
+    ) -> Result<(), VerificationFailure> {
         let expected = self.expected_state.get(key);
 
         let matches = match (expected, actual) {

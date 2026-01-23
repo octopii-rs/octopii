@@ -111,7 +111,10 @@ async fn openraft_three_node_cluster_replicates_commands() -> Result<(), Box<dyn
                 node2.raft_metrics(),
                 node3.raft_metrics()
             );
-            panic!("leader election did not complete within {:?}", leader_timeout);
+            panic!(
+                "leader election did not complete within {:?}",
+                leader_timeout
+            );
         }
         sleep(Duration::from_millis(200)).await;
     };

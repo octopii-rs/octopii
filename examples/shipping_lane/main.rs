@@ -1,6 +1,6 @@
 use bytes::Bytes;
-use octopii::{ChunkSource, ShippingLane};
 use octopii::transport::QuicTransport;
+use octopii::{ChunkSource, ShippingLane};
 use std::error::Error;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -34,7 +34,9 @@ pub async fn run_shipping_lane_example() -> Result<Bytes, Box<dyn Error>> {
     });
 
     let payload = Bytes::from_static(b"hello-shipping-lane");
-    let result = shipping_lane.send_memory(receiver_bind, payload.clone()).await?;
+    let result = shipping_lane
+        .send_memory(receiver_bind, payload.clone())
+        .await?;
     assert!(result.success);
 
     let received = recv_task.await??;
@@ -48,7 +50,9 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn shipping_lane_transfers_payload() {
-        let received = run_shipping_lane_example().await.expect("shipping lane example");
+        let received = run_shipping_lane_example()
+            .await
+            .expect("shipping lane example");
         assert_eq!(received, Bytes::from_static(b"hello-shipping-lane"));
     }
 }

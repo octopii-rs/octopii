@@ -10,7 +10,7 @@ impl OctopiiRuntime {
     pub fn new(worker_threads: usize) -> Self {
         let runtime = Builder::new_multi_thread()
             .worker_threads(worker_threads)
-        .max_blocking_threads(worker_threads * 2)
+            .max_blocking_threads(worker_threads * 2)
             .thread_name("octopii-worker")
             .enable_all()
             .build()
@@ -31,10 +31,6 @@ impl OctopiiRuntime {
         }
     }
 
-    pub fn default() -> Self {
-        Self::new(4)
-    }
-
     pub fn spawn<F>(&self, future: F) -> tokio::task::JoinHandle<F::Output>
     where
         F: std::future::Future + Send + 'static,
@@ -45,6 +41,12 @@ impl OctopiiRuntime {
 
     pub fn handle(&self) -> tokio::runtime::Handle {
         self.handle.clone()
+    }
+}
+
+impl Default for OctopiiRuntime {
+    fn default() -> Self {
+        Self::new(4)
     }
 }
 
@@ -73,7 +75,6 @@ mod tests {
         let handle = runtime.handle();
         let output = handle.block_on(result).unwrap();
         assert_eq!(output, 42);
-
     }
 
     #[tokio::test]

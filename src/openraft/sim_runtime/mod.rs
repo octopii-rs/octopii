@@ -1,5 +1,3 @@
-#![cfg(feature = "simulation")]
-
 mod channels;
 mod runtime;
 mod time;

@@ -1,7 +1,7 @@
 use super::config::SimConfig;
 use super::fault::{BandwidthCap, FaultRule, ReorderConfig};
-use super::rng::SimRng;
 use crate::error::{OctopiiError, Result};
+use crate::simulation::SimRng;
 use bytes::Bytes;
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap, HashSet, VecDeque};
@@ -59,9 +59,18 @@ impl SimRouter {
         inner.rule_mut((from, to)).delay_ms = Some(delay_ms);
     }
 
-    pub fn set_reorder_pair(&self, from: SocketAddr, to: SocketAddr, max_jitter_ms: u64, probability: f64) {
+    pub fn set_reorder_pair(
+        &self,
+        from: SocketAddr,
+        to: SocketAddr,
+        max_jitter_ms: u64,
+        probability: f64,
+    ) {
         let mut inner = self.inner.lock().unwrap();
-        inner.rule_mut((from, to)).reorder = Some(ReorderConfig { max_jitter_ms, probability });
+        inner.rule_mut((from, to)).reorder = Some(ReorderConfig {
+            max_jitter_ms,
+            probability,
+        });
     }
 
     pub fn clear_reorder_pair(&self, from: SocketAddr, to: SocketAddr) {
@@ -88,7 +97,8 @@ impl SimRouter {
     ) {
         let mut inner = self.inner.lock().unwrap();
         let now_ms = inner.now_ms;
-        inner.rule_mut((from, to)).bandwidth = Some(BandwidthCap::new(bytes_per_ms, burst_bytes, now_ms));
+        inner.rule_mut((from, to)).bandwidth =
+            Some(BandwidthCap::new(bytes_per_ms, burst_bytes, now_ms));
     }
 
     pub fn clear_bandwidth_pair(&self, from: SocketAddr, to: SocketAddr) {
@@ -205,22 +215,25 @@ impl SimRouter {
         let jitter = inner.reorder_jitter_for(from, to);
         let deliver_at_ms = now_ms.saturating_add(delay.saturating_add(jitter));
         let seq = inner.next_seq();
-        inner
-            .inflight
-            .push(Reverse(QueuedMsg::new(
-                from,
-                to,
-                data,
-                deliver_at_ms,
-                now_ms,
-                seq,
-                from_epoch,
-                to_epoch,
-            )));
+        inner.inflight.push(Reverse(QueuedMsg::new(
+            from,
+            to,
+            data,
+            deliver_at_ms,
+            now_ms,
+            seq,
+            from_epoch,
+            to_epoch,
+        )));
         Ok(())
     }
 
-    pub fn recv_from(&self, local: SocketAddr, local_epoch: u64, remote: SocketAddr) -> Result<Option<Bytes>> {
+    pub fn recv_from(
+        &self,
+        local: SocketAddr,
+        local_epoch: u64,
+        remote: SocketAddr,
+    ) -> Result<Option<Bytes>> {
         let mut inner = self.inner.lock().unwrap();
         let node = inner
             .nodes

@@ -51,7 +51,11 @@ fn parse_args() -> Result<Args, String> {
                     if part.trim().is_empty() {
                         continue;
                     }
-                    seeds.push(part.trim().parse::<u64>().map_err(|_| "--seeds must be u64 list")?);
+                    seeds.push(
+                        part.trim()
+                            .parse::<u64>()
+                            .map_err(|_| "--seeds must be u64 list")?,
+                    );
                 }
             }
             "--seed-start" => {
@@ -60,7 +64,10 @@ fn parse_args() -> Result<Args, String> {
             }
             "--seed-count" => {
                 let val = args.next().ok_or("--seed-count requires a value")?;
-                seed_count = Some(val.parse::<usize>().map_err(|_| "--seed-count must be usize")?);
+                seed_count = Some(
+                    val.parse::<usize>()
+                        .map_err(|_| "--seed-count must be usize")?,
+                );
             }
             "--jobs" => {
                 let val = args.next().ok_or("--jobs requires a value")?;
@@ -71,7 +78,9 @@ fn parse_args() -> Result<Args, String> {
             }
             "--iterations" => {
                 let val = args.next().ok_or("--iterations requires a value")?;
-                iterations = val.parse::<usize>().map_err(|_| "--iterations must be usize")?;
+                iterations = val
+                    .parse::<usize>()
+                    .map_err(|_| "--iterations must be usize")?;
             }
             "--error-rate" => {
                 let val = args.next().ok_or("--error-rate requires a value")?;
@@ -80,7 +89,9 @@ fn parse_args() -> Result<Args, String> {
             "--partial-writes" => partial_writes = true,
             "--progress-every" => {
                 let val = args.next().ok_or("--progress-every requires a value")?;
-                let parsed = val.parse::<usize>().map_err(|_| "--progress-every must be usize")?;
+                let parsed = val
+                    .parse::<usize>()
+                    .map_err(|_| "--progress-every must be usize")?;
                 if parsed == 0 {
                     return Err("--progress-every must be >= 1".to_string());
                 }
@@ -138,8 +149,7 @@ fn build_seed_list(args: &Args) -> Result<Vec<u64>, String> {
 fn spawn_child(seed: u64, args: &Args) -> std::io::Result<Child> {
     let exe = std::env::current_exe()?;
     let mut cmd = Command::new(exe);
-    cmd
-        .arg("--child")
+    cmd.arg("--child")
         .arg("--seed")
         .arg(seed.to_string())
         .arg("--iterations")

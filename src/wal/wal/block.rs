@@ -1,7 +1,7 @@
+use crate::invariants::sim_assert;
 use crate::wal::wal::config::{
     checksum64, debug_print, ENTRY_TRAILER_MAGIC, ENTRY_TRAILER_SIZE, PREFIX_META_SIZE,
 };
-use crate::invariants::sim_assert;
 use crate::wal::wal::storage::SharedMmap;
 use rkyv::{Archive, Deserialize, Serialize};
 use std::sync::Arc;
@@ -108,12 +108,8 @@ impl Block {
             checksum: payload_checksum,
         };
 
-        let meta_bytes = rkyv::to_bytes::<_, 256>(&new_meta).map_err(|e| {
-            std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!("serialize metadata failed: {:?}", e),
-            )
-        })?;
+        let meta_bytes = rkyv::to_bytes::<_, 256>(&new_meta)
+            .map_err(|e| std::io::Error::other(format!("serialize metadata failed: {:?}", e)))?;
         if meta_bytes.len() > MAX_META_BYTES {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
@@ -171,8 +167,7 @@ impl Block {
         data_len: usize,
     ) -> std::io::Result<()> {
         sim_assert(
-            in_block_offset
-                + (PREFIX_META_SIZE + data_len + ENTRY_TRAILER_SIZE) as u64
+            in_block_offset + (PREFIX_META_SIZE + data_len + ENTRY_TRAILER_SIZE) as u64
                 <= self.limit,
             "invalidate_entry out of bounds",
         );
@@ -232,15 +227,13 @@ impl Block {
         aligned.extend_from_slice(&meta_buffer[META_DATA_OFFSET..META_DATA_OFFSET + meta_len]);
 
         // Use check_archived_root to safely validate potentially corrupted data
-        let archived =
-            rkyv::validation::validators::check_archived_root::<Metadata>(&aligned[..]).map_err(
-                |e| {
-                    std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        format!("corrupted metadata archive: {}", e),
-                    )
-                },
-            )?;
+        let archived = rkyv::validation::validators::check_archived_root::<Metadata>(&aligned[..])
+            .map_err(|e| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("corrupted metadata archive: {}", e),
+                )
+            })?;
         let meta: Metadata = archived.deserialize(&mut rkyv::Infallible).map_err(|_| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
@@ -277,8 +270,7 @@ impl Block {
         // Step 6: Verify trailer commit marker
         let trailer_offset = new_offset + actual_entry_size as u64;
         let mut trailer_buf = [0u8; ENTRY_TRAILER_SIZE];
-        self.mmap
-            .read(trailer_offset as usize, &mut trailer_buf)?;
+        self.mmap.read(trailer_offset as usize, &mut trailer_buf)?;
         let magic = u64::from_le_bytes(
             trailer_buf[0..8]
                 .try_into()

@@ -2,17 +2,17 @@
 
 use crate::error::{OctopiiError, Result};
 use crate::invariants::sim_assert;
-use crate::wal::WriteAheadLog;
 #[cfg(feature = "simulation")]
 use crate::wal::wal::vfs::sim;
+use crate::wal::WriteAheadLog;
 use bytes::Bytes;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::Path;
-use std::sync::RwLock as StdRwLock;
 use std::sync::Arc;
+use std::sync::RwLock as StdRwLock;
 use tokio::sync::RwLock as TokioRwLock;
 
 pub(crate) static GLOBAL_PEER_ADDRS: Lazy<StdRwLock<HashMap<String, HashMap<u64, SocketAddr>>>> =
@@ -35,7 +35,9 @@ pub fn peer_namespace_from_base(path: &Path) -> String {
 
 pub(crate) fn register_global_peer_addr(namespace: &str, node_id: u64, addr: SocketAddr) {
     let mut map = GLOBAL_PEER_ADDRS.write().unwrap();
-    map.entry(namespace.to_string()).or_default().insert(node_id, addr);
+    map.entry(namespace.to_string())
+        .or_default()
+        .insert(node_id, addr);
 }
 
 pub(crate) fn global_peer_addr(namespace: &str, peer_id: u64) -> Option<SocketAddr> {
@@ -60,9 +62,7 @@ pub(crate) struct PeerAddrRecord {
     pub(crate) addr: SocketAddr,
 }
 
-pub(crate) async fn load_peer_addr_records(
-    wal: &Arc<WriteAheadLog>,
-) -> HashMap<u64, SocketAddr> {
+pub(crate) async fn load_peer_addr_records(wal: &Arc<WriteAheadLog>) -> HashMap<u64, SocketAddr> {
     let mut map = HashMap::new();
     if let Ok(entries) = wal.read_all().await {
         for raw in entries {

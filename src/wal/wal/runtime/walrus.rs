@@ -1,8 +1,8 @@
+use crate::invariants::sim_assert;
 use crate::wal::wal::block::{Block, Metadata};
 use crate::wal::wal::config::{
     checksum64, debug_print, FsyncSchedule, DEFAULT_BLOCK_SIZE, MAX_FILE_SIZE, PREFIX_META_SIZE,
 };
-use crate::invariants::sim_assert;
 use crate::wal::wal::paths::WalPathManager;
 use crate::wal::wal::storage::{set_fsync_schedule, SharedMmapKeeper};
 use crate::wal::wal::vfs as fs;
@@ -119,17 +119,19 @@ impl Walrus {
 
     pub(super) fn get_or_create_writer(&self, col_name: &str) -> std::io::Result<Arc<Writer>> {
         if let Some(writer) = {
-            let map = self.writers.read().map_err(|_| {
-                std::io::Error::new(std::io::ErrorKind::Other, "writers read lock poisoned")
-            })?;
+            let map = self
+                .writers
+                .read()
+                .map_err(|_| std::io::Error::other("writers read lock poisoned"))?;
             map.get(col_name).cloned()
         } {
             return Ok(writer);
         }
 
-        let mut map = self.writers.write().map_err(|_| {
-            std::io::Error::new(std::io::ErrorKind::Other, "writers write lock poisoned")
-        })?;
+        let mut map = self
+            .writers
+            .write()
+            .map_err(|_| std::io::Error::other("writers write lock poisoned"))?;
 
         if let Some(writer) = map.get(col_name).cloned() {
             return Ok(writer);
@@ -316,7 +318,10 @@ impl Walrus {
                     block_offset += DEFAULT_BLOCK_SIZE;
                     continue;
                 }
-                sim_assert(used <= DEFAULT_BLOCK_SIZE, "startup recovery used exceeds block size");
+                sim_assert(
+                    used <= DEFAULT_BLOCK_SIZE,
+                    "startup recovery used exceeds block size",
+                );
 
                 let block = Block {
                     id: next_block_id as u64,
@@ -326,7 +331,10 @@ impl Walrus {
                     mmap: mmap.clone(),
                     used,
                 };
-                sim_assert(block.used <= block.limit, "startup recovery block used exceeds limit");
+                sim_assert(
+                    block.used <= block.limit,
+                    "startup recovery block used exceeds limit",
+                );
                 // register and append
                 BlockStateTracker::register_block(next_block_id, file_path);
                 FileStateTracker::add_block_to_file_state(file_path);
@@ -334,7 +342,8 @@ impl Walrus {
                     let _ = self.reader.append_block_to_chain(&col_name, block.clone());
                     #[cfg(feature = "simulation")]
                     {
-                        *topic_entry_counts.entry(col_name.clone()).or_insert(0) += entry_count_in_block;
+                        *topic_entry_counts.entry(col_name.clone()).or_insert(0) +=
+                            entry_count_in_block;
                     }
                     #[cfg(feature = "simulation")]
                     {

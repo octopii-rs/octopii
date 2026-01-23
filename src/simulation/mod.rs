@@ -11,17 +11,11 @@ pub use rng::SimRng;
 
 // Deterministic simulation harness for long-running fuzz-style runs
 
-struct DualTopic {
-    primary: String,
-    recovery: String,
-}
-
 struct Simulation {
     rng: SimRng,
     oracle: Oracle,
     wal: Option<Walrus>,
     topics: Vec<String>,
-    dual_topics: Vec<DualTopic>,
     root_dir: PathBuf,
     current_key: String,
     target_error_rate: f64,
@@ -30,6 +24,14 @@ struct Simulation {
 }
 
 impl Simulation {
+    // Action distribution thresholds (cumulative percentages)
+    const WRITE_THRESHOLD: usize = 40; // 0-40: single write (41%)
+    const BATCH_WRITE_THRESHOLD: usize = 55; // 41-55: batch write (15%)
+    const READ_THRESHOLD: usize = 70; // 56-70: single read (15%)
+    const BATCH_READ_THRESHOLD: usize = 85; // 71-85: batch read (15%)
+    const TICK_THRESHOLD: usize = 93; // 86-93: tick background (8%)
+                                      // 94-100: crash/recover (7%)
+
     fn new(seed: u64, error_rate: f64, progress_every: Option<usize>) -> Self {
         let root_dir = std::env::temp_dir().join(format!("walrus_sim_{}", seed));
         let _ = vfs::remove_dir_all(&root_dir);
@@ -42,16 +44,6 @@ impl Simulation {
             oracle: Oracle::new(),
             wal: None,
             topics: vec!["orders".into(), "logs".into(), "metrics".into()],
-            dual_topics: vec![
-                DualTopic {
-                    primary: "log".into(),
-                    recovery: "log_recovery".into(),
-                },
-                DualTopic {
-                    primary: "hard_state".into(),
-                    recovery: "hard_state_recovery".into(),
-                },
-            ],
             root_dir,
             current_key: "sim_node".into(),
             target_error_rate: error_rate,
@@ -77,15 +69,6 @@ impl Simulation {
         self.wal = Some(w);
 
         sim::set_io_error_rate(self.target_error_rate);
-    }
-
-    fn all_readable_topics(&self) -> Vec<String> {
-        let mut all = self.topics.clone();
-        for dual in &self.dual_topics {
-            all.push(dual.primary.clone());
-            all.push(dual.recovery.clone());
-        }
-        all
     }
 
     fn crash_and_recover(&mut self) {
@@ -123,15 +106,12 @@ impl Simulation {
         for step in 0..iterations {
             if let Some(every) = self.progress_every {
                 if step > 0 && step % every == 0 {
-                    eprintln!(
-                        "[seed {}] progress {}/{}",
-                        self.seed, step, iterations
-                    );
+                    eprintln!("[seed {}] progress {}/{}", self.seed, step, iterations);
                 }
             }
             let action_roll = self.rng.range(0, 100);
 
-            if action_roll <= 40 {
+            if action_roll <= Self::WRITE_THRESHOLD {
                 let topic_idx = self.rng.range(0, self.topics.len());
                 let topic = &self.topics[topic_idx];
                 let payload = self.rng.gen_payload();
@@ -140,7 +120,7 @@ impl Simulation {
                 if wal.append_for_topic(topic, &payload).is_ok() {
                     self.oracle.record_write(topic, payload);
                 }
-            } else if action_roll <= 55 {
+            } else if action_roll <= Self::BATCH_WRITE_THRESHOLD {
                 let topic_idx = self.rng.range(0, self.topics.len());
                 let topic = &self.topics[topic_idx];
                 let batch_size = self.rng.range(1, 10);
@@ -157,30 +137,27 @@ impl Simulation {
                         self.oracle.record_write(topic, payload);
                     }
                 }
-            } else if action_roll <= 70 {
-                let all_topics = self.all_readable_topics();
-                let topic_idx = self.rng.range(0, all_topics.len());
-                let topic = &all_topics[topic_idx];
+            } else if action_roll <= Self::READ_THRESHOLD {
+                let topic_idx = self.rng.range(0, self.topics.len());
+                let topic = &self.topics[topic_idx];
 
                 let wal = self.wal.as_ref().unwrap();
                 if let Ok(Some(entry)) = wal.read_next(topic, true) {
                     self.oracle.verify_read(topic, &entry.data);
                 }
-            } else if action_roll <= 85 {
-                let all_topics = self.all_readable_topics();
-                let topic_idx = self.rng.range(0, all_topics.len());
-                let topic = &all_topics[topic_idx];
+            } else if action_roll <= Self::BATCH_READ_THRESHOLD {
+                let topic_idx = self.rng.range(0, self.topics.len());
+                let topic = &self.topics[topic_idx];
                 let max_bytes = self.rng.range(50, 2000);
 
                 let wal = self.wal.as_ref().unwrap();
                 if let Ok(entries) = wal.batch_read_for_topic(topic, max_bytes, true) {
                     if !entries.is_empty() {
-                        let payloads: Vec<Vec<u8>> =
-                            entries.into_iter().map(|e| e.data).collect();
+                        let payloads: Vec<Vec<u8>> = entries.into_iter().map(|e| e.data).collect();
                         self.oracle.verify_batch_read(topic, &payloads);
                     }
                 }
-            } else if action_roll <= 93 {
+            } else if action_roll <= Self::TICK_THRESHOLD {
                 self.wal.as_ref().unwrap().tick_background();
                 sim::advance_time(std::time::Duration::from_millis(100));
             } else {
@@ -211,7 +188,7 @@ pub fn run_simulation_with_config(
     sim::setup(SimConfig {
         seed,
         io_error_rate: error_rate,
-        initial_time_ns: 1700000000_000_000_000,
+        initial_time_ns: 1_700_000_000_000_000_000,
         enable_partial_writes: partial_writes,
     });
 

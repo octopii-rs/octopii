@@ -76,8 +76,7 @@ fn replay_wal_to_map(wal: &Arc<WriteAheadLog>) -> HashMap<String, Bytes> {
     loop {
         match walrus.read_next(TOPIC_STATE_MACHINE_SNAPSHOT, true) {
             Ok(Some(entry)) => {
-                let archived =
-                    unsafe { rkyv::archived_root::<StateMachineSnapshot>(&entry.data) };
+                let archived = unsafe { rkyv::archived_root::<StateMachineSnapshot>(&entry.data) };
                 let snapshot: StateMachineSnapshot =
                     match archived.deserialize(&mut rkyv::Infallible) {
                         Ok(s) => s,
@@ -97,13 +96,12 @@ fn replay_wal_to_map(wal: &Arc<WriteAheadLog>) -> HashMap<String, Bytes> {
     loop {
         match walrus.read_next(TOPIC_STATE_MACHINE, true) {
             Ok(Some(entry)) => {
-                let archived =
-                    unsafe { rkyv::archived_root::<StateMachineEntry>(&entry.data) };
-                let sm_entry: StateMachineEntry =
-                    match archived.deserialize(&mut rkyv::Infallible) {
-                        Ok(d) => d,
-                        Err(_) => break,
-                    };
+                let archived = unsafe { rkyv::archived_root::<StateMachineEntry>(&entry.data) };
+                let sm_entry: StateMachineEntry = match archived.deserialize(&mut rkyv::Infallible)
+                {
+                    Ok(d) => d,
+                    Err(_) => break,
+                };
 
                 if sm_entry.value.is_empty() {
                     recovered.remove(&sm_entry.key);
@@ -355,10 +353,7 @@ impl WalBackedStateMachine {
                         sim_assert(restore_result.is_ok(), "wal replay restore failed");
                         for entry in &replay_entries {
                             let result = inner.apply(entry);
-                            sim_assert(
-                                result.is_ok(),
-                                "wal replay apply failed on second pass",
-                            );
+                            sim_assert(result.is_ok(), "wal replay apply failed on second pass");
                         }
                         let post_snapshot_2 = inner.snapshot();
                         sim_assert(

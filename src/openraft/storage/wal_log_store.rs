@@ -3,8 +3,8 @@
 use crate::error::OctopiiError;
 use crate::invariants;
 use crate::openraft::storage::log_store::MemLogStoreInner;
-use crate::openraft::types::AppTypeConfig;
 use crate::openraft::storage::wal::append_wal_record;
+use crate::openraft::types::AppTypeConfig;
 use crate::wal::WriteAheadLog;
 use bytes::Bytes;
 use openraft::{
@@ -58,9 +58,9 @@ impl WalLogStore {
         let last_log_id = inner.log.iter().next_back().map(|(_, entry)| entry.log_id);
 
         // Check entries against purge point
-        if let Some(purged) = inner.last_purged_log_id.clone() {
+        if let Some(purged) = inner.last_purged_log_id {
             invariants::sim_assert(
-                last_log_id.map_or(true, |last| purged <= last),
+                last_log_id.is_none_or(|last| purged <= last),
                 "last purged log id is after last log id",
             );
             for (idx, entry) in inner.log.iter() {
@@ -90,9 +90,10 @@ impl WalLogStore {
         }
 
         // Check for gaps in log
-        if let (Some(first_idx), Some(last_idx)) =
-            (inner.log.keys().next().copied(), inner.log.keys().next_back().copied())
-        {
+        if let (Some(first_idx), Some(last_idx)) = (
+            inner.log.keys().next().copied(),
+            inner.log.keys().next_back().copied(),
+        ) {
             let expected_count = (last_idx - first_idx + 1) as usize;
             invariants::sim_assert(
                 inner.log.len() == expected_count,
@@ -123,7 +124,7 @@ impl WalLogStore {
             );
 
             // Committed must be >= purge point
-            if let Some(purged) = inner.last_purged_log_id.clone() {
+            if let Some(purged) = inner.last_purged_log_id {
                 invariants::sim_assert(
                     committed.index >= purged.index,
                     "committed log id is before last purged log id",
@@ -336,8 +337,7 @@ impl WalLogStore {
     }
 
     pub(crate) async fn persist_record(&self, record: &WalLogRecord) -> Result<(), io::Error> {
-        let data =
-            bincode::serialize(record).map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        let data = bincode::serialize(record).map_err(io::Error::other)?;
         append_wal_record(&self.wal, Bytes::from(data)).await
     }
 }
@@ -377,10 +377,10 @@ struct LogStoreSnapshot {
 impl LogStoreSnapshot {
     fn from_inner(inner: &MemLogStoreInner) -> Self {
         Self {
-            last_purged_log_id: inner.last_purged_log_id.clone(),
+            last_purged_log_id: inner.last_purged_log_id,
             log: inner.log.clone(),
             committed: inner.committed,
-            vote: inner.vote.clone(),
+            vote: inner.vote,
         }
     }
 }
@@ -429,10 +429,10 @@ impl RaftLogStorage<AppTypeConfig> for WalLogStore {
     async fn save_vote(&mut self, vote: &openraft::Vote<AppTypeConfig>) -> Result<(), io::Error> {
         {
             let mut inner = self.inner.lock().await;
-            inner.vote = Some(vote.clone());
+            inner.vote = Some(*vote);
             Self::sim_assert_log_store_state(&inner);
         }
-        self.persist_record(&WalLogRecord::Vote(vote.clone())).await
+        self.persist_record(&WalLogRecord::Vote(*vote)).await
     }
 
     async fn append<I>(

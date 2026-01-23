@@ -1,17 +1,17 @@
 #![cfg(feature = "openraft")]
 
+use crate::openraft::storage::wal::append_wal_record;
 use crate::openraft::types::{AppEntry, AppResponse, AppTypeConfig};
 use crate::state_machine::StateMachine;
 use crate::wal::WriteAheadLog;
-use crate::openraft::storage::wal::append_wal_record;
 use bytes::Bytes;
 use futures::{Stream, TryStreamExt};
-use serde::{Deserialize, Serialize};
 use openraft::{
     alias::SnapshotDataOf,
     storage::{EntryResponder, RaftSnapshotBuilder, RaftStateMachine, Snapshot},
     EntryPayload, LogId, OptionalSend, SnapshotMeta, StoredMembership,
 };
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::io::{self, Cursor};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -87,7 +87,10 @@ impl MemStateMachine {
                         SmMetaRecord::Membership { log_id, membership } => {
                             data.last_membership = StoredMembership::new(log_id, membership);
                         }
-                        SmMetaRecord::Snapshot { meta, data: snap_data } => {
+                        SmMetaRecord::Snapshot {
+                            meta,
+                            data: snap_data,
+                        } => {
                             if let Ok(restored) =
                                 bincode::deserialize::<BTreeMap<String, String>>(&snap_data)
                             {
@@ -125,8 +128,7 @@ impl MemStateMachine {
     /// Persist a metadata record to WAL (if WAL is configured).
     async fn persist_meta(&self, record: &SmMetaRecord) -> io::Result<()> {
         if let Some(ref wal) = self.meta_wal {
-            let data = bincode::serialize(record)
-                .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+            let data = bincode::serialize(record).map_err(io::Error::other)?;
             append_wal_record(wal, Bytes::from(data)).await?;
         }
         Ok(())
@@ -203,7 +205,10 @@ impl RaftStateMachine<AppTypeConfig> for Arc<MemStateMachine> {
             Stream<Item = Result<EntryResponder<AppTypeConfig>, io::Error>> + Unpin + OptionalSend,
     {
         // Collect membership updates to persist after releasing the lock
-        let mut membership_to_persist: Option<(Option<LogId<AppTypeConfig>>, openraft::Membership<AppTypeConfig>)> = None;
+        let mut membership_to_persist: Option<(
+            Option<LogId<AppTypeConfig>>,
+            openraft::Membership<AppTypeConfig>,
+        )> = None;
 
         {
             let mut sm = self.state_machine.write().await;
@@ -214,10 +219,7 @@ impl RaftStateMachine<AppTypeConfig> for Arc<MemStateMachine> {
                 let response = match entry.payload {
                     EntryPayload::Blank => AppResponse(Vec::new()),
                     EntryPayload::Normal(ref data) => {
-                        let result = self
-                            .sm
-                            .apply(&data.0)
-                            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+                        let result = self.sm.apply(&data.0).map_err(io::Error::other)?;
                         AppResponse(result.to_vec())
                     }
                     EntryPayload::Membership(ref mem) => {
@@ -236,7 +238,8 @@ impl RaftStateMachine<AppTypeConfig> for Arc<MemStateMachine> {
 
         // Persist membership updates outside the lock
         if let Some((log_id, membership)) = membership_to_persist {
-            self.persist_meta(&SmMetaRecord::Membership { log_id, membership }).await?;
+            self.persist_meta(&SmMetaRecord::Membership { log_id, membership })
+                .await?;
         }
 
         Ok(())
@@ -270,7 +273,7 @@ impl RaftStateMachine<AppTypeConfig> for Arc<MemStateMachine> {
 
         // Extract membership info for persistence before taking locks
         let membership_to_persist = meta.last_membership.membership().clone();
-        let membership_log_id = meta.last_membership.log_id().clone();
+        let membership_log_id = *meta.last_membership.log_id();
 
         {
             let mut state_machine = self.state_machine.write().await;
@@ -282,9 +285,7 @@ impl RaftStateMachine<AppTypeConfig> for Arc<MemStateMachine> {
         // Also restore into the state machine
         let snapshot_bytes = bincode::serialize(&updated_state_machine_data)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-        self.sm
-            .restore(&snapshot_bytes)
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        self.sm.restore(&snapshot_bytes).map_err(io::Error::other)?;
 
         *current_snapshot = Some(new_snapshot);
         drop(current_snapshot);
@@ -293,7 +294,8 @@ impl RaftStateMachine<AppTypeConfig> for Arc<MemStateMachine> {
         self.persist_meta(&SmMetaRecord::Membership {
             log_id: membership_log_id,
             membership: membership_to_persist,
-        }).await?;
+        })
+        .await?;
 
         self.persist_meta(&SmMetaRecord::Snapshot {
             meta: meta.clone(),

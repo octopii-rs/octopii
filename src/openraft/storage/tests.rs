@@ -2,11 +2,11 @@
 
 use crate::openraft::storage::{WalLogRecord, WalLogStore};
 use crate::openraft::types::{AppEntry, AppTypeConfig};
-use crate::wal::wal::vfs::sim::{self, SimConfig};
 use crate::wal::wal::vfs;
+use crate::wal::wal::vfs::sim::{self, SimConfig};
+use openraft::storage::{RaftLogReader, RaftLogStorage};
 use openraft::type_config::alias::CommittedLeaderIdOf;
 use openraft::vote::RaftLeaderId;
-use openraft::storage::{RaftLogReader, RaftLogStorage};
 use openraft::{Entry, EntryPayload, LogId};
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -61,7 +61,12 @@ fn strictly_at_once_wal_log_store_recovery() {
             let prev_partial = sim::get_partial_writes_enabled();
             sim::set_io_error_rate(0.0);
             sim::set_partial_writes_enabled(false);
-            let wal = test_utils::create_wal_with_retry(&rt, wal_path.clone(), scenario_seed, WAL_CREATE_RETRIES);
+            let wal = test_utils::create_wal_with_retry(
+                &rt,
+                wal_path.clone(),
+                scenario_seed,
+                WAL_CREATE_RETRIES,
+            );
             let mut store = rt
                 .block_on(WalLogStore::new(Arc::clone(&wal)))
                 .expect("Failed to create WalLogStore");
@@ -114,7 +119,8 @@ fn strictly_at_once_wal_log_store_recovery() {
                         }
                     }
                     4 => {
-                        let committed = oracle_log.iter().next_back().map(|(_, entry)| entry.log_id);
+                        let committed =
+                            oracle_log.iter().next_back().map(|(_, entry)| entry.log_id);
                         if rt
                             .block_on(store.persist_record(&WalLogRecord::Committed(committed)))
                             .is_ok()
@@ -130,7 +136,10 @@ fn strictly_at_once_wal_log_store_recovery() {
                             let cutoff = committed_index + 1 + (rng.next_u64() % span.max(1));
                             if let Some(entry) = oracle_log.get(&cutoff).cloned() {
                                 if rt
-                                    .block_on(store.persist_record(&WalLogRecord::Truncated(entry.log_id)))
+                                    .block_on(
+                                        store
+                                            .persist_record(&WalLogRecord::Truncated(entry.log_id)),
+                                    )
                                     .is_ok()
                                 {
                                     let keys: Vec<u64> =
@@ -148,11 +157,15 @@ fn strictly_at_once_wal_log_store_recovery() {
                             let purge_index = 1 + (rng.next_u64() % committed_index);
                             if let Some(entry) = oracle_log.get(&purge_index).cloned() {
                                 if rt
-                                    .block_on(store.persist_record(&WalLogRecord::Purged(entry.log_id)))
+                                    .block_on(
+                                        store.persist_record(&WalLogRecord::Purged(entry.log_id)),
+                                    )
                                     .is_ok()
                                 {
-                                    let keys: Vec<u64> =
-                                        oracle_log.range(..=purge_index).map(|(idx, _)| *idx).collect();
+                                    let keys: Vec<u64> = oracle_log
+                                        .range(..=purge_index)
+                                        .map(|(idx, _)| *idx)
+                                        .collect();
                                     for key in keys {
                                         oracle_log.remove(&key);
                                     }

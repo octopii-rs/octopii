@@ -3,6 +3,7 @@
 use crate::openraft::peer_registry::global_peer_addr;
 use crate::openraft::types::{AppNodeId, AppTypeConfig};
 use crate::rpc::{RequestPayload, ResponsePayload, RpcHandler};
+use crate::sim_time;
 use openraft::{
     error::RPCError,
     network::RaftNetworkFactory,
@@ -13,7 +14,6 @@ use std::io;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::time::Duration;
-use crate::sim_time;
 
 /// QUIC-backed network for OpenRaft messages
 pub struct QuinnNetwork {
@@ -140,26 +140,18 @@ impl QuinnNetwork {
         let data = bincode::serialize(req)
             .map_err(|e| RPCError::Network(openraft::error::NetworkError::new(&e)))?;
 
-        let resp_payload = self
-            .send_openraft(kind, data)
-            .await
-            .map_err(|e| {
-                RPCError::Unreachable(openraft::error::Unreachable::new(&io::Error::new(
-                    io::ErrorKind::Other,
-                    e,
-                )))
-            })?;
+        let resp_payload = self.send_openraft(kind, data).await.map_err(|e| {
+            RPCError::Unreachable(openraft::error::Unreachable::new(&io::Error::other(e)))
+        })?;
 
         match resp_payload {
-            ResponsePayload::OpenRaft { kind: resp_kind, data } if resp_kind == kind => {
-                bincode::deserialize(&data)
-                    .map_err(|e| RPCError::Network(openraft::error::NetworkError::new(&e)))
-            }
+            ResponsePayload::OpenRaft {
+                kind: resp_kind,
+                data,
+            } if resp_kind == kind => bincode::deserialize(&data)
+                .map_err(|e| RPCError::Network(openraft::error::NetworkError::new(&e))),
             other => Err(RPCError::Unreachable(openraft::error::Unreachable::new(
-                &io::Error::new(
-                    io::ErrorKind::Other,
-                    format!("unexpected response: {:?}", other),
-                ),
+                &io::Error::other(format!("unexpected response: {:?}", other)),
             ))),
         }
     }
@@ -188,8 +180,7 @@ impl openraft::network::v2::RaftNetworkV2<AppTypeConfig> for QuinnNetwork {
     > {
         // For now, return an error - full snapshot streaming not yet implemented
         Err(openraft::error::StreamingError::Unreachable(
-            openraft::error::Unreachable::new(&io::Error::new(
-                io::ErrorKind::Other,
+            openraft::error::Unreachable::new(&io::Error::other(
                 "full_snapshot not yet implemented",
             )),
         ))

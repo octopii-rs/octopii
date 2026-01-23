@@ -1,6 +1,6 @@
+use crate::invariants::sim_assert;
 use crate::wal::wal::block::Block;
 use crate::wal::wal::config::debug_print;
-use crate::invariants::sim_assert;
 use std::collections::HashMap;
 use std::io;
 use std::sync::{Arc, RwLock};
@@ -33,14 +33,15 @@ impl Reader {
     pub(super) fn append_block_to_chain(&self, col: &str, block: Block) -> io::Result<()> {
         // fast path: try read-lock map and use per-column lock
         if let Some(info_arc) = {
-            let map = self.data.read().map_err(|_| {
-                io::Error::new(io::ErrorKind::Other, "reader map read lock poisoned")
-            })?;
+            let map = self
+                .data
+                .read()
+                .map_err(|_| io::Error::other("reader map read lock poisoned"))?;
             map.get(col).cloned()
         } {
-            let mut info = info_arc.write().map_err(|_| {
-                io::Error::new(io::ErrorKind::Other, "col info write lock poisoned")
-            })?;
+            let mut info = info_arc
+                .write()
+                .map_err(|_| io::Error::other("col info write lock poisoned"))?;
             let before = info.chain.len();
             sim_assert(block.used <= block.limit, "sealed block used exceeds limit");
             sim_assert(block.used > 0, "sealed block has zero used bytes");
@@ -66,9 +67,10 @@ impl Reader {
 
         // slow path
         let info_arc = {
-            let mut map = self.data.write().map_err(|_| {
-                io::Error::new(io::ErrorKind::Other, "reader map write lock poisoned")
-            })?;
+            let mut map = self
+                .data
+                .write()
+                .map_err(|_| io::Error::other("reader map write lock poisoned"))?;
             map.entry(col.to_string())
                 .or_insert_with(|| {
                     Arc::new(RwLock::new(ColReaderInfo {
@@ -85,7 +87,7 @@ impl Reader {
         };
         let mut info = info_arc
             .write()
-            .map_err(|_| io::Error::new(io::ErrorKind::Other, "col info write lock poisoned"))?;
+            .map_err(|_| io::Error::other("col info write lock poisoned"))?;
         sim_assert(block.used <= block.limit, "sealed block used exceeds limit");
         sim_assert(block.used > 0, "sealed block has zero used bytes");
         if let Some(last) = info.chain.last() {

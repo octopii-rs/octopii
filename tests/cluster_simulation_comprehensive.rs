@@ -306,7 +306,10 @@ mod comprehensive_tests {
         harness.heal_partitions();
         harness.tick(100, 50).await;
 
-        assert!(harness.verify_no_divergence().await, "log divergence detected");
+        assert!(
+            harness.verify_no_divergence().await,
+            "log divergence detected"
+        );
         harness.verify_log_durability_all().await;
         harness.cleanup();
     }
@@ -329,7 +332,8 @@ mod comprehensive_tests {
     async fn network_faults_reorder_timeout_bandwidth() {
         let (start, count) = seed_range();
         for seed in start..(start + count) {
-            let mut params = ClusterParams::new(3, seed, 0.0, FaultProfile::ReorderTimeoutBandwidth);
+            let mut params =
+                ClusterParams::new(3, seed, 0.0, FaultProfile::ReorderTimeoutBandwidth);
             enable_full_verification(&mut params);
             params.require_all_nodes = false;
             let mut harness = ClusterHarness::new(params).await;
@@ -351,7 +355,8 @@ mod comprehensive_tests {
         let (start, count) = seed_range();
         for seed in start..(start + count) {
             let error_rate = walrus_error_rate(seed, 0.08);
-            let mut params = ClusterParams::new(5, seed, error_rate, FaultProfile::CombinedNetworkAndIo);
+            let mut params =
+                ClusterParams::new(5, seed, error_rate, FaultProfile::CombinedNetworkAndIo);
             enable_full_verification(&mut params);
             let mut harness = ClusterHarness::new(params).await;
             let leader = harness.wait_for_leader().await;
@@ -400,10 +405,14 @@ mod comprehensive_tests {
 
         // Crash a follower (not the leader)
         let leader_id = leader.unwrap();
-        let follower_idx = harness.nodes.iter()
+        let follower_idx = harness
+            .nodes
+            .iter()
             .position(|n| n.id() != leader_id)
             .unwrap();
-        harness.crash_and_recover_node(follower_idx, CrashReason::Scheduled).await;
+        harness
+            .crash_and_recover_node(follower_idx, CrashReason::Scheduled)
+            .await;
 
         // Run more operations - give extra time for recovery
         harness.tick(100, 50).await;
@@ -427,10 +436,14 @@ mod comprehensive_tests {
 
         // Crash the leader
         let leader_id = leader.unwrap();
-        let leader_idx = harness.nodes.iter()
+        let leader_idx = harness
+            .nodes
+            .iter()
             .position(|n| n.id() == leader_id)
             .unwrap();
-        harness.crash_and_recover_node(leader_idx, CrashReason::Scheduled).await;
+        harness
+            .crash_and_recover_node(leader_idx, CrashReason::Scheduled)
+            .await;
         harness.tick(50, 50).await;
         harness.verify_log_durability_all().await;
 
@@ -453,13 +466,19 @@ mod comprehensive_tests {
 
         for cycle in 0..3 {
             let leader = harness.wait_for_leader().await;
-            assert!(leader.is_some(), "leader election failed in cycle {}", cycle);
+            assert!(
+                leader.is_some(),
+                "leader election failed in cycle {}",
+                cycle
+            );
 
             harness.run_oracle_workload(small_ops_count() / 2).await;
 
             // Crash a random node
             let crash_idx = (cycle % harness.nodes.len()) as usize;
-            harness.crash_and_recover_node(crash_idx, CrashReason::Scheduled).await;
+            harness
+                .crash_and_recover_node(crash_idx, CrashReason::Scheduled)
+                .await;
             harness.tick(50, 50).await;
             harness.verify_log_durability_all().await;
         }
@@ -475,12 +494,18 @@ mod comprehensive_tests {
 
         for cycle in 0..5 {
             let leader = harness.wait_for_leader().await;
-            assert!(leader.is_some(), "leader election failed in cycle {}", cycle);
+            assert!(
+                leader.is_some(),
+                "leader election failed in cycle {}",
+                cycle
+            );
 
             harness.run_oracle_workload(small_ops_count() / 2).await;
 
             let crash_idx = ((cycle * 3) % harness.nodes.len()) as usize;
-            harness.crash_and_recover_node(crash_idx, CrashReason::Scheduled).await;
+            harness
+                .crash_and_recover_node(crash_idx, CrashReason::Scheduled)
+                .await;
             harness.tick(50, 50).await;
             harness.verify_log_durability_all().await;
         }
@@ -496,13 +521,19 @@ mod comprehensive_tests {
 
         for cycle in 0..8 {
             let leader = harness.wait_for_leader().await;
-            assert!(leader.is_some(), "leader election failed in cycle {}", cycle);
+            assert!(
+                leader.is_some(),
+                "leader election failed in cycle {}",
+                cycle
+            );
 
             harness.run_oracle_workload(small_ops_count() / 3).await;
 
             // Crash a random node
             let crash_idx = ((cycle * 7) % harness.nodes.len()) as usize;
-            harness.crash_and_recover_node(crash_idx, CrashReason::Scheduled).await;
+            harness
+                .crash_and_recover_node(crash_idx, CrashReason::Scheduled)
+                .await;
             harness.tick(50, 50).await;
             harness.verify_log_durability_all().await;
         }
@@ -620,7 +651,9 @@ mod comprehensive_tests {
 
         for _ in 0..3 {
             harness.run_oracle_workload(small_ops_count() / 4).await;
-            harness.crash_and_recover_node(1, CrashReason::Scheduled).await;
+            harness
+                .crash_and_recover_node(1, CrashReason::Scheduled)
+                .await;
             harness.verify_must_survive().await;
             harness.verify_log_durability_all().await;
         }
@@ -712,7 +745,9 @@ mod comprehensive_tests {
         assert!(leader.is_some(), "leader election failed");
 
         harness.run_oracle_workload(small_ops_count() / 3).await;
-        harness.crash_and_recover_node(1, CrashReason::Scheduled).await;
+        harness
+            .crash_and_recover_node(1, CrashReason::Scheduled)
+            .await;
         harness.tick(50, 50).await;
         harness.verify_log_durability_all().await;
         harness.run_oracle_workload(small_ops_count() / 3).await;
@@ -756,7 +791,8 @@ mod comprehensive_tests {
     async fn full_verification_combined_faults_smoke() {
         let seed = 500014;
         let error_rate = walrus_error_rate(seed, 0.05);
-        let mut params = ClusterParams::new(3, seed, error_rate, FaultProfile::CombinedNetworkAndIo);
+        let mut params =
+            ClusterParams::new(3, seed, error_rate, FaultProfile::CombinedNetworkAndIo);
         enable_full_verification(&mut params);
         params.enable_partial_writes = true;
         params.require_all_nodes = false;
@@ -832,7 +868,9 @@ mod comprehensive_tests {
         assert!(leader.is_some(), "leader election failed");
 
         harness.run_oracle_workload(small_ops_count() / 3).await;
-        harness.crash_and_recover_node(1, CrashReason::Scheduled).await;
+        harness
+            .crash_and_recover_node(1, CrashReason::Scheduled)
+            .await;
         harness.tick(50, 50).await;
         harness.verify_log_durability_all().await;
         harness.run_oracle_workload(small_ops_count() / 3).await;
@@ -944,13 +982,19 @@ mod comprehensive_tests {
 
         for cycle in 0..10 {
             let leader = harness.wait_for_leader().await;
-            assert!(leader.is_some(), "leader election failed in cycle {}", cycle);
+            assert!(
+                leader.is_some(),
+                "leader election failed in cycle {}",
+                cycle
+            );
 
             harness.run_oracle_workload(small_ops_count() / 2).await;
 
             // Crash a random node
             let crash_idx = (cycle * 7) % harness.nodes.len();
-            harness.crash_and_recover_node(crash_idx, CrashReason::Scheduled).await;
+            harness
+                .crash_and_recover_node(crash_idx, CrashReason::Scheduled)
+                .await;
             harness.tick(50, 50).await;
             harness.verify_log_durability_all().await;
         }
@@ -1011,10 +1055,15 @@ mod comprehensive_tests {
 
         // Remove a follower
         let leader_id = leader.unwrap();
-        let follower_idx = harness.nodes.iter()
+        let follower_idx = harness
+            .nodes
+            .iter()
             .position(|n| n.id() != leader_id)
             .unwrap();
-        harness.remove_node(follower_idx).await.expect("remove failed");
+        harness
+            .remove_node(follower_idx)
+            .await
+            .expect("remove failed");
 
         // Cluster should continue operating
         harness.run_oracle_workload(small_ops_count()).await;
@@ -1108,7 +1157,8 @@ mod comprehensive_tests {
         let seeds = walrus_seed_sequence(0x9e3779b97f4a7c15, stress_seed_count());
         for seed in seeds {
             let error_rate = walrus_error_rate(seed, 0.05);
-            let mut params = ClusterParams::new(5, seed, error_rate, FaultProfile::ReorderTimeoutBandwidth);
+            let mut params =
+                ClusterParams::new(5, seed, error_rate, FaultProfile::ReorderTimeoutBandwidth);
             enable_full_verification(&mut params);
             let mut harness = ClusterHarness::new(params).await;
             let leader = harness.wait_for_leader().await;
@@ -1146,7 +1196,8 @@ mod comprehensive_tests {
         // Everything at once: I/O errors, partial writes, network faults, crashes
         let seed = 0x517c_c1b7_2722_0a95;
         let error_rate = 0.10;
-        let mut params = ClusterParams::new(5, seed, error_rate, FaultProfile::CombinedNetworkAndIo);
+        let mut params =
+            ClusterParams::new(5, seed, error_rate, FaultProfile::CombinedNetworkAndIo);
         enable_full_verification(&mut params);
         params.enable_partial_writes = true;
         params.require_all_nodes = false;
@@ -1162,7 +1213,9 @@ mod comprehensive_tests {
 
             // Crash and recover a node each cycle
             let crash_idx = (cycle * 3) % harness.nodes.len();
-            harness.crash_and_recover_node(crash_idx, CrashReason::Scheduled).await;
+            harness
+                .crash_and_recover_node(crash_idx, CrashReason::Scheduled)
+                .await;
             harness.tick(50, 50).await;
             harness.verify_log_durability_all().await;
         }
@@ -1276,7 +1329,10 @@ mod comprehensive_tests {
         harness.verify_log_durability_all().await;
 
         let (commits, failures, _) = harness.oracle_stats();
-        eprintln!("Stress I/O faults: {} commits, {} failures", commits, failures);
+        eprintln!(
+            "Stress I/O faults: {} commits, {} failures",
+            commits, failures
+        );
 
         harness.cleanup();
     }

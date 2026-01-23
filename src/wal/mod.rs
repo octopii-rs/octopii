@@ -2,6 +2,8 @@ pub mod wal;
 
 use crate::error::{OctopiiError, Result};
 use crate::invariants::sim_assert;
+use crate::sim_time;
+use crate::wal::wal::vfs;
 use bytes::Bytes;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -9,8 +11,6 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::time::Duration;
-use crate::sim_time;
-use crate::wal::wal::vfs;
 
 pub use wal::{FsyncSchedule, Walrus};
 
@@ -77,9 +77,7 @@ impl WriteAheadLog {
         // Create Walrus instance using block_in_place in production, direct call in simulation.
         // We use a global lock to prevent race conditions when setting WALRUS_DATA_DIR.
         let create_walrus = move || {
-            let _guard = WAL_CREATION_LOCK
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
+            let _guard = WAL_CREATION_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
             std::env::set_var("WALRUS_DATA_DIR", &root_dir_str);
             let result = wal::Walrus::with_consistency_and_schedule_for_key(
@@ -144,8 +142,7 @@ impl WriteAheadLog {
         // Return incrementing offset
         let offset = self.offset_counter.fetch_add(1, Ordering::SeqCst);
         crate::invariants::sim_assert(
-            self.offset_counter.load(Ordering::SeqCst)
-                == self.write_counter.load(Ordering::SeqCst),
+            self.offset_counter.load(Ordering::SeqCst) == self.write_counter.load(Ordering::SeqCst),
             "wal counters diverged after append",
         );
         Ok(offset)

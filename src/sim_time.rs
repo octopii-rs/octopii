@@ -1,9 +1,9 @@
-use std::future::Future;
-use std::time::Duration;
-#[cfg(all(feature = "simulation", feature = "openraft"))]
-use openraft::Instant as OpenRaftInstant;
 #[cfg(all(feature = "simulation", feature = "openraft"))]
 use openraft::AsyncRuntime;
+#[cfg(all(feature = "simulation", feature = "openraft"))]
+use openraft::Instant as OpenRaftInstant;
+use std::future::Future;
+use std::time::Duration;
 
 #[cfg(all(feature = "simulation", feature = "openraft"))]
 pub type Instant = crate::openraft::sim_runtime::SimInstant;
@@ -49,13 +49,12 @@ where
     tokio::time::timeout(duration, future)
 }
 
+#[cfg(all(feature = "simulation", feature = "openraft"))]
 pub fn elapsed(start: Instant) -> Duration {
-    #[cfg(all(feature = "simulation", feature = "openraft"))]
-    {
-        OpenRaftInstant::elapsed(&start)
-    }
-    #[cfg(not(all(feature = "simulation", feature = "openraft")))]
-    {
-        start.elapsed()
-    }
+    OpenRaftInstant::elapsed(&start)
+}
+
+#[cfg(not(all(feature = "simulation", feature = "openraft")))]
+pub fn elapsed(start: Instant) -> Duration {
+    start.elapsed()
 }

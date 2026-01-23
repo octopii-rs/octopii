@@ -126,10 +126,7 @@ pub async fn run_negotiated_transfer() -> Result<Bytes, Box<dyn Error>> {
     Ok(data)
 }
 
-async fn run_rpc_server(
-    transport: Arc<QuicTransport>,
-    rpc: Arc<RpcHandler>,
-) {
+async fn run_rpc_server(transport: Arc<QuicTransport>, rpc: Arc<RpcHandler>) {
     while let Ok((addr, peer)) = transport.accept().await {
         let rpc = Arc::clone(&rpc);
         let peer = peer as Arc<dyn Peer>;
@@ -138,7 +135,8 @@ async fn run_rpc_server(
                 match peer.recv().await {
                     Ok(Some(bytes)) => match rpc::deserialize(&bytes) {
                         Ok(message) => {
-                            rpc.notify_message(addr, message, Some(Arc::clone(&peer))).await;
+                            rpc.notify_message(addr, message, Some(Arc::clone(&peer)))
+                                .await;
                         }
                         Err(err) => tracing::warn!("rpc deserialize error: {}", err),
                     },

@@ -1,9 +1,9 @@
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use crate::wal::wal::vfs::now;
 #[cfg(not(feature = "simulation"))]
 use std::sync::atomic::AtomicU64;
-use crate::wal::wal::vfs::now;
 
 #[cfg(feature = "simulation")]
 use std::cell::RefCell;
@@ -32,7 +32,7 @@ pub(crate) fn is_fd_backend_enabled() -> bool {
         // WARNING: mmap backend is forbidden in simulation because it bypasses
         // fault-injection semantics and can expose uncommitted data.
         // Always enforce the FD backend (pwrite/pread through VFS).
-        return true;
+        true
     }
     #[cfg(not(feature = "simulation"))]
     {
@@ -44,7 +44,7 @@ pub(crate) fn is_io_uring_enabled() -> bool {
     #[cfg(feature = "simulation")]
     {
         // io_uring bypasses the VFS simulation layer, breaking fault injection.
-        return false;
+        false
     }
     #[cfg(not(feature = "simulation"))]
     {
@@ -72,7 +72,7 @@ pub enum FsyncSchedule {
 
 pub(crate) const DEFAULT_BLOCK_SIZE: u64 = 10 * 1024 * 1024; // 10mb
 pub(crate) const BLOCKS_PER_FILE: u64 = 100;
-pub(crate) const MAX_ALLOC: u64 = 1 * 1024 * 1024 * 1024; // 1 GiB cap per block
+pub(crate) const MAX_ALLOC: u64 = 1024 * 1024 * 1024; // 1 GiB cap per block
 pub(crate) const PREFIX_META_SIZE: usize = 128;
 pub(crate) const ENTRY_TRAILER_SIZE: usize = 16;
 pub(crate) const ENTRY_TRAILER_MAGIC: u64 = 0x6f_63_74_6f_70_69_69_21; // "octopii!" in hex
@@ -85,7 +85,7 @@ static LAST_MILLIS: AtomicU64 = AtomicU64::new(0);
 
 #[cfg(feature = "simulation")]
 thread_local! {
-    static LAST_MILLIS: std::cell::Cell<u64> = std::cell::Cell::new(0);
+    static LAST_MILLIS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
 pub(crate) fn now_millis_str() -> String {

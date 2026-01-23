@@ -6,6 +6,7 @@ mod bootstrap;
 mod membership;
 mod rpc;
 
+use crate::invariants::sim_assert;
 #[cfg(feature = "openraft-filters")]
 use crate::openraft::network::OpenRaftFilters;
 use crate::openraft::peer_registry::{global_peer_addr, persist_peer_addr};
@@ -14,15 +15,14 @@ use crate::runtime::OctopiiRuntime;
 use crate::state_machine::StateMachine;
 use crate::transport::Transport;
 use crate::wal::WriteAheadLog;
-use crate::invariants::sim_assert;
 use bytes::Bytes;
 use openraft::metrics::RaftMetrics;
 use openraft::storage::{LogState, RaftLogReader, RaftLogStorage};
 use openraft::{LogId, Raft, ServerState, Vote};
 use std::collections::HashMap;
+use std::io;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::io;
 use tokio::sync::RwLock;
 use tokio::time::Duration;
 
@@ -73,7 +73,14 @@ impl OpenRaftNode {
         quic_transport: Option<Arc<crate::transport::QuicTransport>>,
         custom_state_machine: Option<StateMachine>,
     ) -> Result<Self> {
-        bootstrap::new_with_transport(config, runtime, transport, quic_transport, custom_state_machine).await
+        bootstrap::new_with_transport(
+            config,
+            runtime,
+            transport,
+            quic_transport,
+            custom_state_machine,
+        )
+        .await
     }
 
     pub async fn new(config: Config, runtime: OctopiiRuntime) -> Result<Self> {
@@ -115,7 +122,14 @@ impl OpenRaftNode {
         let quic_transport =
             Arc::new(crate::transport::QuicTransport::new(config.bind_addr).await?);
         let transport: Arc<dyn Transport> = quic_transport.clone();
-        Self::new_with_transport(config, runtime, transport, Some(quic_transport), Some(state_machine)).await
+        Self::new_with_transport(
+            config,
+            runtime,
+            transport,
+            Some(quic_transport),
+            Some(state_machine),
+        )
+        .await
     }
 
     pub async fn log_state(&self) -> std::result::Result<LogState<AppTypeConfig>, io::Error> {
@@ -185,7 +199,7 @@ impl OpenRaftNode {
     pub async fn query(&self, command: &[u8]) -> Result<Bytes> {
         self.state_machine
             .apply(command)
-            .map_err(|e| crate::error::OctopiiError::Rpc(e))
+            .map_err(crate::error::OctopiiError::Rpc)
     }
 
     pub async fn campaign(&self) -> Result<()> {

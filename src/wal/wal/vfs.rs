@@ -145,10 +145,7 @@ pub mod sim {
         }
 
         fn remove_dir(&mut self, path: &Path) -> io::Result<()> {
-            if self
-                .dirs
-                .iter()
-                .any(|dir| dir.parent() == Some(path))
+            if self.dirs.iter().any(|dir| dir.parent() == Some(path))
                 || self.files.keys().any(|file| file.parent() == Some(path))
             {
                 return Err(io::Error::new(
@@ -522,13 +519,10 @@ pub mod sim {
                 let roll = c.rng.next_f64();
                 if roll < c.config.io_error_rate {
                     c.io_fail_count += 1;
-                    return Err(io::Error::new(
-                        io::ErrorKind::Other,
-                        format!(
-                            "simulated I/O failure (op #{}, roll={:.4}, threshold={:.4})",
-                            c.io_op_count, roll, c.config.io_error_rate
-                        ),
-                    ));
+                    return Err(io::Error::other(format!(
+                        "simulated I/O failure (op #{}, roll={:.4}, threshold={:.4})",
+                        c.io_op_count, roll, c.config.io_error_rate
+                    )));
                 }
             }
             Ok(())
@@ -654,10 +648,7 @@ pub mod sim {
         let target = RECOVERY_CRASH_POINT.with(|p| p.get());
         if let RecoveryCrashPoint::AfterEntryCount(n) = target {
             if count >= n {
-                panic!(
-                    "SIMULATED CRASH DURING RECOVERY after {} entries",
-                    count
-                );
+                panic!("SIMULATED CRASH DURING RECOVERY after {} entries", count);
             }
         }
     }
@@ -681,7 +672,7 @@ pub mod sim {
             let mut ctx_ref = ctx.borrow_mut();
             let sim = ctx_ref
                 .as_mut()
-                .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "simulation not active"))?;
+                .ok_or_else(|| io::Error::other("simulation not active"))?;
             f(&mut sim.fs)
         })
     }
@@ -694,12 +685,15 @@ pub mod sim {
             let ctx_ref = ctx.borrow();
             let sim = ctx_ref
                 .as_ref()
-                .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "simulation not active"))?;
+                .ok_or_else(|| io::Error::other("simulation not active"))?;
             f(&sim.fs)
         })
     }
 
-    pub(crate) fn open_with_options(path: &Path, opts: &SimOpenOptions) -> io::Result<SimFileHandle> {
+    pub(crate) fn open_with_options(
+        path: &Path,
+        opts: &SimOpenOptions,
+    ) -> io::Result<SimFileHandle> {
         with_fs_mut(|fs| {
             let is_dir = fs.dirs.contains(path);
             let exists = fs.files.contains_key(path) || is_dir;
@@ -710,9 +704,10 @@ pub mod sim {
                 return Err(io::Error::new(io::ErrorKind::NotFound, "file not found"));
             }
 
-            if is_dir && (opts.create || opts.create_new || opts.truncate || opts.write || opts.append)
+            if is_dir
+                && (opts.create || opts.create_new || opts.truncate || opts.write || opts.append)
             {
-                return Err(io::Error::new(io::ErrorKind::Other, "path is a directory"));
+                return Err(io::Error::other("path is a directory"));
             }
 
             if opts.create || opts.create_new {
@@ -1067,7 +1062,8 @@ impl Write for File {
                         if handle.append {
                             handle.cursor = sim::file_len(&handle.path)? as usize;
                         }
-                        let written = sim::write_at(&handle.path, handle.cursor, &buf[..partial_len])?;
+                        let written =
+                            sim::write_at(&handle.path, handle.cursor, &buf[..partial_len])?;
                         handle.cursor += written;
                         return Ok(written);
                     }
@@ -1380,11 +1376,11 @@ impl Iterator for ReadDir {
 
     fn next(&mut self) -> Option<Self::Item> {
         match &mut self.inner {
-            ReadDirInner::Real(inner) => inner
-                .next()
-                .map(|res| res.map(|entry| DirEntry {
+            ReadDirInner::Real(inner) => inner.next().map(|res| {
+                res.map(|entry| DirEntry {
                     inner: DirEntryInner::Real(entry),
-                })),
+                })
+            }),
             #[cfg(feature = "simulation")]
             ReadDirInner::Sim(entries, idx) => {
                 if *idx >= entries.len() {
@@ -1457,7 +1453,7 @@ pub fn read_dir<P: AsRef<Path>>(path: P) -> io::Result<ReadDir> {
     #[cfg(feature = "simulation")]
     {
         sim::should_fail_io()?;
-            sim::tick_time();
+        sim::tick_time();
         if sim::is_active() {
             let entries = sim::read_dir(path.as_ref())?;
             return Ok(ReadDir {

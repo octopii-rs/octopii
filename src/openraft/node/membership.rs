@@ -19,6 +19,37 @@ impl OpenRaftNode {
             || err_str.contains("ChangeMembershipError::InProgress")
     }
 
+    /// Retry a membership operation with backoff on "in progress" errors
+    async fn retry_membership_op<F, Fut, E>(&self, op_name: &str, mut op: F) -> Result<()>
+    where
+        F: FnMut() -> Fut,
+        Fut: std::future::Future<Output = std::result::Result<(), E>>,
+        E: std::fmt::Display,
+    {
+        for attempt in 0..Self::MEMBERSHIP_RETRY_MAX {
+            match op().await {
+                Ok(_) => return Ok(()),
+                Err(e) => {
+                    let err_str = format!("{e}");
+                    if Self::is_membership_in_progress_error(&err_str)
+                        && attempt + 1 < Self::MEMBERSHIP_RETRY_MAX
+                    {
+                        tracing::debug!(
+                            "{op_name}: membership change in progress, retrying (attempt {})",
+                            attempt + 1
+                        );
+                        sim_time::sleep(Self::MEMBERSHIP_RETRY_DELAY).await;
+                        continue;
+                    }
+                    return Err(crate::error::OctopiiError::Rpc(format!("{op_name}: {e}")));
+                }
+            }
+        }
+        Err(crate::error::OctopiiError::Rpc(format!(
+            "{op_name}: max retries exceeded waiting for membership change"
+        )))
+    }
+
     /// Get peer replication progress as (matched_index, last_log_index)
     fn get_peer_replication_progress(&self, peer_id: u64) -> Option<(u64, u64)> {
         let metrics = self.raft.metrics().borrow().clone();
@@ -27,7 +58,10 @@ impl OpenRaftNode {
         let repl_log_id_opt = replication.get(&peer_id)?;
         let matched = repl_log_id_opt.as_ref().map_or(0, |log_id| log_id.index);
         #[cfg(feature = "simulation")]
-        sim_assert(matched <= last_log, "replication matched index exceeds last_log_index");
+        sim_assert(
+            matched <= last_log,
+            "replication matched index exceeds last_log_index",
+        );
         Some((matched, last_log))
     }
 
@@ -36,34 +70,17 @@ impl OpenRaftNode {
         let node = BasicNode {
             addr: addr.to_string(),
         };
-
-        for attempt in 0..Self::MEMBERSHIP_RETRY_MAX {
-            match self.raft.add_learner(peer_id, node.clone(), true).await {
-                Ok(_) => return Ok(()),
-                Err(e) => {
-                    let err_str = format!("{e}");
-                    if Self::is_membership_in_progress_error(&err_str) {
-                        if attempt + 1 < Self::MEMBERSHIP_RETRY_MAX {
-                            tracing::debug!(
-                                "add_learner({peer_id}): membership change in progress, retrying (attempt {})",
-                                attempt + 1
-                            );
-                            sim_time::sleep(Self::MEMBERSHIP_RETRY_DELAY).await;
-                            continue;
-                        }
-                    }
-                    return Err(crate::error::OctopiiError::Rpc(format!("add_learner: {e}")));
-                }
-            }
-        }
-
-        Err(crate::error::OctopiiError::Rpc(
-            "add_learner: max retries exceeded waiting for membership change".to_string(),
-        ))
+        self.retry_membership_op("add_learner", || async {
+            self.raft
+                .add_learner(peer_id, node.clone(), true)
+                .await
+                .map(|_| ())
+        })
+        .await
     }
 
     pub async fn promote_learner(&self, peer_id: u64) -> Result<()> {
-        for attempt in 0..Self::MEMBERSHIP_RETRY_MAX {
+        self.retry_membership_op("promote_learner", || async {
             let metrics = self.raft.metrics().borrow().clone();
             let current_membership = metrics.membership_config.membership();
 
@@ -71,33 +88,11 @@ impl OpenRaftNode {
             for config in current_membership.get_joint_config() {
                 members.extend(config.iter().copied());
             }
-
             members.insert(peer_id);
 
-            match self.raft.change_membership(members, true).await {
-                Ok(_) => return Ok(()),
-                Err(e) => {
-                    let err_str = format!("{e}");
-                    if Self::is_membership_in_progress_error(&err_str) {
-                        if attempt + 1 < Self::MEMBERSHIP_RETRY_MAX {
-                            tracing::debug!(
-                                "promote_learner({peer_id}): membership change in progress, retrying (attempt {})",
-                                attempt + 1
-                            );
-                            sim_time::sleep(Self::MEMBERSHIP_RETRY_DELAY).await;
-                            continue;
-                        }
-                    }
-                    return Err(crate::error::OctopiiError::Rpc(format!(
-                        "change_membership: {e}"
-                    )));
-                }
-            }
-        }
-
-        Err(crate::error::OctopiiError::Rpc(
-            "promote_learner: max retries exceeded waiting for membership change".to_string(),
-        ))
+            self.raft.change_membership(members, true).await.map(|_| ())
+        })
+        .await
     }
 
     pub async fn is_learner_caught_up(&self, peer_id: u64) -> Result<bool> {
@@ -134,7 +129,7 @@ impl OpenRaftNode {
             let leader_matches = metrics.current_leader == Some(self.config.node_id);
             let state_is_leader = metrics.state == ServerState::Leader;
             sim_assert(
-                !(state_is_leader && !leader_matches),
+                !state_is_leader || leader_matches,
                 "state leader without matching current_leader",
             );
         }

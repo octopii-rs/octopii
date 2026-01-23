@@ -1,9 +1,5 @@
-use super::channels::{
-    SimMpsc, SimMpscUnbounded, SimMutex, SimOneshot, SimWatch,
-};
-use super::time::{
-    now, SimInstant, SimSleep, SimThreadRng, SimTimeout, SimTimeoutError,
-};
+use super::channels::{SimMpsc, SimMpscUnbounded, SimMutex, SimOneshot, SimWatch};
+use super::time::{now, SimInstant, SimSleep, SimThreadRng, SimTimeout, SimTimeoutError};
 use openraft::AsyncRuntime;
 use openraft::OptionalSend;
 use std::future::Future;
@@ -37,12 +33,18 @@ impl AsyncRuntime for SimRuntime {
         SimSleep::new(deadline)
     }
 
-    fn timeout<R, F: Future<Output = R> + OptionalSend>(duration: Duration, future: F) -> Self::Timeout<R, F> {
+    fn timeout<R, F: Future<Output = R> + OptionalSend>(
+        duration: Duration,
+        future: F,
+    ) -> Self::Timeout<R, F> {
         let deadline = now().saturating_add_duration(duration);
         SimTimeout::new(deadline.nanos, future)
     }
 
-    fn timeout_at<R, F: Future<Output = R> + OptionalSend>(deadline: Self::Instant, future: F) -> Self::Timeout<R, F> {
+    fn timeout_at<R, F: Future<Output = R> + OptionalSend>(
+        deadline: Self::Instant,
+        future: F,
+    ) -> Self::Timeout<R, F> {
         SimTimeout::new(deadline.nanos, future)
     }
 

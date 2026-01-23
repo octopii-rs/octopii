@@ -68,12 +68,14 @@ impl Writer {
             ));
         }
 
-        let mut block = self.current_block.lock().map_err(|_| {
-            std::io::Error::new(std::io::ErrorKind::Other, "current_block lock poisoned")
-        })?;
-        let mut cur = self.current_offset.lock().map_err(|_| {
-            std::io::Error::new(std::io::ErrorKind::Other, "current_offset lock poisoned")
-        })?;
+        let mut block = self
+            .current_block
+            .lock()
+            .map_err(|_| std::io::Error::other("current_block lock poisoned"))?;
+        let mut cur = self
+            .current_offset
+            .lock()
+            .map_err(|_| std::io::Error::other("current_offset lock poisoned"))?;
 
         let need = (PREFIX_META_SIZE as u64) + (data.len() as u64) + (ENTRY_TRAILER_SIZE as u64);
         if *cur + need > block.limit {
@@ -88,7 +90,10 @@ impl Writer {
             FileStateTracker::set_block_unlocked(block.id as usize);
             let mut sealed = block.clone();
             sealed.used = *cur;
-            sim_assert(sealed.used <= sealed.limit, "sealed block used exceeds limit");
+            sim_assert(
+                sealed.used <= sealed.limit,
+                "sealed block used exceeds limit",
+            );
             sealed.mmap.flush()?;
             let _ = self.reader.append_block_to_chain(&self.col, sealed);
             debug_print!("[writer] appended sealed block to chain: col={}", self.col);
@@ -296,12 +301,14 @@ impl Writer {
         );
 
         // Phase 1: Pre-allocation & Planning
-        let mut block = self.current_block.lock().map_err(|_| {
-            std::io::Error::new(std::io::ErrorKind::Other, "current_block lock poisoned")
-        })?;
-        let mut cur_offset = self.current_offset.lock().map_err(|_| {
-            std::io::Error::new(std::io::ErrorKind::Other, "current_offset lock poisoned")
-        })?;
+        let mut block = self
+            .current_block
+            .lock()
+            .map_err(|_| std::io::Error::other("current_block lock poisoned"))?;
+        let mut cur_offset = self
+            .current_offset
+            .lock()
+            .map_err(|_| std::io::Error::other("current_offset lock poisoned"))?;
 
         let mut revert_info = BatchRevertInfo {
             original_offset: *cur_offset,
@@ -349,7 +356,10 @@ impl Writer {
                 // SAFETY: We hold locks, so this writer has exclusive ownership
                 let new_block =
                     unsafe { self.allocator.alloc_block(need.max(DEFAULT_BLOCK_SIZE))? };
-                sim_assert(new_block.limit >= need, "allocated block too small for batch entry");
+                sim_assert(
+                    new_block.limit >= need,
+                    "allocated block too small for batch entry",
+                );
                 debug_print!("[batch] allocated new block_id={}", new_block.id);
 
                 revert_info.allocated_block_ids.push(new_block.id);
@@ -385,7 +395,7 @@ impl Writer {
                     &write_plan,
                     batch,
                     &mut revert_info,
-                    &mut *cur_offset,
+                    &mut cur_offset,
                     planning_offset,
                     total_bytes_usize,
                 );
@@ -562,12 +572,8 @@ impl Writer {
         total_bytes: usize,
     ) -> std::io::Result<()> {
         let ring_size = (write_plan.len() + 64).min(4096) as u32; // Cap at 4096, convert to u32
-        let mut ring = io_uring::IoUring::new(ring_size).map_err(|e| {
-            std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!("io_uring init failed: {}", e),
-            )
-        })?;
+        let mut ring = io_uring::IoUring::new(ring_size)
+            .map_err(|e| std::io::Error::other(format!("io_uring init failed: {}", e)))?;
         let mut buffers: Vec<Vec<u8>> = Vec::new();
 
         for (blk, offset, data_idx) in write_plan.iter() {
@@ -583,10 +589,7 @@ impl Writer {
             };
 
             let meta_bytes = rkyv::to_bytes::<_, 256>(&new_meta).map_err(|e| {
-                std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    format!("serialize metadata failed: {:?}", e),
-                )
+                std::io::Error::other(format!("serialize metadata failed: {:?}", e))
             })?;
 
             // Header layout (must match block.rs)
@@ -639,12 +642,9 @@ impl Writer {
             buffers.push(combined);
 
             unsafe {
-                ring.submission().push(&write_op).map_err(|e| {
-                    std::io::Error::new(
-                        std::io::ErrorKind::Other,
-                        format!("io_uring push failed: {}", e),
-                    )
-                })?;
+                ring.submission()
+                    .push(&write_op)
+                    .map_err(|e| std::io::Error::other(format!("io_uring push failed: {}", e)))?;
             }
         }
 
@@ -702,10 +702,7 @@ impl Writer {
                         sim::set_io_error_rate(prev_rate);
                         sim::set_partial_writes_enabled(prev_partial);
                     }
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::Other,
-                        "batch write failed, rolled back",
-                    ));
+                    return Err(std::io::Error::other("batch write failed, rolled back"));
                 }
 
                 // Success - fsync all touched files
@@ -819,12 +816,14 @@ struct BatchRevertInfo {
 
 impl Writer {
     pub(super) fn snapshot_block(&self) -> std::io::Result<(Block, u64)> {
-        let block = self.current_block.lock().map_err(|_| {
-            std::io::Error::new(std::io::ErrorKind::Other, "current_block lock poisoned")
-        })?;
-        let offset = self.current_offset.lock().map_err(|_| {
-            std::io::Error::new(std::io::ErrorKind::Other, "current_offset lock poisoned")
-        })?;
+        let block = self
+            .current_block
+            .lock()
+            .map_err(|_| std::io::Error::other("current_block lock poisoned"))?;
+        let offset = self
+            .current_offset
+            .lock()
+            .map_err(|_| std::io::Error::other("current_offset lock poisoned"))?;
         Ok((block.clone(), *offset))
     }
 }

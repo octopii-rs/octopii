@@ -12,24 +12,26 @@
 #[cfg(feature = "simulation")]
 mod sim_tests {
     use bytes::Bytes;
+    use futures::stream;
     use octopii::openraft::storage::{MemStateMachine, WalLogStore};
     use octopii::openraft::types::{AppEntry, AppTypeConfig};
     use octopii::simulation::{DurabilityOracle, Oracle, SimRng};
-    use octopii::state_machine::{KvStateMachine, StateMachine, StateMachineTrait, WalBackedStateMachine};
-    use octopii::wal::wal::vfs::sim::{self, SimConfig};
-    use octopii::wal::wal::vfs;
+    use octopii::state_machine::{
+        KvStateMachine, StateMachine, StateMachineTrait, WalBackedStateMachine,
+    };
     use octopii::wal::wal;
+    use octopii::wal::wal::vfs;
+    use octopii::wal::wal::vfs::sim::{self, SimConfig};
     use octopii::wal::wal::{FsyncSchedule, ReadConsistency, Walrus};
     use octopii::wal::WriteAheadLog;
+    use openraft::impls::BasicNode;
     use openraft::storage::{
         EntryResponder, RaftLogReader, RaftLogStorage, RaftLogStorageExt, RaftSnapshotBuilder,
         RaftStateMachine,
     };
     use openraft::type_config::alias::CommittedLeaderIdOf;
-    use openraft::{Entry, EntryPayload, LogId, Membership};
-    use openraft::impls::BasicNode;
     use openraft::vote::RaftLeaderId;
-    use futures::stream;
+    use openraft::{Entry, EntryPayload, LogId, Membership};
     use rkyv::{Archive, Deserialize, Serialize};
     use std::collections::{BTreeMap, BTreeSet, HashMap};
     use std::path::PathBuf;
@@ -150,8 +152,16 @@ mod sim_tests {
 
         fn crash_and_recover(&mut self) {
             // Log current Oracle state for orders
-            let orders_count = self.oracle.history.get("orders").map(|v| v.len()).unwrap_or(0);
-            eprintln!("[CRASH] Simulating crash. orders has {} entries in Oracle", orders_count);
+            let orders_count = self
+                .oracle
+                .history
+                .get("orders")
+                .map(|v| v.len())
+                .unwrap_or(0);
+            eprintln!(
+                "[CRASH] Simulating crash. orders has {} entries in Oracle",
+                orders_count
+            );
 
             // 1. Drop the WAL (simulates process death)
             self.wal = None;
@@ -329,17 +339,16 @@ mod sim_tests {
                     // === BATCH READ (checkpoint=true) ===
                     // Max 10KB per batch, like Octopii's recovery patterns
                     let max_bytes = self.rng.range(1024, 10 * 1024);
-                    match self
-                        .wal
-                        .as_ref()
-                        .unwrap()
-                        .batch_read_for_topic(&read_topic, max_bytes, true)
-                    {
+                    match self.wal.as_ref().unwrap().batch_read_for_topic(
+                        &read_topic,
+                        max_bytes,
+                        true,
+                    ) {
                         Ok(entries) => {
                             // Verify all entries in the batch
                             let batch_data: Vec<Vec<u8>> =
                                 entries.into_iter().map(|e| e.data).collect();
-                            self.oracle.verify_batch(&read_topic, &batch_data);
+                            self.oracle.verify_batch_read(&read_topic, &batch_data);
                         }
                         Err(_e) => {
                             // Phase 5: Batch read failed due to I/O error
@@ -370,7 +379,12 @@ mod sim_tests {
     // 4. Test Runners
     // ========================================================================
 
-    fn run_simulation_with_config(seed: u64, iterations: usize, error_rate: f64, partial_writes: bool) {
+    fn run_simulation_with_config(
+        seed: u64,
+        iterations: usize,
+        error_rate: f64,
+        partial_writes: bool,
+    ) {
         // Setup VFS simulation context
         sim::setup(SimConfig {
             seed,
@@ -414,9 +428,11 @@ mod sim_tests {
         sm: &mut Arc<MemStateMachine>,
         entries: Vec<Entry<AppTypeConfig>>,
     ) -> std::io::Result<()> {
-        let stream = stream::iter(entries.into_iter().map(|entry| {
-            Ok::<EntryResponder<AppTypeConfig>, std::io::Error>((entry, None))
-        }));
+        let stream = stream::iter(
+            entries
+                .into_iter()
+                .map(|entry| Ok::<EntryResponder<AppTypeConfig>, std::io::Error>((entry, None))),
+        );
         sm.apply(stream).await
     }
 
@@ -657,9 +673,7 @@ mod sim_tests {
 
         let key = "strict_node";
         let topic = "strict_topic";
-        let entries: Vec<Vec<u8>> = (0..5)
-            .map(|i| format!("entry-{i}").into_bytes())
-            .collect();
+        let entries: Vec<Vec<u8>> = (0..5).map(|i| format!("entry-{i}").into_bytes()).collect();
 
         let wal = init_strict_walrus(&root_dir, key);
         for data in &entries {
@@ -702,9 +716,7 @@ mod sim_tests {
 
         let key = "strict_node";
         let topic = "strict_topic";
-        let entries: Vec<Vec<u8>> = (0..4)
-            .map(|i| format!("peek-{i}").into_bytes())
-            .collect();
+        let entries: Vec<Vec<u8>> = (0..4).map(|i| format!("peek-{i}").into_bytes()).collect();
 
         let wal = init_strict_walrus(&root_dir, key);
         for data in &entries {
@@ -860,9 +872,7 @@ mod sim_tests {
             .expect("read committed");
         assert_eq!(recovered_committed, committed);
 
-        let log_state = rt
-            .block_on(recovered.get_log_state())
-            .expect("log state");
+        let log_state = rt.block_on(recovered.get_log_state()).expect("log state");
         assert_eq!(log_state.last_log_id, committed);
 
         let _ = vfs::remove_dir_all(&root_dir);
@@ -913,8 +923,7 @@ mod sim_tests {
             .expect("append entries");
         rt.block_on(store.truncate(entries[3].log_id))
             .expect("truncate");
-        rt.block_on(store.purge(entries[1].log_id))
-            .expect("purge");
+        rt.block_on(store.purge(entries[1].log_id)).expect("purge");
 
         drop(store);
         octopii::wal::wal::__clear_storage_cache_for_tests();
@@ -937,9 +946,7 @@ mod sim_tests {
             .expect("read logs");
         assert_eq!(recovered_logs, vec![entries[2].clone()]);
 
-        let log_state = rt
-            .block_on(recovered.get_log_state())
-            .expect("log state");
+        let log_state = rt.block_on(recovered.get_log_state()).expect("log state");
         assert_eq!(log_state.last_purged_log_id, Some(entries[1].log_id));
         assert_eq!(log_state.last_log_id, Some(entries[2].log_id));
 
@@ -987,10 +994,20 @@ mod sim_tests {
             .expect("apply entries");
 
         let mut members = BTreeMap::new();
-        members.insert(1_u64, BasicNode { addr: "n1".to_string() });
-        members.insert(2_u64, BasicNode { addr: "n2".to_string() });
-        let membership = Membership::new(vec![BTreeSet::from([1_u64, 2_u64])], members)
-            .expect("membership");
+        members.insert(
+            1_u64,
+            BasicNode {
+                addr: "n1".to_string(),
+            },
+        );
+        members.insert(
+            2_u64,
+            BasicNode {
+                addr: "n2".to_string(),
+            },
+        );
+        let membership =
+            Membership::new(vec![BTreeSet::from([1_u64, 2_u64])], members).expect("membership");
         let membership_entry = Entry::<AppTypeConfig> {
             log_id: LogId::new(CommittedLeaderIdOf::<AppTypeConfig>::new(1, 1), 3),
             payload: EntryPayload::Membership(membership.clone()),
@@ -1001,7 +1018,8 @@ mod sim_tests {
 
         let snapshot = {
             let mut builder = Arc::clone(&sm);
-            rt.block_on(builder.build_snapshot()).expect("build snapshot")
+            rt.block_on(builder.build_snapshot())
+                .expect("build snapshot")
         };
 
         drop(sm);
@@ -1028,7 +1046,8 @@ mod sim_tests {
 
         let recovered_snapshot = {
             let mut builder = Arc::clone(&recovered);
-            rt.block_on(builder.build_snapshot()).expect("build snapshot")
+            rt.block_on(builder.build_snapshot())
+                .expect("build snapshot")
         };
 
         assert_eq!(
@@ -1075,8 +1094,8 @@ mod sim_tests {
             let prev_partial = sim::get_partial_writes_enabled();
             sim::set_io_error_rate(0.0);
             sim::set_partial_writes_enabled(false);
-            let root_dir = std::env::temp_dir()
-                .join(format!("walrus_strict_state_machine_{scenario}"));
+            let root_dir =
+                std::env::temp_dir().join(format!("walrus_strict_state_machine_{scenario}"));
             let _ = vfs::remove_dir_all(&root_dir);
             vfs::create_dir_all(&root_dir).expect("Failed to create walrus test dir");
             sim::set_io_error_rate(prev_rate);
@@ -1094,7 +1113,8 @@ mod sim_tests {
                 let wal = create_wal_with_retry(&rt, wal_path.clone(), WAL_CREATE_RETRIES);
                 let (inner, wal, sm) = rt.block_on(async {
                     let inner: StateMachine = Arc::new(KvStateMachine::in_memory());
-                    let sm = WalBackedStateMachine::with_inner(Arc::clone(&inner), Arc::clone(&wal));
+                    let sm =
+                        WalBackedStateMachine::with_inner(Arc::clone(&inner), Arc::clone(&wal));
                     (inner, wal, sm)
                 });
 
@@ -1104,29 +1124,16 @@ mod sim_tests {
                 sim::set_io_error_rate(prev_rate);
                 sim::set_partial_writes_enabled(prev_partial);
 
-                let keys: [&str; 6] = [
-                    "alpha",
-                    "beta",
-                    "gamma",
-                    "delta",
-                    "epsilon",
-                    "zeta",
-                ];
+                let keys: [&str; 6] = ["alpha", "beta", "gamma", "delta", "epsilon", "zeta"];
                 let _guard = rt.enter();
                 for _ in 0..OPS_PER_CYCLE {
                     let key = keys[rng.next_usize(keys.len())];
                     let action = rng.next_usize(3);
                     let (command, value) = if action < 2 {
                         let value = (rng.next_u64() % 1000).to_string();
-                        (
-                            format!("SET {} {}", key, value),
-                            Some(value),
-                        )
+                        (format!("SET {} {}", key, value), Some(value))
                     } else {
-                        (
-                            format!("DELETE {}", key),
-                            None,
-                        )
+                        (format!("DELETE {}", key), None)
                     };
                     if sm.apply(command.as_bytes()).is_ok() {
                         if let Some(value) = value {
@@ -1381,15 +1388,10 @@ mod sim_tests {
                         0..=7 => {
                             let data =
                                 format!("entry_idx_{}_term_{}", next_entry_index, current_term);
-                            let entry = make_log_entry(
-                                next_entry_index,
-                                current_term,
-                                1,
-                                data.as_bytes(),
-                            );
+                            let entry =
+                                make_log_entry(next_entry_index, current_term, 1, data.as_bytes());
                             let _ = rt.block_on(store.blocking_append(vec![entry]));
-                            let log_state =
-                                rt.block_on(store.get_log_state()).unwrap_or_default();
+                            let log_state = rt.block_on(store.get_log_state()).unwrap_or_default();
                             if let Some(last) = log_state.last_log_id {
                                 next_entry_index = last.index + 1;
                             }
@@ -1473,8 +1475,8 @@ mod sim_tests {
                 enable_partial_writes: false,
             });
 
-            let root_dir = std::env::temp_dir()
-                .join(format!("walrus_snapshot_filtering_{scenario}"));
+            let root_dir =
+                std::env::temp_dir().join(format!("walrus_snapshot_filtering_{scenario}"));
             let _ = vfs::remove_dir_all(&root_dir);
             vfs::create_dir_all(&root_dir).expect("Failed to create walrus test dir");
 
@@ -1554,8 +1556,8 @@ mod sim_tests {
             // Create root directory with faults disabled
             sim::set_io_error_rate(0.0);
             sim::set_partial_writes_enabled(false);
-            let root_dir = std::env::temp_dir()
-                .join(format!("walrus_durability_verification_{scenario}"));
+            let root_dir =
+                std::env::temp_dir().join(format!("walrus_durability_verification_{scenario}"));
             let _ = vfs::remove_dir_all(&root_dir);
             vfs::create_dir_all(&root_dir).expect("Failed to create test dir");
 
@@ -1680,7 +1682,10 @@ mod sim_tests {
             if scenario == 0 {
                 eprintln!(
                     "Scenario {} PASSED: {} total writes, {} must_survive across {} cycles",
-                    scenario, total_writes, final_must, durability_oracle.cycle()
+                    scenario,
+                    total_writes,
+                    final_must,
+                    durability_oracle.cycle()
                 );
             }
         }
@@ -1718,8 +1723,8 @@ mod sim_tests {
                 enable_partial_writes: false,
             });
 
-            let root_dir = std::env::temp_dir()
-                .join(format!("walrus_crash_during_recovery_{scenario}"));
+            let root_dir =
+                std::env::temp_dir().join(format!("walrus_crash_during_recovery_{scenario}"));
             let _ = vfs::remove_dir_all(&root_dir);
             vfs::create_dir_all(&root_dir).expect("Failed to create test dir");
 
@@ -1924,7 +1929,10 @@ mod sim_tests {
                 wal::__clear_storage_cache_for_tests();
                 sim::set_recovery_crash_point(RecoveryCrashPoint::None);
 
-                eprintln!("Cycle {}: crashed during recovery at {:?}", cycle, crash_point);
+                eprintln!(
+                    "Cycle {}: crashed during recovery at {:?}",
+                    cycle, crash_point
+                );
             }
 
             sim::advance_time(std::time::Duration::from_secs(1));
@@ -2002,8 +2010,7 @@ mod sim_tests {
                 enable_partial_writes: true,
             });
 
-            let root_dir = std::env::temp_dir()
-                .join(format!("walrus_peer_addr_fault_{scenario}"));
+            let root_dir = std::env::temp_dir().join(format!("walrus_peer_addr_fault_{scenario}"));
 
             // Setup without faults
             let prev_rate = sim::get_io_error_rate();
@@ -2060,8 +2067,7 @@ mod sim_tests {
                     // Generate random peer address update
                     let peer_id = rng.next_u64() % 10 + 1;
                     let port = 5000 + (rng.next_u64() % 1000) as u16;
-                    let addr: std::net::SocketAddr =
-                        format!("127.0.0.1:{}", port).parse().unwrap();
+                    let addr: std::net::SocketAddr = format!("127.0.0.1:{}", port).parse().unwrap();
 
                     let record = PeerAddrRecord { peer_id, addr };
                     let bytes = bincode::serialize(&record).expect("serialize");
@@ -2174,7 +2180,10 @@ mod sim_tests {
                 }
             }
         }
-        panic!("Failed to create WAL after {} retries: {:?}", max_retries, last_err);
+        panic!(
+            "Failed to create WAL after {} retries: {:?}",
+            max_retries, last_err
+        );
     }
 
     // ------------------------------------------------------------------------
@@ -2312,8 +2321,7 @@ mod sim_tests {
                 enable_partial_writes: true,
             });
 
-            let root_dir = std::env::temp_dir()
-                .join(format!("walrus_sm_durability_{scenario}"));
+            let root_dir = std::env::temp_dir().join(format!("walrus_sm_durability_{scenario}"));
 
             // Setup without faults
             let prev_rate = sim::get_io_error_rate();
@@ -2341,7 +2349,8 @@ mod sim_tests {
                 let wal = create_wal_with_retry(&rt, wal_path.clone(), WAL_CREATE_RETRIES);
                 let (inner, _wal_arc, sm) = rt.block_on(async {
                     let inner: StateMachine = Arc::new(KvStateMachine::in_memory());
-                    let sm = WalBackedStateMachine::with_inner(Arc::clone(&inner), Arc::clone(&wal));
+                    let sm =
+                        WalBackedStateMachine::with_inner(Arc::clone(&inner), Arc::clone(&wal));
                     (inner, wal, sm)
                 });
 
@@ -2434,7 +2443,13 @@ mod sim_tests {
             self.next_index = index + 1;
         }
 
-        fn record_vote(&mut self, term: u64, node_id: u64, partial_before: u64, partial_after: u64) {
+        fn record_vote(
+            &mut self,
+            term: u64,
+            node_id: u64,
+            partial_before: u64,
+            partial_after: u64,
+        ) {
             if partial_before == partial_after {
                 self.must_survive_vote = Some((term, node_id));
             }
@@ -2512,8 +2527,8 @@ mod sim_tests {
                 enable_partial_writes: true,
             });
 
-            let root_dir = std::env::temp_dir()
-                .join(format!("walrus_log_store_durability_{scenario}"));
+            let root_dir =
+                std::env::temp_dir().join(format!("walrus_log_store_durability_{scenario}"));
 
             // Setup without faults
             let prev_rate = sim::get_io_error_rate();
@@ -2542,7 +2557,12 @@ mod sim_tests {
                     .expect("log store init");
 
                 // Recover entries for verification
-                let last_idx = oracle.must_survive_entries.keys().next_back().copied().unwrap_or(0);
+                let last_idx = oracle
+                    .must_survive_entries
+                    .keys()
+                    .next_back()
+                    .copied()
+                    .unwrap_or(0);
                 let recovered_entries: BTreeMap<u64, Vec<u8>> = if last_idx > 0 {
                     rt.block_on(store.try_get_log_entries(1..=last_idx))
                         .unwrap_or_default()
@@ -2646,8 +2666,7 @@ mod sim_tests {
                 enable_partial_writes: true,
             });
 
-            let root_dir =
-                std::env::temp_dir().join(format!("walrus_two_phase_commit_{scenario}"));
+            let root_dir = std::env::temp_dir().join(format!("walrus_two_phase_commit_{scenario}"));
 
             // Setup without faults
             let prev_rate = sim::get_io_error_rate();
@@ -2676,7 +2695,8 @@ mod sim_tests {
 
                 let wal = rt.block_on(async {
                     for _ in 0..WAL_CREATE_RETRIES {
-                        match WriteAheadLog::new(wal_path.clone(), 0, Duration::from_millis(0)).await
+                        match WriteAheadLog::new(wal_path.clone(), 0, Duration::from_millis(0))
+                            .await
                         {
                             Ok(w) => return w,
                             Err(_) => sim::advance_time(Duration::from_millis(10)),
@@ -2694,10 +2714,8 @@ mod sim_tests {
                     let entries = rt
                         .block_on(store.try_get_log_entries(1..=last.index))
                         .unwrap_or_default();
-                    let recovered_indices: std::collections::HashSet<u64> = entries
-                        .iter()
-                        .map(|e| e.log_id.index)
-                        .collect();
+                    let recovered_indices: std::collections::HashSet<u64> =
+                        entries.iter().map(|e| e.log_id.index).collect();
 
                     for idx in &must_survive_indices {
                         if *idx >= 1 && !recovered_indices.contains(idx) {
@@ -2781,8 +2799,7 @@ mod sim_tests {
                 enable_partial_writes: true,
             });
 
-            let root_dir = std::env::temp_dir()
-                .join(format!("walrus_compaction_fault_{scenario}"));
+            let root_dir = std::env::temp_dir().join(format!("walrus_compaction_fault_{scenario}"));
 
             // Setup without faults
             let prev_rate = sim::get_io_error_rate();
@@ -2811,7 +2828,8 @@ mod sim_tests {
 
                 let wal = rt.block_on(async {
                     for _ in 0..WAL_CREATE_RETRIES {
-                        match WriteAheadLog::new(wal_path.clone(), 0, Duration::from_millis(0)).await
+                        match WriteAheadLog::new(wal_path.clone(), 0, Duration::from_millis(0))
+                            .await
                         {
                             Ok(w) => return Arc::new(w),
                             Err(_) => sim::advance_time(Duration::from_millis(10)),
@@ -2865,10 +2883,7 @@ mod sim_tests {
                         if partial_before == partial_after {
                             // Must survive - sync oracle to current state
                             let current = sm.snapshot_hashmap();
-                            oracle = current
-                                .into_iter()
-                                .map(|(k, v)| (k, v.to_vec()))
-                                .collect();
+                            oracle = current.into_iter().map(|(k, v)| (k, v.to_vec())).collect();
                         }
                         ops_since_compact += 1;
                     }
@@ -2881,10 +2896,8 @@ mod sim_tests {
                             if partial_before == partial_after {
                                 // Compaction succeeded - oracle is now authoritative
                                 let current = sm.snapshot_hashmap();
-                                oracle = current
-                                    .into_iter()
-                                    .map(|(k, v)| (k, v.to_vec()))
-                                    .collect();
+                                oracle =
+                                    current.into_iter().map(|(k, v)| (k, v.to_vec())).collect();
                             }
                         }
                         ops_since_compact = 0;
@@ -2970,7 +2983,8 @@ mod sim_tests {
 
                 let wal = rt.block_on(async {
                     for _ in 0..WAL_CREATE_RETRIES {
-                        match WriteAheadLog::new(wal_path.clone(), 0, Duration::from_millis(0)).await
+                        match WriteAheadLog::new(wal_path.clone(), 0, Duration::from_millis(0))
+                            .await
                         {
                             Ok(w) => return w,
                             Err(_) => sim::advance_time(Duration::from_millis(10)),
@@ -3014,8 +3028,7 @@ mod sim_tests {
                         }
                         // save_committed (30% of ops)
                         4..=6 => {
-                            let log_state =
-                                rt.block_on(store.get_log_state()).unwrap_or_default();
+                            let log_state = rt.block_on(store.get_log_state()).unwrap_or_default();
                             if let Some(last) = log_state.last_log_id {
                                 match rt.block_on(store.save_committed(Some(last))) {
                                     Ok(_) => {
@@ -3087,8 +3100,7 @@ mod sim_tests {
                 enable_partial_writes: true,
             });
 
-            let root_dir =
-                std::env::temp_dir().join(format!("walrus_purge_fault_{scenario}"));
+            let root_dir = std::env::temp_dir().join(format!("walrus_purge_fault_{scenario}"));
 
             // Setup without faults
             let prev_rate = sim::get_io_error_rate();
@@ -3129,7 +3141,10 @@ mod sim_tests {
                 }
                 // next_index must be > last_purged_index (can't append at or before purge point)
                 let min_next = last_purged_index + 1;
-                next_index = log_state.last_log_id.map(|id| id.index + 1).unwrap_or(min_next);
+                next_index = log_state
+                    .last_log_id
+                    .map(|id| id.index + 1)
+                    .unwrap_or(min_next);
                 if next_index <= last_purged_index {
                     next_index = last_purged_index + 1;
                 }
@@ -3192,5 +3207,4 @@ mod sim_tests {
             sim::teardown();
         }
     }
-
 }

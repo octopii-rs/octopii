@@ -1,7 +1,5 @@
 use std::net::SocketAddr;
 
-use super::rng::SimRng;
-
 #[derive(Clone, Copy)]
 pub struct ReorderConfig {
     pub max_jitter_ms: u64,
