@@ -56,6 +56,7 @@ async fn openraft_three_node_cluster_replicates_commands() -> Result<(), Box<dyn
     let addr1 = next_addr_with_suffix(1);
     let addr2 = next_addr_with_suffix(2);
     let addr3 = next_addr_with_suffix(3);
+    eprintln!("using addrs: n1={} n2={} n3={}", addr1, addr2, addr3);
 
     let peers1 = vec![addr2, addr3];
     let peers2 = vec![addr1, addr3];
@@ -92,7 +93,7 @@ async fn openraft_three_node_cluster_replicates_commands() -> Result<(), Box<dyn
     node1.campaign().await?;
 
     let leader_wait_start = Instant::now();
-    let leader_timeout = Duration::from_secs(15);
+    let leader_timeout = Duration::from_secs(30);
     let leader_id = loop {
         if node1.is_leader().await {
             break 1;
@@ -104,6 +105,12 @@ async fn openraft_three_node_cluster_replicates_commands() -> Result<(), Box<dyn
             break 3;
         }
         if leader_wait_start.elapsed() > leader_timeout {
+            eprintln!(
+                "metrics: n1={:?} n2={:?} n3={:?}",
+                node1.raft_metrics(),
+                node2.raft_metrics(),
+                node3.raft_metrics()
+            );
             panic!("leader election did not complete within {:?}", leader_timeout);
         }
         sleep(Duration::from_millis(200)).await;

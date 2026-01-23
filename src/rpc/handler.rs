@@ -4,7 +4,7 @@ use super::{
 use crate::error::{OctopiiError, Result};
 use crate::transport::{Peer, Transport};
 use crate::sim_time;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -24,7 +24,7 @@ pub struct RpcHandler {
     next_id: AtomicU64,
     pending_requests: Arc<RwLock<HashMap<MessageId, oneshot::Sender<RpcResponse>>>>,
     request_handler: Arc<RwLock<Option<RequestHandler>>>,
-    peer_receivers: Arc<Mutex<HashSet<SocketAddr>>>,
+    peer_receivers: Arc<Mutex<HashMap<SocketAddr, usize>>>,
 }
 
 impl RpcHandler {
@@ -35,7 +35,7 @@ impl RpcHandler {
             next_id: AtomicU64::new(1),
             pending_requests: Arc::new(RwLock::new(HashMap::new())),
             request_handler: Arc::new(RwLock::new(None)),
-            peer_receivers: Arc::new(Mutex::new(HashSet::new())),
+            peer_receivers: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -262,11 +262,15 @@ impl RpcHandler {
     }
 
     async fn ensure_peer_receiver(self: &Arc<Self>, addr: SocketAddr, peer: Arc<dyn Peer>) {
+        let peer_ptr = Arc::as_ptr(&peer) as *const () as usize;
+
         let mut receivers = self.peer_receivers.lock().await;
-        if receivers.contains(&addr) {
-            return;
+        if let Some(&existing_ptr) = receivers.get(&addr) {
+            if existing_ptr == peer_ptr {
+                return;
+            }
         }
-        receivers.insert(addr);
+        receivers.insert(addr, peer_ptr);
         drop(receivers);
 
         let rpc = Arc::clone(self);

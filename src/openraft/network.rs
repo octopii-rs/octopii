@@ -21,6 +21,7 @@ pub struct QuinnNetwork {
     peer_addrs: Arc<tokio::sync::RwLock<std::collections::HashMap<AppNodeId, SocketAddr>>>,
     self_id: AppNodeId,
     target: AppNodeId,
+    default_addr: Option<SocketAddr>,
     cluster_namespace: Arc<String>,
     #[cfg(feature = "openraft-filters")]
     pub(crate) filters: Arc<OpenRaftFilters>,
@@ -32,6 +33,7 @@ impl QuinnNetwork {
         peer_addrs: Arc<tokio::sync::RwLock<std::collections::HashMap<AppNodeId, SocketAddr>>>,
         self_id: AppNodeId,
         target: AppNodeId,
+        default_addr: Option<SocketAddr>,
         cluster_namespace: Arc<String>,
         #[cfg(feature = "openraft-filters")] filters: Arc<OpenRaftFilters>,
     ) -> Self {
@@ -40,6 +42,7 @@ impl QuinnNetwork {
             peer_addrs,
             self_id,
             target,
+            default_addr,
             cluster_namespace,
             #[cfg(feature = "openraft-filters")]
             filters,
@@ -49,28 +52,29 @@ impl QuinnNetwork {
     async fn peer_addr(&self) -> Option<SocketAddr> {
         let g = self.peer_addrs.read().await;
         if let Some(addr) = g.get(&self.target).copied() {
+            eprintln!(
+                "[openraft rpc] {} -> {} using cached addr {}",
+                self.self_id, self.target, addr
+            );
             return Some(addr);
         }
-        tracing::warn!(
-            "QuinnNetwork: peer_addr lookup failed for target {} (self={}), local peers: {:?}",
-            self.target,
-            self.self_id,
-            g.keys().collect::<Vec<_>>()
-        );
         drop(g);
 
-        // Fall back to the global map so nodes can still communicate after dynamic
-        // membership changes or leadership loss.
         if let Some(addr) = global_peer_addr(self.cluster_namespace.as_str(), self.target) {
-            tracing::info!(
-                "QuinnNetwork: using global peer addr for target {} -> {}",
-                self.target,
-                addr
-            );
             self.peer_addrs.write().await.insert(self.target, addr);
+            eprintln!(
+                "[openraft rpc] {} -> {} using global addr {}",
+                self.self_id, self.target, addr
+            );
             return Some(addr);
         }
-        None
+        if let Some(addr) = self.default_addr {
+            eprintln!(
+                "[openraft rpc] {} -> {} using default addr {}",
+                self.self_id, self.target, addr
+            );
+        }
+        self.default_addr
     }
 
     async fn send_openraft(
@@ -78,9 +82,12 @@ impl QuinnNetwork {
         kind: &str,
         data: Vec<u8>,
     ) -> Result<ResponsePayload, anyhow::Error> {
+        eprintln!(
+            "[openraft rpc] {} -> {} kind={} sending",
+            self.self_id, self.target, kind
+        );
         #[cfg(feature = "openraft-filters")]
         {
-            // Partition check
             for (g1, g2) in self.filters.partitions.read().await.iter() {
                 if (g1.contains(&self.self_id) && g2.contains(&self.target))
                     || (g2.contains(&self.self_id) && g1.contains(&self.target))
@@ -92,7 +99,6 @@ impl QuinnNetwork {
                     );
                 }
             }
-            // Pair-specific drop
             if self
                 .filters
                 .drop_pairs
@@ -106,7 +112,6 @@ impl QuinnNetwork {
                     self.target
                 );
             }
-            // Delay if configured
             if let Some(d) = self
                 .filters
                 .delay_pairs
@@ -125,27 +130,37 @@ impl QuinnNetwork {
                 self.target,
                 self.self_id
             );
+            eprintln!(
+                "[openraft rpc] {} -> {} kind={} no address",
+                self.self_id, self.target, kind
+            );
             anyhow::bail!("no address for peer {}", self.target);
         };
-
-        tracing::debug!(
-            "QuinnNetwork: sending {} from {} to {} at {}",
-            kind,
-            self.self_id,
-            self.target,
-            addr
-        );
 
         let payload = RequestPayload::OpenRaft {
             kind: kind.to_string(),
             data: bytes::Bytes::from(data),
         };
 
-        let resp = self
+        let resp = match self
             .rpc
             .request(addr, payload, Duration::from_secs(5))
-            .await?;
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!(
+                    "[openraft rpc] {} -> {} kind={} addr={} failed: {}",
+                    self.self_id, self.target, kind, addr, e
+                );
+                return Err(e.into());
+            }
+        };
 
+        eprintln!(
+            "[openraft rpc] {} -> {} kind={} got response payload",
+            self.self_id, self.target, kind
+        );
         Ok(resp.payload)
     }
 
@@ -173,15 +188,30 @@ impl QuinnNetwork {
 
         match resp_payload {
             ResponsePayload::OpenRaft { kind: resp_kind, data } if resp_kind == kind => {
-                bincode::deserialize(&data)
-                    .map_err(|e| RPCError::Network(openraft::error::NetworkError::new(&e)))
+                bincode::deserialize(&data).map_err(|e| {
+                    eprintln!(
+                        "[openraft rpc] {} -> {} kind={} deserialize failed: {} ({} bytes)",
+                        self.self_id,
+                        self.target,
+                        kind,
+                        e,
+                        data.len()
+                    );
+                    RPCError::Network(openraft::error::NetworkError::new(&e))
+                })
             }
-            other => Err(RPCError::Unreachable(openraft::error::Unreachable::new(
-                &io::Error::new(
-                    io::ErrorKind::Other,
-                    format!("unexpected response: {:?}", other),
-                ),
-            ))),
+            other => {
+                eprintln!(
+                    "[openraft rpc] {} -> {} kind={} unexpected response: {:?}",
+                    self.self_id, self.target, kind, other
+                );
+                Err(RPCError::Unreachable(openraft::error::Unreachable::new(
+                    &io::Error::new(
+                        io::ErrorKind::Other,
+                        format!("unexpected response: {:?}", other),
+                    ),
+                )))
+            }
         }
     }
 }
@@ -221,14 +251,6 @@ impl openraft::network::v2::RaftNetworkV2<AppTypeConfig> for QuinnNetwork {
         req: VoteRequest<AppTypeConfig>,
         _option: openraft::network::RPCOption,
     ) -> Result<VoteResponse<AppTypeConfig>, RPCError<AppTypeConfig>> {
-        tracing::info!(
-            "QuinnNetwork::vote() called: self_id={} target={} vote={:?}",
-            self.self_id,
-            self.target,
-            req.vote
-        );
-
-        tracing::debug!("Sending vote RPC {}->{}", self.self_id, self.target);
         let resp = match self.rpc_request("vote", &req).await {
             Ok(resp) => resp,
             Err(err) => {
@@ -236,7 +258,6 @@ impl openraft::network::v2::RaftNetworkV2<AppTypeConfig> for QuinnNetwork {
                 return Err(err);
             }
         };
-        tracing::debug!("Received vote response {}->{}", self.self_id, self.target);
         Ok(resp)
     }
 }
@@ -275,13 +296,15 @@ impl RaftNetworkFactory<AppTypeConfig> for QuinnNetworkFactory {
     async fn new_client(
         &mut self,
         target: AppNodeId,
-        _node: &openraft::impls::BasicNode,
+        node: &openraft::impls::BasicNode,
     ) -> Self::Network {
+        let default_addr = node.addr.parse().ok();
         QuinnNetwork::new(
             Arc::clone(&self.rpc),
             Arc::clone(&self.peer_addrs),
             self.self_id,
             target,
+            default_addr,
             Arc::clone(&self.cluster_namespace),
             #[cfg(feature = "openraft-filters")]
             Arc::clone(&self.filters),

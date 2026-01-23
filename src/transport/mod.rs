@@ -44,7 +44,8 @@ pub trait Peer: Send + Sync {
 /// - Automatic reconnection
 pub struct QuicTransport {
     endpoint: Endpoint,
-    peers: Arc<RwLock<HashMap<SocketAddr, Arc<PeerConnection>>>>,
+    outgoing_peers: Arc<RwLock<HashMap<SocketAddr, Arc<PeerConnection>>>>,
+    accepted_peers: Arc<RwLock<HashMap<SocketAddr, Arc<PeerConnection>>>>,
     closed: Arc<AtomicBool>,
 }
 
@@ -64,16 +65,17 @@ impl QuicTransport {
 
         Ok(Self {
             endpoint,
-            peers: Arc::new(RwLock::new(HashMap::new())),
+            outgoing_peers: Arc::new(RwLock::new(HashMap::new())),
+            accepted_peers: Arc::new(RwLock::new(HashMap::new())),
             closed: Arc::new(AtomicBool::new(false)),
         })
     }
 
     /// Get or create a connection to a peer
     pub async fn connect(&self, addr: SocketAddr) -> Result<Arc<PeerConnection>> {
-        // Check if we already have a connection
+        // Check if we already have an outgoing connection
         {
-            let peers = self.peers.read().await;
+            let peers = self.outgoing_peers.read().await;
             if let Some(peer) = peers.get(&addr) {
                 if !peer.is_closed() {
                     tracing::debug!("Reusing existing connection to {}", addr);
@@ -85,7 +87,7 @@ impl QuicTransport {
         }
 
         // Create new connection
-        let mut peers = self.peers.write().await;
+        let mut peers = self.outgoing_peers.write().await;
 
         // Double-check after acquiring write lock
         if let Some(peer) = peers.get(&addr) {
@@ -134,8 +136,7 @@ impl QuicTransport {
 
         let peer = Arc::new(PeerConnection::new(connection));
 
-        // Store in peers map
-        let mut peers = self.peers.write().await;
+        let mut peers = self.accepted_peers.write().await;
         peers.insert(remote_addr, Arc::clone(&peer));
 
         tracing::info!("Accepted connection from {}", remote_addr);
@@ -164,12 +165,23 @@ impl QuicTransport {
 
     /// Check if we have an active connection to a peer
     pub async fn has_active_peer(&self, addr: SocketAddr) -> bool {
-        let peers = self.peers.read().await;
-        if let Some(peer) = peers.get(&addr) {
-            !peer.is_closed()
-        } else {
-            false
+        {
+            let peers = self.outgoing_peers.read().await;
+            if let Some(peer) = peers.get(&addr) {
+                if !peer.is_closed() {
+                    return true;
+                }
+            }
         }
+        {
+            let peers = self.accepted_peers.read().await;
+            if let Some(peer) = peers.get(&addr) {
+                if !peer.is_closed() {
+                    return true;
+                }
+            }
+        }
+        false
     }
 }
 
