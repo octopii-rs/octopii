@@ -18,7 +18,9 @@ pub async fn run_negotiated_transfer() -> Result<Bytes, Box<dyn Error>> {
     let rpc_server_transport = Arc::new(QuicTransport::new("127.0.0.1:0".parse()?).await?);
     let rpc_server_addr = rpc_server_transport.local_addr()?;
     let data_server_transport = Arc::new(QuicTransport::new("127.0.0.1:0".parse()?).await?);
-    let shipping_lane = Arc::new(ShippingLane::new(Arc::clone(&data_server_transport)));
+    let shipping_lane = Arc::new(ShippingLane::new(
+        Arc::clone(&data_server_transport) as Arc<dyn Transport>
+    ));
     let rpc_server = Arc::new(RpcHandler::new(
         Arc::clone(&rpc_server_transport) as Arc<dyn Transport>
     ));

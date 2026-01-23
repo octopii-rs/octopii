@@ -1,7 +1,7 @@
 use crate::chunk::{ChunkSource, TransferResult};
 use crate::error::Result;
 use crate::sim_time;
-use crate::transport::QuicTransport;
+use crate::transport::Transport;
 use bytes::Bytes;
 use std::net::SocketAddr;
 use std::path::Path;
@@ -9,11 +9,11 @@ use std::sync::Arc;
 
 /// High-level helper for orchestrating chunk transfers between peers.
 pub struct ShippingLane {
-    transport: Arc<QuicTransport>,
+    transport: Arc<dyn Transport>,
 }
 
 impl ShippingLane {
-    pub fn new(transport: Arc<QuicTransport>) -> Self {
+    pub fn new(transport: Arc<dyn Transport>) -> Self {
         Self { transport }
     }
 
@@ -48,7 +48,7 @@ impl ShippingLane {
     ) -> Result<TransferResult> {
         let peer = self.transport.connect(addr).await?;
         let start = sim_time::now();
-        match peer.recv_chunk_to_path(dest).await? {
+        match peer.recv_chunk_verified_to_file(dest.as_ref()).await? {
             Some(bytes) => Ok(TransferResult::success(
                 addr,
                 bytes,

@@ -1,6 +1,6 @@
 use bytes::Bytes;
 use futures::future;
-use octopii::transport::QuicTransport;
+use octopii::transport::{QuicTransport, Transport};
 use octopii::{ChunkSource, ShippingLane};
 use std::sync::Arc;
 use tokio::time::Duration;
@@ -38,7 +38,7 @@ async fn test_shipping_lane_send_file_to_peer() {
     let payload: Vec<u8> = (0..8 * 1024).map(|i| (i % 251) as u8).collect();
     tokio::fs::write(&src_path, &payload).await.unwrap();
 
-    let lane = ShippingLane::new(Arc::clone(&sender));
+    let lane = ShippingLane::new(Arc::clone(&sender) as Arc<dyn Transport>);
     let result = lane.send_file(receiver_addr, &src_path).await.unwrap();
     assert!(result.success);
     assert_eq!(result.bytes_transferred, payload.len() as u64);
@@ -87,7 +87,7 @@ async fn test_shipping_lane_receive_file_from_peer() {
     let dest_dir = tempfile::tempdir().unwrap();
     let dest_path = dest_dir.path().join("download.bin");
 
-    let lane = ShippingLane::new(Arc::clone(&client));
+    let lane = ShippingLane::new(Arc::clone(&client) as Arc<dyn Transport>);
     let result = lane.receive_file(server_addr, &dest_path).await.unwrap();
     send_handle.await.unwrap();
 
@@ -126,7 +126,7 @@ async fn test_shipping_lane_send_memory() {
 
     tokio::time::sleep(Duration::from_millis(50)).await;
 
-    let lane = ShippingLane::new(Arc::clone(&sender));
+    let lane = ShippingLane::new(Arc::clone(&sender) as Arc<dyn Transport>);
     let result = lane
         .send_memory(receiver_addr, payload.clone())
         .await
@@ -170,7 +170,7 @@ async fn test_shipping_lane_receive_memory() {
 
     tokio::time::sleep(Duration::from_millis(50)).await;
 
-    let lane = ShippingLane::new(Arc::clone(&client));
+    let lane = ShippingLane::new(Arc::clone(&client) as Arc<dyn Transport>);
     let (result, data) = lane.receive_memory(server_addr).await.unwrap();
     send_handle.await.unwrap();
 
@@ -210,7 +210,7 @@ async fn test_shipping_lane_send_memory_reports_failure_on_aborted_receiver() {
 
     tokio::time::sleep(Duration::from_millis(50)).await;
 
-    let lane = ShippingLane::new(Arc::clone(&sender));
+    let lane = ShippingLane::new(Arc::clone(&sender) as Arc<dyn Transport>);
     let payload = Bytes::from_static(b"should-fail");
     let result = lane.send_memory(receiver_addr, payload).await.unwrap();
     drop_handle.await.unwrap();
@@ -268,7 +268,7 @@ async fn test_shipping_lane_large_file_transfer() {
     let payload: Vec<u8> = (0..(2 * 1024 * 1024)).map(|i| (i % 251) as u8).collect();
     tokio::fs::write(&src_path, &payload).await.unwrap();
 
-    let lane = ShippingLane::new(Arc::clone(&sender));
+    let lane = ShippingLane::new(Arc::clone(&sender) as Arc<dyn Transport>);
     let result = lane.send_file(receiver_addr, &src_path).await.unwrap();
     assert!(result.success);
     assert_eq!(result.bytes_transferred, payload.len() as u64);
@@ -316,7 +316,7 @@ async fn test_shipping_lane_concurrent_memory_transfers() {
 
     let mut handles = Vec::new();
     for payload in payloads.clone() {
-        let transport = Arc::clone(&sender);
+        let transport = Arc::clone(&sender) as Arc<dyn Transport>;
         handles.push(tokio::spawn(async move {
             let lane = ShippingLane::new(transport);
             lane.send_memory(receiver_addr, payload).await.unwrap()

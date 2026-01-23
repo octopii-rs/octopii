@@ -1,5 +1,5 @@
 use bytes::Bytes;
-use octopii::transport::QuicTransport;
+use octopii::transport::{QuicTransport, Transport};
 use octopii::{ChunkSource, ShippingLane};
 use std::error::Error;
 use std::net::SocketAddr;
@@ -19,7 +19,7 @@ pub async fn run_shipping_lane_example() -> Result<Bytes, Box<dyn Error>> {
 
     let sender_addr: SocketAddr = "127.0.0.1:0".parse()?;
     let sender_transport = Arc::new(QuicTransport::new(sender_addr).await?);
-    let shipping_lane = ShippingLane::new(sender_transport.clone());
+    let shipping_lane = ShippingLane::new(sender_transport.clone() as Arc<dyn Transport>);
 
     let recv_task = tokio::spawn({
         let receiver_transport = Arc::clone(&receiver_transport);

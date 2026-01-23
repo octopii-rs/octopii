@@ -231,7 +231,7 @@ async fn test_shipping_lane_retries_under_flaky_receiver() {
     };
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    let lane = ShippingLane::new(Arc::clone(&sender));
+    let lane = ShippingLane::new(Arc::clone(&sender) as Arc<dyn Transport>);
     let payloads: Vec<Bytes> = (0..total_successes)
         .map(|i| Bytes::from(vec![i as u8; 128 * 1024]))
         .collect();

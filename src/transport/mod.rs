@@ -7,13 +7,14 @@ pub use peer::PeerConnection;
 #[cfg(feature = "simulation")]
 pub use sim::{SimConfig, SimRouter, SimTransport};
 
+use crate::chunk::ChunkSource;
 use crate::error::{OctopiiError, Result};
-use crate::sim_time;
 use bytes::Bytes;
 use quinn::Endpoint;
 use std::collections::HashMap;
 use std::future::Future;
 use std::net::SocketAddr;
+use std::path::Path;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -34,6 +35,38 @@ pub trait Peer: Send + Sync {
     fn send(&self, data: Bytes) -> TransportFut<'_, ()>;
     fn recv(&self) -> TransportFut<'_, Option<Bytes>>;
     fn is_closed(&self) -> bool;
+
+    /// Send a chunk with checksum verification.
+    /// Returns the number of bytes transferred.
+    /// Default implementation returns "not supported" error.
+    fn send_chunk_verified(&self, _chunk: &ChunkSource) -> TransportFut<'_, u64> {
+        Box::pin(async {
+            Err(OctopiiError::Transport(
+                "send_chunk_verified not supported".to_string(),
+            ))
+        })
+    }
+
+    /// Receive a chunk with checksum verification into memory.
+    /// Default implementation returns "not supported" error.
+    fn recv_chunk_verified(&self) -> TransportFut<'_, Option<Bytes>> {
+        Box::pin(async {
+            Err(OctopiiError::Transport(
+                "recv_chunk_verified not supported".to_string(),
+            ))
+        })
+    }
+
+    /// Receive a chunk with checksum verification directly to a file.
+    /// Returns the number of bytes written.
+    /// Default implementation returns "not supported" error.
+    fn recv_chunk_verified_to_file(&self, _path: &Path) -> TransportFut<'_, Option<u64>> {
+        Box::pin(async {
+            Err(OctopiiError::Transport(
+                "recv_chunk_verified_to_file not supported".to_string(),
+            ))
+        })
+    }
 }
 
 /// QUIC-based transport layer

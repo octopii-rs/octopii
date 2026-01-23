@@ -1,7 +1,6 @@
 #![cfg(feature = "openraft")]
 
 use serde::{Deserialize, Serialize};
-use std::io::Cursor;
 
 /// Application entry payload for OpenRaft.
 /// Keep it simple: raw bytes of a command.
@@ -31,7 +30,7 @@ openraft::declare_raft_types!(
         D = AppEntry,
         R = AppResponse,
         NodeId = AppNodeId,
-        AsyncRuntime = crate::openraft::sim_runtime::SimRuntime,
+        AsyncRuntime = crate::sim_runtime::SimRuntime,
 );
 
 #[cfg(not(feature = "simulation"))]

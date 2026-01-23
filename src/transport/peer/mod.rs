@@ -1,5 +1,6 @@
 use crate::chunk::ChunkSource;
-use crate::error::{OctopiiError, Result};
+use crate::error::Result;
+use bytes::Bytes;
 use quinn::Connection;
 use std::path::Path;
 
@@ -67,15 +68,29 @@ impl PeerConnection {
 }
 
 impl Peer for PeerConnection {
-    fn send(&self, data: bytes::Bytes) -> super::TransportFut<'_, ()> {
-        Box::pin(async move { self.send(data).await })
+    fn send(&self, data: Bytes) -> super::TransportFut<'_, ()> {
+        Box::pin(async move { PeerConnection::send(self, data).await })
     }
 
-    fn recv(&self) -> super::TransportFut<'_, Option<bytes::Bytes>> {
-        Box::pin(async move { self.recv().await })
+    fn recv(&self) -> super::TransportFut<'_, Option<Bytes>> {
+        Box::pin(async move { PeerConnection::recv(self).await })
     }
 
     fn is_closed(&self) -> bool {
-        self.is_closed()
+        PeerConnection::is_closed(self)
+    }
+
+    fn send_chunk_verified(&self, chunk: &ChunkSource) -> super::TransportFut<'_, u64> {
+        let chunk = chunk.clone();
+        Box::pin(async move { PeerConnection::send_chunk_verified(self, &chunk).await })
+    }
+
+    fn recv_chunk_verified(&self) -> super::TransportFut<'_, Option<Bytes>> {
+        Box::pin(async move { PeerConnection::recv_chunk_verified(self).await })
+    }
+
+    fn recv_chunk_verified_to_file(&self, path: &Path) -> super::TransportFut<'_, Option<u64>> {
+        let path = path.to_path_buf();
+        Box::pin(async move { PeerConnection::recv_chunk_verified_to_file(self, &path).await })
     }
 }

@@ -1,7 +1,7 @@
 #![cfg(feature = "openraft")]
 
 use crate::openraft::storage::wal::append_wal_record;
-use crate::openraft::types::{AppEntry, AppResponse, AppTypeConfig};
+use crate::openraft::types::{AppResponse, AppTypeConfig};
 use crate::state_machine::StateMachine;
 use crate::wal::WriteAheadLog;
 use bytes::Bytes;

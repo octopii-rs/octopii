@@ -1,7 +1,7 @@
 #![cfg(feature = "openraft")]
 
 #[cfg(feature = "simulation")]
-use crate::openraft::sim_runtime;
+use crate::sim_runtime;
 use crate::wal::WriteAheadLog;
 use bytes::Bytes;
 use std::io;

@@ -18,11 +18,11 @@ use bytes::Bytes;
 use openraft::metrics::RaftMetrics;
 use openraft::storage::{LogState, RaftLogReader, RaftLogStorage};
 use openraft::{LogId, Raft, ServerState, Vote};
-use std::collections::HashMap;
 use std::io;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+#[cfg(feature = "openraft-filters")]
 use tokio::time::Duration;
 
 pub use crate::openraft::peer_registry::{
@@ -287,11 +287,7 @@ impl OpenRaftNode {
     }
 
     pub fn shipping_lane(&self) -> crate::shipping_lane::ShippingLane {
-        let transport = self
-            .quic_transport
-            .as_ref()
-            .expect("shipping lane requires QUIC transport");
-        crate::shipping_lane::ShippingLane::new(Arc::clone(transport))
+        crate::shipping_lane::ShippingLane::new(Arc::clone(&self.transport))
     }
 
     pub async fn clear_send_filters(&self) {

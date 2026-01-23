@@ -8,6 +8,8 @@ mod invariants;
 pub mod openraft;
 pub mod rpc;
 pub mod shipping_lane;
+#[cfg(all(feature = "simulation", feature = "openraft"))]
+pub mod sim_runtime;
 mod sim_time;
 #[cfg(feature = "simulation")]
 pub mod simulation;
