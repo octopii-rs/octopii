@@ -301,8 +301,14 @@ impl RpcHandler {
                 }
             }
 
+            // Only remove entry if our pointer is still registered
+            // This prevents old receivers from removing new receivers' entries
             let mut receivers = rpc.peer_receivers.lock().await;
-            receivers.remove(&addr);
+            if let Some(&registered_ptr) = receivers.get(&addr) {
+                if registered_ptr == peer_ptr {
+                    receivers.remove(&addr);
+                }
+            }
         });
     }
 }

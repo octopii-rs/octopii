@@ -2,20 +2,29 @@ use super::router::SimRouter;
 use crate::error::Result;
 use crate::transport::{Peer, TransportFut};
 use bytes::Bytes;
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use tokio::sync::RwLock;
 
 #[derive(Clone)]
 pub struct SimTransport {
     addr: SocketAddr,
     router: SimRouter,
     epoch: u64,
+    /// Cache of outgoing peer connections (like QUIC transport)
+    outgoing_peers: Arc<RwLock<HashMap<SocketAddr, Arc<SimPeer>>>>,
 }
 
 impl SimTransport {
     pub fn new(addr: SocketAddr, router: SimRouter) -> Self {
         let epoch = router.register(addr);
-        Self { addr, router, epoch }
+        Self {
+            addr,
+            router,
+            epoch,
+            outgoing_peers: Arc::new(RwLock::new(HashMap::new())),
+        }
     }
 
     pub fn router(&self) -> SimRouter {
@@ -38,15 +47,32 @@ impl SimTransport {
         let router = self.router.clone();
         let local = self.addr;
         let local_epoch = self.epoch;
+        let outgoing_peers = Arc::clone(&self.outgoing_peers);
         Box::pin(async move {
+            // Check if we already have a valid cached connection (like QUIC transport)
+            {
+                let peers = outgoing_peers.read().await;
+                if let Some(peer) = peers.get(&addr) {
+                    if !peer.is_closed() {
+                        return Ok(Arc::clone(peer) as Arc<dyn Peer>);
+                    }
+                }
+            }
+
+            // Create new connection and cache it
             let remote_epoch = router.epoch_of(addr);
-            Ok(Arc::new(SimPeer::new(
+            let peer = Arc::new(SimPeer::new(
                 local,
                 local_epoch,
                 addr,
                 remote_epoch,
                 router,
-            )) as Arc<dyn Peer>)
+            ));
+
+            let mut peers = outgoing_peers.write().await;
+            peers.insert(addr, Arc::clone(&peer));
+
+            Ok(peer as Arc<dyn Peer>)
         })
     }
 

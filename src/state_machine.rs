@@ -287,9 +287,10 @@ impl StateMachineTrait for KvStateMachine {
 
     fn snapshot(&self) -> Vec<u8> {
         let data = self.data.read().unwrap();
-        let snapshot = StateMachineSnapshot {
-            entries: data.iter().map(|(k, v)| (k.clone(), v.to_vec())).collect(),
-        };
+        // Sort entries to ensure deterministic snapshot ordering
+        let mut entries: Vec<_> = data.iter().map(|(k, v)| (k.clone(), v.to_vec())).collect();
+        entries.sort_by(|a, b| a.0.cmp(&b.0));
+        let snapshot = StateMachineSnapshot { entries };
 
         rkyv::to_bytes::<_, 4096>(&snapshot)
             .map(|bytes| bytes.to_vec())
