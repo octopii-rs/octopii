@@ -3,6 +3,7 @@
 use crate::openraft::peer_registry::global_peer_addr;
 use crate::openraft::types::{AppNodeId, AppTypeConfig};
 use crate::rpc::{RequestPayload, ResponsePayload, RpcHandler};
+#[cfg(feature = "openraft-filters")]
 use crate::sim_time;
 use openraft::{
     error::RPCError,

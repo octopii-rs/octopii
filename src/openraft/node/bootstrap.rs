@@ -72,15 +72,14 @@ pub(crate) async fn init_peer_addrs(
 
     register_global_peer_addr(cluster_namespace, config.node_id, config.bind_addr);
 
-    persist_peer_addr(
+    let _ = persist_peer_addr(
         peers.as_ref(),
         peer_addr_wal,
         cluster_namespace,
         config.node_id,
         config.bind_addr,
     )
-    .await
-    .is_err();
+    .await;
 
     Ok(peers)
 }

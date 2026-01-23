@@ -172,7 +172,9 @@ fn spawn_child(seed: u64, args: &Args) -> std::io::Result<Child> {
     cmd.spawn()
 }
 
+#[cfg(feature = "simulation")]
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
+#[cfg(feature = "simulation")]
 const DEFAULT_ITERATIONS: usize = 5000;
 
 #[cfg(feature = "simulation")]
