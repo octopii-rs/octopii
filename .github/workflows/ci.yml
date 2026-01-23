@@ -1,8 +1,12 @@
 name: CI
 
 on:
-  push:
   pull_request:
+    branches:
+      - master
+  push:
+    branches:
+      - master
 
 jobs:
   unit-tests:
@@ -208,7 +212,7 @@ jobs:
         run: rm -rf /tmp/octopii_test_* /tmp/walrus_* || true
 
   simple-smoke-tests:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
       - uses: actions/checkout@v4
       - uses: actions-rust-lang/setup-rust-toolchain@v1
