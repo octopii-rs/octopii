@@ -3,16 +3,26 @@
 use octopii::{Config, OctopiiNode, OctopiiRuntime};
 use std::net::{SocketAddr, TcpListener};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU16, Ordering};
 use std::time::Duration;
 use tempfile::tempdir;
-use tokio::time::sleep;
+use tokio::time::{sleep, Instant};
+
+static NEXT_PORT_GROUP: AtomicU16 = AtomicU16::new(4000);
 
 fn next_addr_with_suffix(suffix: u16) -> SocketAddr {
     loop {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
-        let addr = listener.local_addr().expect("local addr");
-        if addr.port() % 10 == suffix {
-            return SocketAddr::new(addr.ip(), addr.port());
+        // Allocate ports in predictable groups of 10 to guarantee the desired suffix.
+        let group = NEXT_PORT_GROUP.fetch_add(1, Ordering::SeqCst);
+        let port = group.saturating_mul(10).saturating_add(suffix);
+        if port < 1024 || port > 65000 {
+            NEXT_PORT_GROUP.store(4000, Ordering::SeqCst);
+            continue;
+        }
+        if let Ok(listener) = TcpListener::bind(("127.0.0.1", port)) {
+            let addr = listener.local_addr().expect("local addr");
+            drop(listener);
+            return addr;
         }
     }
 }
@@ -81,6 +91,8 @@ async fn openraft_three_node_cluster_replicates_commands() -> Result<(), Box<dyn
 
     node1.campaign().await?;
 
+    let leader_wait_start = Instant::now();
+    let leader_timeout = Duration::from_secs(15);
     let leader_id = loop {
         if node1.is_leader().await {
             break 1;
@@ -90,6 +102,9 @@ async fn openraft_three_node_cluster_replicates_commands() -> Result<(), Box<dyn
         }
         if node3.is_leader().await {
             break 3;
+        }
+        if leader_wait_start.elapsed() > leader_timeout {
+            panic!("leader election did not complete within {:?}", leader_timeout);
         }
         sleep(Duration::from_millis(200)).await;
     };
