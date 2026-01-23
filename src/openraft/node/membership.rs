@@ -19,6 +19,18 @@ impl OpenRaftNode {
             || err_str.contains("ChangeMembershipError::InProgress")
     }
 
+    /// Get peer replication progress as (matched_index, last_log_index)
+    fn get_peer_replication_progress(&self, peer_id: u64) -> Option<(u64, u64)> {
+        let metrics = self.raft.metrics().borrow().clone();
+        let last_log = metrics.last_log_index?;
+        let replication = metrics.replication.as_ref()?;
+        let repl_log_id_opt = replication.get(&peer_id)?;
+        let matched = repl_log_id_opt.as_ref().map_or(0, |log_id| log_id.index);
+        #[cfg(feature = "simulation")]
+        sim_assert(matched <= last_log, "replication matched index exceeds last_log_index");
+        Some((matched, last_log))
+    }
+
     pub async fn add_learner(&self, peer_id: u64, addr: SocketAddr) -> Result<()> {
         self.persist_peer_addr_if_needed(peer_id, addr).await?;
         let node = BasicNode {
@@ -89,44 +101,15 @@ impl OpenRaftNode {
     }
 
     pub async fn is_learner_caught_up(&self, peer_id: u64) -> Result<bool> {
-        let metrics = self.raft.metrics().borrow().clone();
-        if let Some(last_log) = metrics.last_log_index {
-            if let Some(replication) = metrics.replication {
-                if let Some(repl_log_id_opt) = replication.get(&peer_id) {
-                    let matched = repl_log_id_opt.as_ref().map_or(0, |log_id| log_id.index);
-                    #[cfg(feature = "simulation")]
-                    {
-                        sim_assert(
-                            matched <= last_log,
-                            "replication matched index exceeds last_log_index",
-                        );
-                    }
-                    let distance = last_log.saturating_sub(matched);
-                    return Ok(distance <= self.raft.config().replication_lag_threshold);
-                }
-            }
+        if let Some((matched, last_log)) = self.get_peer_replication_progress(peer_id) {
+            let distance = last_log.saturating_sub(matched);
+            return Ok(distance <= self.raft.config().replication_lag_threshold);
         }
         Ok(false)
     }
 
     pub async fn peer_progress(&self, peer_id: u64) -> Option<(u64, u64)> {
-        let metrics = self.raft.metrics().borrow().clone();
-        if let Some(last_log) = metrics.last_log_index {
-            if let Some(replication) = metrics.replication {
-                if let Some(repl_log_id_opt) = replication.get(&peer_id) {
-                    let matched = repl_log_id_opt.as_ref().map_or(0, |log_id| log_id.index);
-                    #[cfg(feature = "simulation")]
-                    {
-                        sim_assert(
-                            matched <= last_log,
-                            "peer progress matched index exceeds last_log_index",
-                        );
-                    }
-                    return Some((matched, last_log));
-                }
-            }
-        }
-        None
+        self.get_peer_replication_progress(peer_id)
     }
 
     pub async fn has_leader(&self) -> bool {

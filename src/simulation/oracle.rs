@@ -2,7 +2,7 @@ use crate::wal::wal::Walrus;
 use std::collections::HashMap;
 
 pub struct Oracle {
-    history: HashMap<String, Vec<Vec<u8>>>,
+    pub history: HashMap<String, Vec<Vec<u8>>>,
     read_cursors: HashMap<String, usize>,
 }
 
@@ -107,6 +107,26 @@ impl Oracle {
     pub fn reset_read_cursors(&mut self) {
         for cursor in self.read_cursors.values_mut() {
             *cursor = 0;
+        }
+    }
+
+    /// Verify a batch of entries (calls verify_read for each)
+    pub fn verify_batch(&mut self, topic: &str, entries: &[Vec<u8>]) {
+        for data in entries {
+            self.verify_read(topic, data);
+        }
+    }
+
+    /// Check that we've reached EOF for a topic
+    pub fn check_eof(&self, topic: &str) {
+        let history_len = self.history.get(topic).map(|v| v.len()).unwrap_or(0);
+        let cursor = *self.read_cursors.get(topic).unwrap_or(&0);
+        if cursor < history_len {
+            panic!(
+                "ORACLE FAILURE: Expected EOF for topic '{}', but Oracle has {} more entries.",
+                topic,
+                history_len - cursor
+            );
         }
     }
 }

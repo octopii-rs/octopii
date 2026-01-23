@@ -1,14 +1,18 @@
 #![cfg(all(test, feature = "simulation", feature = "openraft"))]
 
-use super::*;
+use crate::openraft::storage::{WalLogRecord, WalLogStore};
+use crate::openraft::types::{AppEntry, AppTypeConfig};
 use crate::wal::wal::vfs::sim::{self, SimConfig};
 use crate::wal::wal::vfs;
 use openraft::type_config::alias::CommittedLeaderIdOf;
 use openraft::vote::RaftLeaderId;
+use openraft::storage::{RaftLogReader, RaftLogStorage};
+use openraft::{Entry, EntryPayload, LogId};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use tokio::runtime::Builder;
 
+#[path = "test_utils.rs"]
 mod test_utils;
 
 #[test]

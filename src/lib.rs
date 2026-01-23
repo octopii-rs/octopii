@@ -14,8 +14,6 @@ pub mod wal;
 mod sim_time;
 #[cfg(feature = "simulation")]
 pub mod simulation;
-#[cfg(feature = "simulation")]
-pub mod raft;
 
 // Re-export main types
 pub use chunk::{ChunkSource, TransferResult};

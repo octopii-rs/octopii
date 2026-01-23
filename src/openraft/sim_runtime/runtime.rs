@@ -39,19 +39,11 @@ impl AsyncRuntime for SimRuntime {
 
     fn timeout<R, F: Future<Output = R> + OptionalSend>(duration: Duration, future: F) -> Self::Timeout<R, F> {
         let deadline = now().saturating_add_duration(duration);
-        SimTimeout {
-            deadline_ns: deadline.nanos,
-            future,
-            _marker: std::marker::PhantomData,
-        }
+        SimTimeout::new(deadline.nanos, future)
     }
 
     fn timeout_at<R, F: Future<Output = R> + OptionalSend>(deadline: Self::Instant, future: F) -> Self::Timeout<R, F> {
-        SimTimeout {
-            deadline_ns: deadline.nanos,
-            future,
-            _marker: std::marker::PhantomData,
-        }
+        SimTimeout::new(deadline.nanos, future)
     }
 
     fn is_panic(join_error: &Self::JoinError) -> bool {

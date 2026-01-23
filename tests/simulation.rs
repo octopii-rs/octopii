@@ -14,7 +14,7 @@ mod sim_tests {
     use bytes::Bytes;
     use octopii::openraft::storage::{MemStateMachine, WalLogStore};
     use octopii::openraft::types::{AppEntry, AppTypeConfig};
-    use octopii::simulation::DurabilityOracle;
+    use octopii::simulation::{DurabilityOracle, Oracle, SimRng};
     use octopii::state_machine::{KvStateMachine, StateMachine, StateMachineTrait, WalBackedStateMachine};
     use octopii::wal::wal::vfs::sim::{self, SimConfig};
     use octopii::wal::wal::vfs;
@@ -30,181 +30,34 @@ mod sim_tests {
     use openraft::impls::BasicNode;
     use openraft::vote::RaftLeaderId;
     use futures::stream;
+    use rkyv::{Archive, Deserialize, Serialize};
     use std::collections::{BTreeMap, BTreeSet, HashMap};
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::time::Duration;
     use tokio::runtime::Builder;
 
-    // ========================================================================
-    // 1. Local Deterministic RNG (Xorshift)
-    // ========================================================================
-    // We use this to decide WHICH action to take (Write vs Read vs Crash).
-    // The VFS has its own RNG for deciding IF an IO error occurs.
-    pub struct SimRng {
-        state: u64,
+    /// Snapshot format for KvStateMachine (must match state_machine.rs)
+    #[derive(Archive, Deserialize, Serialize, Debug, Clone)]
+    struct StateMachineSnapshot {
+        entries: Vec<(String, Vec<u8>)>,
     }
 
-    impl SimRng {
-        pub fn new(seed: u64) -> Self {
-            let mut rng = Self { state: 0 };
-            // Mix the seed a bit
-            rng.state = seed.wrapping_add(0x9E3779B97F4A7C15);
-            rng.next();
-            rng
+    /// Helper to deserialize KvStateMachine snapshot from rkyv format
+    fn deserialize_sm_snapshot(data: &[u8]) -> HashMap<String, Vec<u8>> {
+        if data.is_empty() {
+            return HashMap::new();
         }
-
-        pub fn next(&mut self) -> u64 {
-            let mut x = self.state;
-            x ^= x << 13;
-            x ^= x >> 7;
-            x ^= x << 17;
-            self.state = x;
-            x
-        }
-
-        pub fn range(&mut self, min: usize, max: usize) -> usize {
-            let range = max - min;
-            if range == 0 {
-                return min;
-            }
-            min + (self.next() as usize % range)
-        }
-
-        #[allow(dead_code)]
-        pub fn bool(&mut self, probability: f64) -> bool {
-            let limit = (u64::MAX as f64 * probability) as u64;
-            self.next() < limit
-        }
-
-        pub fn gen_payload(&mut self) -> Vec<u8> {
-            let len = self.range(1, 21);
-            let mut buf = Vec::with_capacity(len);
-            for _ in 0..len {
-                buf.push(self.next() as u8);
-            }
-            buf
-        }
+        let archived = unsafe { rkyv::archived_root::<StateMachineSnapshot>(data) };
+        let snapshot: StateMachineSnapshot = match archived.deserialize(&mut rkyv::Infallible) {
+            Ok(s) => s,
+            Err(_) => return HashMap::new(),
+        };
+        snapshot.entries.into_iter().collect()
     }
 
     // ========================================================================
-    // 2. The Oracle (Source of Truth)
-    // ========================================================================
-    struct Oracle {
-        // Map of Topic -> Vec<EntryPayload>
-        history: HashMap<String, Vec<Vec<u8>>>,
-        // Map of Topic -> Next Expected Read Index
-        read_cursors: HashMap<String, usize>,
-    }
-
-    impl Oracle {
-        fn new() -> Self {
-            Self {
-                history: HashMap::new(),
-                read_cursors: HashMap::new(),
-            }
-        }
-
-        fn record_write(&mut self, topic: &str, data: Vec<u8>) {
-            let history = self.history.entry(topic.to_string()).or_default();
-            let idx = history.len();
-            if topic == "orders" {
-                eprintln!("[ORACLE] Recording write for orders[{}] len={}", idx, data.len());
-            }
-            history.push(data);
-        }
-
-        fn verify_read(&mut self, topic: &str, actual_data: &[u8]) {
-            let history = self.history.entry(topic.to_string()).or_default();
-            let cursor = self.read_cursors.entry(topic.to_string()).or_default();
-
-            if *cursor >= history.len() {
-                panic!(
-                    "ORACLE FAILURE: Read data for topic '{}' but Oracle thinks stream is empty/finished.\nGot data len: {}",
-                    topic,
-                    actual_data.len()
-                );
-            }
-
-            let expected = &history[*cursor];
-            if expected != actual_data {
-                // Find if actual_data matches any other entry in history
-                let mut found_at = None;
-                for (i, entry) in history.iter().enumerate() {
-                    if entry == actual_data {
-                        found_at = Some(i);
-                        break;
-                    }
-                }
-
-                eprintln!("\n=== ORACLE DIAGNOSTIC ===");
-                eprintln!("Topic: {}", topic);
-                eprintln!("Oracle history length: {}", history.len());
-                eprintln!("Current cursor: {}", *cursor);
-                eprintln!("Expected entry {} len: {}", *cursor, expected.len());
-                eprintln!("Actual data len: {}", actual_data.len());
-                if let Some(idx) = found_at {
-                    eprintln!("FOUND: Actual data matches Oracle history[{}]", idx);
-                } else {
-                    eprintln!("NOT FOUND: Actual data doesn't match any Oracle history entry");
-                }
-                eprintln!("Nearby entries in Oracle:");
-                let start = (*cursor).saturating_sub(3);
-                let end = ((*cursor) + 4).min(history.len());
-                for i in start..end {
-                    let marker = if i == *cursor { " <-- EXPECTED" } else { "" };
-                    eprintln!("  [{}] len={}{}", i, history[i].len(), marker);
-                }
-                eprintln!("=========================\n");
-
-                panic!(
-                    "ORACLE FAILURE: Data mismatch for topic '{}' at index {}.\nExpected len: {}\nActual len: {}\nExpected: {:?}\nActual:   {:?}",
-                    topic, *cursor, expected.len(), actual_data.len(), expected, actual_data
-                );
-            }
-
-            *cursor += 1;
-        }
-
-        /// Verify a batch of entries, advancing the cursor
-        fn verify_batch(&mut self, topic: &str, entries: &[Vec<u8>]) {
-            for data in entries {
-                self.verify_read(topic, data);
-            }
-        }
-
-        /// Read with checkpoint=false (cursor advances in-memory but not persisted)
-        /// In Walrus, checkpoint=false means the cursor position won't be persisted to disk,
-        /// but the in-memory cursor DOES advance. After crash, the cursor resets.
-        /// So we still advance the Oracle cursor - the difference is at recovery time.
-        fn verify_peek(&mut self, topic: &str, actual_data: &[u8]) {
-            // Peek still advances cursor - just doesn't persist to disk
-            // So we verify and advance just like a regular read
-            self.verify_read(topic, actual_data);
-        }
-
-        /// Check EOF without advancing cursor (for peek operations)
-        fn check_eof(&self, topic: &str) {
-            let history_len = self.history.get(topic).map(|v| v.len()).unwrap_or(0);
-            let cursor = *self.read_cursors.get(topic).unwrap_or(&0);
-            if cursor < history_len {
-                panic!(
-                    "ORACLE FAILURE: Walrus returned None (EOF) for topic '{}', but Oracle expects {} more entries.",
-                    topic,
-                    history_len - cursor
-                );
-            }
-        }
-
-        fn reset_read_cursors(&mut self) {
-            for cursor in self.read_cursors.values_mut() {
-                *cursor = 0;
-            }
-        }
-    }
-
-    // ========================================================================
-    // 3. The Simulation Harness
+    // Simulation Harness
     // ========================================================================
     /// A paired topic set for dual-write testing (like Octopii's log/log_recovery)
     struct DualTopic {
@@ -1231,7 +1084,7 @@ mod sim_tests {
 
             let wal_path = root_dir.join("state_machine.log");
             let mut rng = sim::XorShift128::new(scenario_seed ^ 0xa5a5_a5a5_5a5a_5a5a);
-            let mut oracle: HashMap<Vec<u8>, Vec<u8>> = HashMap::new();
+            let mut oracle: HashMap<String, Vec<u8>> = HashMap::new();
 
             for _cycle in 0..CRASH_CYCLES {
                 let prev_rate = sim::get_io_error_rate();
@@ -1246,19 +1099,18 @@ mod sim_tests {
                 });
 
                 let recovered = inner.snapshot();
-                let recovered_map: HashMap<Vec<u8>, Vec<u8>> =
-                    bincode::deserialize(&recovered).expect("snapshot deserialize failed");
+                let recovered_map = deserialize_sm_snapshot(&recovered);
                 assert_eq!(recovered_map, oracle);
                 sim::set_io_error_rate(prev_rate);
                 sim::set_partial_writes_enabled(prev_partial);
 
-                let keys: [&[u8]; 6] = [
-                    b"alpha".as_slice(),
-                    b"beta".as_slice(),
-                    b"gamma".as_slice(),
-                    b"delta".as_slice(),
-                    b"epsilon".as_slice(),
-                    b"zeta".as_slice(),
+                let keys: [&str; 6] = [
+                    "alpha",
+                    "beta",
+                    "gamma",
+                    "delta",
+                    "epsilon",
+                    "zeta",
                 ];
                 let _guard = rt.enter();
                 for _ in 0..OPS_PER_CYCLE {
@@ -1267,18 +1119,18 @@ mod sim_tests {
                     let (command, value) = if action < 2 {
                         let value = (rng.next_u64() % 1000).to_string();
                         (
-                            format!("SET {} {}", std::str::from_utf8(key).unwrap(), value),
+                            format!("SET {} {}", key, value),
                             Some(value),
                         )
                     } else {
                         (
-                            format!("DELETE {}", std::str::from_utf8(key).unwrap()),
+                            format!("DELETE {}", key),
                             None,
                         )
                     };
                     if sm.apply(command.as_bytes()).is_ok() {
                         if let Some(value) = value {
-                            oracle.insert(key.to_vec(), value.into_bytes());
+                            oracle.insert(key.to_string(), value.into_bytes());
                         } else {
                             oracle.remove(key);
                         }
@@ -2338,8 +2190,8 @@ mod sim_tests {
         must_survive: Vec<String>,
         /// Commands that may be lost - written with partial write
         may_be_lost: Vec<String>,
-        /// Expected state after applying must_survive commands
-        expected_state: HashMap<Vec<u8>, Vec<u8>>,
+        /// Expected state after applying must_survive commands (String keys to match KvStateMachine)
+        expected_state: HashMap<String, Vec<u8>>,
         /// Current cycle number
         cycle: usize,
     }
@@ -2372,19 +2224,19 @@ mod sim_tests {
                 "SET" => {
                     if let (Some(key), Some(val)) = (tokens.next(), tokens.next()) {
                         self.expected_state
-                            .insert(key.as_bytes().to_vec(), val.as_bytes().to_vec());
+                            .insert(key.to_string(), val.as_bytes().to_vec());
                     }
                 }
                 "DELETE" => {
                     if let Some(key) = tokens.next() {
-                        self.expected_state.remove(key.as_bytes());
+                        self.expected_state.remove(key);
                     }
                 }
                 _ => {}
             }
         }
 
-        fn after_recovery(&mut self, recovered_state: &HashMap<Vec<u8>, Vec<u8>>) {
+        fn after_recovery(&mut self, recovered_state: &HashMap<String, Vec<u8>>) {
             // Verify expected state is subset of recovered state
             for (key, expected_val) in &self.expected_state {
                 match recovered_state.get(key) {
@@ -2414,8 +2266,8 @@ mod sim_tests {
                 let key = tokens.next();
 
                 let survived = match (op, key) {
-                    ("SET", Some(k)) => recovered_state.contains_key(k.as_bytes()),
-                    ("DELETE", Some(k)) => !recovered_state.contains_key(k.as_bytes()),
+                    ("SET", Some(k)) => recovered_state.contains_key(k),
+                    ("DELETE", Some(k)) => !recovered_state.contains_key(k),
                     _ => false,
                 };
 
@@ -2495,8 +2347,7 @@ mod sim_tests {
 
                 // Verify recovery matches expected state
                 let recovered_snapshot = inner.snapshot();
-                let recovered_state: HashMap<Vec<u8>, Vec<u8>> =
-                    bincode::deserialize(&recovered_snapshot).unwrap_or_default();
+                let recovered_state = deserialize_sm_snapshot(&recovered_snapshot);
                 oracle.after_recovery(&recovered_state);
 
                 // Re-enable faults
@@ -2906,7 +2757,7 @@ mod sim_tests {
     /// is fully written or not at all. Partial compaction should not corrupt state.
     #[test]
     fn state_machine_compaction_with_faults() {
-        use octopii::raft::KvStateMachine as RaftKvStateMachine;
+        use octopii::KvStateMachine as RaftKvStateMachine;
 
         const SCENARIOS: usize = 8;
         const CRASH_CYCLES: usize = 4;

@@ -6,6 +6,9 @@ on:
   schedule:
     - cron: "0 3 * * *"
 
+env:
+  WALRUS_QUIET: "1"
+
 jobs:
   simulation-stress:
     runs-on: self-hosted

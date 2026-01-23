@@ -3,6 +3,9 @@ name: Cluster Simulation
 on:
   push:
 
+env:
+  WALRUS_QUIET: "1"
+
 jobs:
   cluster-simulation-test:
     runs-on: ubuntu-latest

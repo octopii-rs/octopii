@@ -8,19 +8,18 @@ mod rpc;
 
 #[cfg(feature = "openraft-filters")]
 use crate::openraft::network::OpenRaftFilters;
-use crate::openraft::peer_registry::{cluster_namespace_from_wal_dir, global_peer_addr};
+use crate::openraft::peer_registry::{global_peer_addr, persist_peer_addr};
 use crate::openraft::types::{AppEntry, AppTypeConfig};
 use crate::runtime::OctopiiRuntime;
-use crate::state_machine::{KvStateMachine, StateMachine};
+use crate::state_machine::StateMachine;
 use crate::transport::Transport;
 use crate::wal::WriteAheadLog;
 use crate::invariants::sim_assert;
 use bytes::Bytes;
-use openraft::impls::BasicNode;
 use openraft::metrics::RaftMetrics;
 use openraft::storage::{LogState, RaftLogReader, RaftLogStorage};
 use openraft::{LogId, Raft, ServerState, Vote};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::io;
@@ -120,28 +119,32 @@ impl OpenRaftNode {
     }
 
     pub async fn log_state(&self) -> std::result::Result<LogState<AppTypeConfig>, io::Error> {
-        bootstrap::log_state(self).await
+        let mut store = self.log_store.clone();
+        store.get_log_state().await
     }
 
     pub async fn log_entries(
         &self,
         range: std::ops::RangeInclusive<u64>,
     ) -> std::result::Result<Vec<openraft::Entry<AppTypeConfig>>, io::Error> {
-        bootstrap::log_entries(self, range).await
+        let mut store = self.log_store.clone();
+        store.try_get_log_entries(range).await
     }
 
     pub async fn read_vote(&self) -> std::result::Result<Option<Vote<AppTypeConfig>>, io::Error> {
-        bootstrap::read_vote(self).await
+        let mut store = self.log_store.clone();
+        store.read_vote().await
     }
 
     pub async fn read_committed(
         &self,
     ) -> std::result::Result<Option<LogId<AppTypeConfig>>, io::Error> {
-        bootstrap::read_committed(self).await
+        let mut store = self.log_store.clone();
+        store.read_committed().await
     }
 
     async fn persist_peer_addr_if_needed(&self, peer_id: u64, addr: SocketAddr) -> Result<()> {
-        bootstrap::persist_peer_addr_if_needed(
+        persist_peer_addr(
             &self.peer_addrs,
             &self.peer_addr_wal,
             self.peer_namespace.as_str(),
@@ -154,16 +157,7 @@ impl OpenRaftNode {
     pub async fn start(&self) -> Result<()> {
         self.seed_peer_addrs_from_config().await?;
         self.set_openraft_request_handler().await;
-        {
-            let map = self.peer_addrs.read().await;
-            eprintln!(
-                "[node {}] peer map after seed: {:?}",
-                self.config.node_id, *map
-            );
-        }
-
         self.initialize_cluster_if_needed().await?;
-
         Ok(())
     }
 
@@ -225,7 +219,16 @@ impl OpenRaftNode {
     }
 
     pub async fn conf_state(&self) -> ConfStateCompat {
-        bootstrap::conf_state(self).await
+        let map = self.peer_addrs.read().await;
+        let mut voters: Vec<u64> = map.keys().copied().collect();
+        if !voters.contains(&self.config.node_id) {
+            voters.push(self.config.node_id);
+        }
+        voters.sort_unstable();
+        ConfStateCompat {
+            voters,
+            learners: Vec::new(),
+        }
     }
 
     pub async fn force_snapshot_to_peer(&self, _peer_id: u64) -> Result<()> {

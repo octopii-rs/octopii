@@ -1,6 +1,6 @@
 #![cfg(feature = "openraft")]
 
-use super::{ConfStateCompat, OpenRaftNode};
+use super::OpenRaftNode;
 use crate::config::Config;
 use crate::error::Result;
 use crate::openraft::peer_registry::{
@@ -8,16 +8,14 @@ use crate::openraft::peer_registry::{
     register_global_peer_addr,
 };
 use crate::openraft::storage::{new_wal_log_store, MemStateMachine};
-use crate::openraft::types::AppTypeConfig;
 use crate::runtime::OctopiiRuntime;
 use crate::state_machine::{KvStateMachine, StateMachine};
 use crate::transport::Transport;
 use crate::wal::WriteAheadLog;
 use openraft::impls::BasicNode;
-use openraft::storage::{LogState, RaftLogReader, RaftLogStorage};
-use openraft::{Config as RaftConfig, LogId, Raft, Vote};
+use openraft::storage::RaftLogStorage;
+use openraft::{Config as RaftConfig, Raft};
 use std::collections::{BTreeMap, HashMap};
-use std::io;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -26,26 +24,6 @@ use tokio::time::Duration;
 #[cfg(feature = "openraft-filters")]
 use crate::openraft::network::OpenRaftFilters;
 use crate::openraft::network::QuinnNetworkFactory;
-#[cfg(feature = "openraft-filters")]
-pub(crate) fn build_network_factory(
-    rpc: Arc<crate::rpc::RpcHandler>,
-    peer_addrs: Arc<RwLock<HashMap<u64, SocketAddr>>>,
-    node_id: u64,
-    cluster_namespace: Arc<String>,
-    filters: Arc<OpenRaftFilters>,
-) -> QuinnNetworkFactory {
-    QuinnNetworkFactory::new(rpc, peer_addrs, node_id, cluster_namespace, filters)
-}
-
-#[cfg(not(feature = "openraft-filters"))]
-pub(crate) fn build_network_factory(
-    rpc: Arc<crate::rpc::RpcHandler>,
-    peer_addrs: Arc<RwLock<HashMap<u64, SocketAddr>>>,
-    node_id: u64,
-    cluster_namespace: Arc<String>,
-) -> QuinnNetworkFactory {
-    QuinnNetworkFactory::new(rpc, peer_addrs, node_id, cluster_namespace)
-}
 
 pub(crate) async fn init_wal_stores(
     config: &Config,
@@ -142,7 +120,7 @@ pub(crate) async fn new_with_transport(
     let state_machine: StateMachine = custom_state_machine.unwrap_or_else(|| Arc::new(KvStateMachine::in_memory()));
     let state_machine_store = MemStateMachine::new_with_wal(state_machine.clone(), meta_wal).await;
 
-    let network_factory = build_network_factory(
+    let network_factory = QuinnNetworkFactory::new(
         Arc::clone(&rpc),
         Arc::clone(&peer_addrs),
         config.node_id,
@@ -227,50 +205,4 @@ pub(crate) async fn initialize_cluster_if_needed(node: &OpenRaftNode) -> Result<
     }
 
     Ok(())
-}
-
-pub(crate) async fn log_state(node: &OpenRaftNode) -> std::result::Result<LogState<AppTypeConfig>, io::Error> {
-    let mut store = node.log_store.clone();
-    store.get_log_state().await
-}
-
-pub(crate) async fn log_entries(
-    node: &OpenRaftNode,
-    range: std::ops::RangeInclusive<u64>,
-) -> std::result::Result<Vec<openraft::Entry<AppTypeConfig>>, io::Error> {
-    let mut store = node.log_store.clone();
-    store.try_get_log_entries(range).await
-}
-
-pub(crate) async fn read_vote(node: &OpenRaftNode) -> std::result::Result<Option<Vote<AppTypeConfig>>, io::Error> {
-    let mut store = node.log_store.clone();
-    store.read_vote().await
-}
-
-pub(crate) async fn read_committed(node: &OpenRaftNode) -> std::result::Result<Option<LogId<AppTypeConfig>>, io::Error> {
-    let mut store = node.log_store.clone();
-    store.read_committed().await
-}
-
-pub(crate) async fn conf_state(node: &OpenRaftNode) -> ConfStateCompat {
-    let map = node.peer_addrs.read().await;
-    let mut voters: Vec<u64> = map.keys().copied().collect();
-    if !voters.contains(&node.config.node_id) {
-        voters.push(node.config.node_id);
-    }
-    voters.sort_unstable();
-    ConfStateCompat {
-        voters,
-        learners: Vec::new(),
-    }
-}
-
-pub(crate) async fn persist_peer_addr_if_needed(
-    peer_addrs: &Arc<RwLock<HashMap<u64, SocketAddr>>>,
-    peer_addr_wal: &Arc<WriteAheadLog>,
-    peer_namespace: &str,
-    peer_id: u64,
-    addr: SocketAddr,
-) -> Result<()> {
-    persist_peer_addr(peer_addrs, peer_addr_wal, peer_namespace, peer_id, addr).await
 }

@@ -3,6 +3,8 @@
 use crate::error::{OctopiiError, Result};
 use crate::invariants::sim_assert;
 use crate::wal::WriteAheadLog;
+#[cfg(feature = "simulation")]
+use crate::wal::wal::vfs::sim;
 use bytes::Bytes;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
@@ -124,6 +126,13 @@ pub(crate) async fn persist_peer_addr(
         append_res?;
         #[cfg(feature = "simulation")]
         {
+            // Disable faults during verification read to avoid false positives
+            // from I/O errors causing count mismatches in the WAL invariant check
+            let prev_rate = sim::get_io_error_rate();
+            let prev_partial = sim::get_partial_writes_enabled();
+            sim::set_io_error_rate(0.0);
+            sim::set_partial_writes_enabled(false);
+
             if let Ok(entries) = wal.read_all().await {
                 let mut last_addr: Option<SocketAddr> = None;
                 for raw in entries {
@@ -138,6 +147,9 @@ pub(crate) async fn persist_peer_addr(
                     "peer addr WAL last record mismatch after append",
                 );
             }
+
+            sim::set_partial_writes_enabled(prev_partial);
+            sim::set_io_error_rate(prev_rate);
         }
     }
 

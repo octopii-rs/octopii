@@ -1,9 +1,10 @@
 #![cfg(all(test, feature = "simulation", feature = "openraft"))]
 
-use super::WalLogStore;
+use crate::openraft::storage::WalLogStore;
 use crate::openraft::types::AppTypeConfig;
 use crate::wal::wal::vfs::sim;
 use crate::wal::WriteAheadLog;
+use openraft::storage::{RaftLogReader, RaftLogStorage};
 use openraft::{Entry, LogId};
 use std::collections::BTreeMap;
 use std::sync::Arc;

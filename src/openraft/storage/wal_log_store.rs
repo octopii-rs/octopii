@@ -44,15 +44,20 @@ impl WalLogStore {
     }
 
     fn sim_assert_log_store_state(inner: &MemLogStoreInner) {
-        Self::sim_assert_log_entries(inner);
-        Self::sim_assert_committed(inner);
-        Self::sim_assert_log_gaps(inner);
-        Self::sim_assert_log_continuity(inner);
-        Self::sim_assert_committed_accessible(inner);
+        Self::check_log_invariants(inner);
+        Self::check_committed_invariants(inner);
     }
 
-    fn sim_assert_log_entries(inner: &MemLogStoreInner) {
+    /// Check all log-related invariants:
+    /// - Entry indices match map keys
+    /// - All entries are after purge point
+    /// - Purge point is before last log
+    /// - No gaps in log
+    /// - First entry follows purge point
+    fn check_log_invariants(inner: &MemLogStoreInner) {
         let last_log_id = inner.log.iter().next_back().map(|(_, entry)| entry.log_id);
+
+        // Check entries against purge point
         if let Some(purged) = inner.last_purged_log_id.clone() {
             invariants::sim_assert(
                 last_log_id.map_or(true, |last| purged <= last),
@@ -68,6 +73,13 @@ impl WalLogStore {
                     "log entry is not strictly after last purged log id",
                 );
             }
+            // First entry must immediately follow purged index
+            if let Some(first_idx) = inner.log.keys().next().copied() {
+                invariants::sim_assert(
+                    first_idx == purged.index + 1,
+                    "first log entry doesn't immediately follow purged index",
+                );
+            }
         } else {
             for (idx, entry) in inner.log.iter() {
                 invariants::sim_assert(
@@ -76,34 +88,8 @@ impl WalLogStore {
                 );
             }
         }
-    }
 
-    fn sim_assert_committed(inner: &MemLogStoreInner) {
-        if let Some(committed) = inner.committed {
-            // committed must be <= last_log_id, OR if log is empty, <= last_purged
-            let last_log_id = inner.log.iter().next_back().map(|(_, entry)| entry.log_id);
-            let committed_valid = match last_log_id {
-                Some(last) => committed <= last,
-                None => inner
-                    .last_purged_log_id
-                    .map(|p| committed <= p)
-                    .unwrap_or(false),
-            };
-            invariants::sim_assert(
-                committed_valid,
-                "committed log id is after last log/purged id",
-            );
-            if let Some(purged) = inner.last_purged_log_id.clone() {
-                invariants::sim_assert(
-                    committed.index >= purged.index,
-                    "committed log id is before last purged log id",
-                );
-            }
-        }
-    }
-
-    fn sim_assert_log_gaps(inner: &MemLogStoreInner) {
-        // Invariant #6: Log continuity - no gaps between entries
+        // Check for gaps in log
         if let (Some(first_idx), Some(last_idx)) =
             (inner.log.keys().next().copied(), inner.log.keys().next_back().copied())
         {
@@ -115,21 +101,36 @@ impl WalLogStore {
         }
     }
 
-    fn sim_assert_log_continuity(inner: &MemLogStoreInner) {
-        // Invariant #7: First entry immediately follows purged index
-        if let Some(purged) = inner.last_purged_log_id.clone() {
-            if let Some(first_idx) = inner.log.keys().next().copied() {
+    /// Check all committed-related invariants:
+    /// - Committed <= last_log_id (or <= last_purged if log empty)
+    /// - Committed >= purge point
+    /// - Committed entry is accessible (in log or purged)
+    fn check_committed_invariants(inner: &MemLogStoreInner) {
+        if let Some(committed) = inner.committed {
+            let last_log_id = inner.log.iter().next_back().map(|(_, entry)| entry.log_id);
+
+            // Committed must be <= last_log_id, OR if log is empty, <= last_purged
+            let committed_valid = match last_log_id {
+                Some(last) => committed <= last,
+                None => inner
+                    .last_purged_log_id
+                    .map(|p| committed <= p)
+                    .unwrap_or(false),
+            };
+            invariants::sim_assert(
+                committed_valid,
+                "committed log id is after last log/purged id",
+            );
+
+            // Committed must be >= purge point
+            if let Some(purged) = inner.last_purged_log_id.clone() {
                 invariants::sim_assert(
-                    first_idx == purged.index + 1,
-                    "first log entry doesn't immediately follow purged index",
+                    committed.index >= purged.index,
+                    "committed log id is before last purged log id",
                 );
             }
-        }
-    }
 
-    fn sim_assert_committed_accessible(inner: &MemLogStoreInner) {
-        // Invariant #8: Committed entry is accessible (in log or purged)
-        if let Some(committed) = inner.committed {
+            // Committed entry must be accessible
             let in_log = inner.log.contains_key(&committed.index);
             let is_purged = inner
                 .last_purged_log_id

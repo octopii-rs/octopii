@@ -8,8 +8,6 @@ use crate::transport::Peer;
 mod receive;
 mod send;
 
-pub use receive::RecvChunkResult;
-pub use send::PeerSender;
 
 pub struct PeerConnection {
     pub(crate) connection: Connection,

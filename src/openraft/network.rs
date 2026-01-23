@@ -5,7 +5,7 @@ use crate::openraft::types::{AppNodeId, AppTypeConfig};
 use crate::rpc::{RequestPayload, ResponsePayload, RpcHandler};
 use openraft::{
     error::RPCError,
-    network::{RaftNetwork, RaftNetworkFactory},
+    network::RaftNetworkFactory,
     raft::{AppendEntriesRequest, AppendEntriesResponse, VoteRequest, VoteResponse},
 };
 use serde::{de::DeserializeOwned, Serialize};
@@ -52,27 +52,13 @@ impl QuinnNetwork {
     async fn peer_addr(&self) -> Option<SocketAddr> {
         let g = self.peer_addrs.read().await;
         if let Some(addr) = g.get(&self.target).copied() {
-            eprintln!(
-                "[openraft rpc] {} -> {} using cached addr {}",
-                self.self_id, self.target, addr
-            );
             return Some(addr);
         }
         drop(g);
 
         if let Some(addr) = global_peer_addr(self.cluster_namespace.as_str(), self.target) {
             self.peer_addrs.write().await.insert(self.target, addr);
-            eprintln!(
-                "[openraft rpc] {} -> {} using global addr {}",
-                self.self_id, self.target, addr
-            );
             return Some(addr);
-        }
-        if let Some(addr) = self.default_addr {
-            eprintln!(
-                "[openraft rpc] {} -> {} using default addr {}",
-                self.self_id, self.target, addr
-            );
         }
         self.default_addr
     }
@@ -82,10 +68,6 @@ impl QuinnNetwork {
         kind: &str,
         data: Vec<u8>,
     ) -> Result<ResponsePayload, anyhow::Error> {
-        eprintln!(
-            "[openraft rpc] {} -> {} kind={} sending",
-            self.self_id, self.target, kind
-        );
         #[cfg(feature = "openraft-filters")]
         {
             for (g1, g2) in self.filters.partitions.read().await.iter() {
@@ -130,10 +112,6 @@ impl QuinnNetwork {
                 self.target,
                 self.self_id
             );
-            eprintln!(
-                "[openraft rpc] {} -> {} kind={} no address",
-                self.self_id, self.target, kind
-            );
             anyhow::bail!("no address for peer {}", self.target);
         };
 
@@ -142,25 +120,11 @@ impl QuinnNetwork {
             data: bytes::Bytes::from(data),
         };
 
-        let resp = match self
+        let resp = self
             .rpc
             .request(addr, payload, Duration::from_secs(5))
-            .await
-        {
-            Ok(r) => r,
-            Err(e) => {
-                eprintln!(
-                    "[openraft rpc] {} -> {} kind={} addr={} failed: {}",
-                    self.self_id, self.target, kind, addr, e
-                );
-                return Err(e.into());
-            }
-        };
+            .await?;
 
-        eprintln!(
-            "[openraft rpc] {} -> {} kind={} got response payload",
-            self.self_id, self.target, kind
-        );
         Ok(resp.payload)
     }
 
@@ -188,30 +152,15 @@ impl QuinnNetwork {
 
         match resp_payload {
             ResponsePayload::OpenRaft { kind: resp_kind, data } if resp_kind == kind => {
-                bincode::deserialize(&data).map_err(|e| {
-                    eprintln!(
-                        "[openraft rpc] {} -> {} kind={} deserialize failed: {} ({} bytes)",
-                        self.self_id,
-                        self.target,
-                        kind,
-                        e,
-                        data.len()
-                    );
-                    RPCError::Network(openraft::error::NetworkError::new(&e))
-                })
+                bincode::deserialize(&data)
+                    .map_err(|e| RPCError::Network(openraft::error::NetworkError::new(&e)))
             }
-            other => {
-                eprintln!(
-                    "[openraft rpc] {} -> {} kind={} unexpected response: {:?}",
-                    self.self_id, self.target, kind, other
-                );
-                Err(RPCError::Unreachable(openraft::error::Unreachable::new(
-                    &io::Error::new(
-                        io::ErrorKind::Other,
-                        format!("unexpected response: {:?}", other),
-                    ),
-                )))
-            }
+            other => Err(RPCError::Unreachable(openraft::error::Unreachable::new(
+                &io::Error::new(
+                    io::ErrorKind::Other,
+                    format!("unexpected response: {:?}", other),
+                ),
+            ))),
         }
     }
 }

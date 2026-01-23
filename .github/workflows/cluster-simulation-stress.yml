@@ -4,6 +4,9 @@ on:
   workflow_dispatch:
   push:
 
+env:
+  WALRUS_QUIET: "1"
+
 jobs:
   cluster-simulation-stress:
     runs-on: ubuntu-latest

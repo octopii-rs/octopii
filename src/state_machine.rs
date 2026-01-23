@@ -64,22 +64,25 @@ struct StateMachineSnapshot {
     entries: Vec<(String, Vec<u8>)>,
 }
 
-#[cfg(feature = "simulation")]
-fn recover_state_machine_map(wal: &Arc<WriteAheadLog>) -> HashMap<String, Bytes> {
+/// Replay WAL to recover state machine map. Resets read offsets before replay.
+fn replay_wal_to_map(wal: &Arc<WriteAheadLog>) -> HashMap<String, Bytes> {
     let walrus = &wal.walrus;
     let mut recovered = HashMap::new();
 
     let _ = walrus.reset_read_offset_for_topic(TOPIC_STATE_MACHINE_SNAPSHOT);
     let _ = walrus.reset_read_offset_for_topic(TOPIC_STATE_MACHINE);
 
+    // Replay snapshots first
     loop {
         match walrus.read_next(TOPIC_STATE_MACHINE_SNAPSHOT, true) {
             Ok(Some(entry)) => {
                 let archived =
                     unsafe { rkyv::archived_root::<StateMachineSnapshot>(&entry.data) };
-                let snapshot: StateMachineSnapshot = archived
-                    .deserialize(&mut rkyv::Infallible)
-                    .expect("Failed to deserialize snapshot during verification");
+                let snapshot: StateMachineSnapshot =
+                    match archived.deserialize(&mut rkyv::Infallible) {
+                        Ok(s) => s,
+                        Err(_) => break,
+                    };
                 recovered.clear();
                 for (key, value) in snapshot.entries {
                     recovered.insert(key, Bytes::from(value));
@@ -90,6 +93,7 @@ fn recover_state_machine_map(wal: &Arc<WriteAheadLog>) -> HashMap<String, Bytes>
         }
     }
 
+    // Replay individual entries
     loop {
         match walrus.read_next(TOPIC_STATE_MACHINE, true) {
             Ok(Some(entry)) => {
@@ -144,56 +148,12 @@ impl KvStateMachine {
 
     fn recover_from_wal(&self) {
         if let Some(wal) = &self.wal {
-            let mut recovered = HashMap::new();
-
-            let _ = wal.walrus.reset_read_offset_for_topic(TOPIC_STATE_MACHINE_SNAPSHOT);
-            let _ = wal.walrus.reset_read_offset_for_topic(TOPIC_STATE_MACHINE);
-
-            loop {
-                match wal.walrus.read_next(TOPIC_STATE_MACHINE_SNAPSHOT, true) {
-                    Ok(Some(entry)) => {
-                        let archived =
-                            unsafe { rkyv::archived_root::<StateMachineSnapshot>(&entry.data) };
-                        let snapshot: StateMachineSnapshot =
-                            match archived.deserialize(&mut rkyv::Infallible) {
-                                Ok(s) => s,
-                                Err(_) => break,
-                            };
-                        recovered.clear();
-                        for (key, value) in snapshot.entries {
-                            recovered.insert(key, Bytes::from(value));
-                        }
-                    }
-                    Ok(None) => break,
-                    Err(_) => break,
-                }
-            }
-
-            loop {
-                match wal.walrus.read_next(TOPIC_STATE_MACHINE, true) {
-                    Ok(Some(entry)) => {
-                        let archived =
-                            unsafe { rkyv::archived_root::<StateMachineEntry>(&entry.data) };
-                        let sm_entry: StateMachineEntry =
-                            match archived.deserialize(&mut rkyv::Infallible) {
-                                Ok(d) => d,
-                                Err(_) => break,
-                            };
-
-                        if sm_entry.value.is_empty() {
-                            recovered.remove(&sm_entry.key);
-                        } else {
-                            recovered.insert(sm_entry.key, Bytes::from(sm_entry.value));
-                        }
-                    }
-                    Ok(None) => break,
-                    Err(_) => break,
-                }
-            }
+            let recovered = replay_wal_to_map(wal);
 
             #[cfg(feature = "simulation")]
             {
-                let verify = recover_state_machine_map(wal);
+                // Verify idempotency: replay again and check result matches
+                let verify = replay_wal_to_map(wal);
                 sim_assert(
                     verify == recovered,
                     "state machine recovery not idempotent across replay",

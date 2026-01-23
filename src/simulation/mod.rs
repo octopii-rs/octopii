@@ -1,15 +1,13 @@
 use crate::wal::wal::vfs;
 use crate::wal::wal::vfs::sim::{self, SimConfig};
 use crate::wal::wal::{FsyncSchedule, ReadConsistency, Walrus};
-use oracle::Oracle;
-use rng::SimRng;
 use std::path::PathBuf;
 
 mod oracle;
 mod rng;
 
-pub use oracle::DurabilityOracle;
-pub use rng::SimRng as SimulationRng;
+pub use oracle::{DurabilityOracle, Oracle};
+pub use rng::SimRng;
 
 // Deterministic simulation harness for long-running fuzz-style runs
 

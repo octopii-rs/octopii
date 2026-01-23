@@ -239,7 +239,9 @@ mod tests {
         });
 
         // Give accept() time to start
-        sim_time::sleep(tokio::time::Duration::from_millis(50)).await;
+        // Note: Use tokio::time::sleep directly in unit tests since sim_time::sleep
+        // requires explicit advance_time() calls in simulation mode
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
 
         // Connect from transport1 to transport2
         let peer = transport1.connect(actual_addr2).await.unwrap();

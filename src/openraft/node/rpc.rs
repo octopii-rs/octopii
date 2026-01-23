@@ -23,7 +23,6 @@ impl OpenRaftNode {
     }
 
     pub(crate) async fn set_openraft_request_handler(&self) {
-        eprintln!("[node {}] registering openraft request handler", self.config.node_id);
         let raft_clone = self.raft.clone();
         self.rpc
             .set_request_handler(move |req| {
@@ -31,7 +30,6 @@ impl OpenRaftNode {
                 async move {
                     match req.payload {
                         crate::rpc::RequestPayload::OpenRaft { kind, data } => {
-                            eprintln!("[openraft rpc handler] recv kind={}", kind);
                             let response_data = match kind.as_str() {
                                 "append_entries" => {
                                     OpenRaftNode::decode_call::<

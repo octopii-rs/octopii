@@ -4,6 +4,9 @@ on:
   push:
   workflow_dispatch:
 
+env:
+  WALRUS_QUIET: "1"
+
 jobs:
   sim-isolation-tests:
     runs-on: ubuntu-latest

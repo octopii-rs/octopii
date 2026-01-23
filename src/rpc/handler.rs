@@ -4,6 +4,7 @@ use super::{
 use crate::error::{OctopiiError, Result};
 use crate::transport::{Peer, Transport};
 use crate::sim_time;
+use tokio::time::timeout;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -93,7 +94,7 @@ impl RpcHandler {
         self.ensure_peer_receiver(addr, Arc::clone(&peer)).await;
 
         tracing::debug!("RPC request {}: sending data to {}", id, addr);
-        sim_time::timeout(timeout_duration, peer.send(data))
+        timeout(timeout_duration, peer.send(data))
             .await
             .map_err(|_| {
                 tracing::error!("RPC request {}: send timeout to {}", id, addr);
@@ -111,7 +112,7 @@ impl RpcHandler {
 
         tracing::debug!("RPC request {}: waiting for response from {}", id, addr);
         // Wait for response with timeout
-        match sim_time::timeout(timeout_duration, rx).await {
+        match timeout(timeout_duration, rx).await {
             Ok(Ok(response)) => {
                 tracing::debug!("RPC request {}: received response from {}", id, addr);
                 Ok(response)
@@ -262,15 +263,11 @@ impl RpcHandler {
     }
 
     async fn ensure_peer_receiver(self: &Arc<Self>, addr: SocketAddr, peer: Arc<dyn Peer>) {
-        let peer_ptr = Arc::as_ptr(&peer) as *const () as usize;
-
         let mut receivers = self.peer_receivers.lock().await;
-        if let Some(&existing_ptr) = receivers.get(&addr) {
-            if existing_ptr == peer_ptr {
-                return;
-            }
+        if receivers.contains_key(&addr) {
+            return;
         }
-        receivers.insert(addr, peer_ptr);
+        receivers.insert(addr, 0);
         drop(receivers);
 
         let rpc = Arc::clone(self);

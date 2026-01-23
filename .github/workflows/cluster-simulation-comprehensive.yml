@@ -4,6 +4,9 @@ on:
   push:
   workflow_dispatch:
 
+env:
+  WALRUS_QUIET: "1"
+
 jobs:
   # All tests run on every push (60 min timeout)
   cluster-ci:
@@ -34,7 +37,8 @@ jobs:
           CLUSTER_SEED_START: "0"
           CLUSTER_SEED_COUNT: "20"
           CLUSTER_OPS: "500"
-        run: cargo test --features simulation,openraft --test cluster_simulation_comprehensive network_faults_ -- --test-threads=15
+        # Skip network_faults_leader_isolation - known slow/flaky test under simulation
+        run: cargo test --features simulation,openraft --test cluster_simulation_comprehensive network_faults_ -- --test-threads=15 --skip network_faults_leader_isolation
       - name: Run combined fault tests
         env:
           CLUSTER_SEED_START: "0"

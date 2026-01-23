@@ -116,7 +116,9 @@ pub fn reset(seed: u64, now_ns: u64) {
     });
 }
 
-pub fn advance_time(duration: Duration) {
+/// Advance simulated time by the given duration.
+/// Returns the number of sleepers that were woken up.
+pub fn advance_time(duration: Duration) -> usize {
     let delta_ns = duration_to_nanos(duration);
     let ready = SIM_CLOCK.with(|clock| {
         let mut clock = clock.borrow_mut();
@@ -134,9 +136,11 @@ pub fn advance_time(duration: Duration) {
         ready
     });
 
+    let woken_count = ready.len();
     for waker in ready {
         waker.wake();
     }
+    woken_count
 }
 
 pub fn now() -> SimInstant {
@@ -219,6 +223,19 @@ pub struct SimTimeout<R, F> {
     pub(crate) deadline_ns: u64,
     pub(crate) future: F,
     pub(crate) _marker: std::marker::PhantomData<fn() -> R>,
+    sleep_id: u64,
+}
+
+impl<R, F> SimTimeout<R, F> {
+    pub(crate) fn new(deadline_ns: u64, future: F) -> Self {
+        let sleep_id = SIM_SLEEP_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Self {
+            deadline_ns,
+            future,
+            _marker: std::marker::PhantomData,
+            sleep_id,
+        }
+    }
 }
 
 impl<R, F> Future for SimTimeout<R, F>
@@ -230,13 +247,27 @@ where
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = unsafe { self.get_unchecked_mut() };
         if sim_now_nanos() >= this.deadline_ns {
+            unregister_sleep(this.sleep_id);
             return Poll::Ready(Err(SimTimeoutError));
         }
         let fut = unsafe { Pin::new_unchecked(&mut this.future) };
         match fut.poll(cx) {
-            Poll::Ready(value) => Poll::Ready(Ok(value)),
-            Poll::Pending => Poll::Pending,
+            Poll::Ready(value) => {
+                unregister_sleep(this.sleep_id);
+                Poll::Ready(Ok(value))
+            }
+            Poll::Pending => {
+                // Register a waker so we get woken when the deadline passes
+                register_sleep(this.sleep_id, this.deadline_ns, cx.waker().clone());
+                Poll::Pending
+            }
         }
+    }
+}
+
+impl<R, F> Drop for SimTimeout<R, F> {
+    fn drop(&mut self) {
+        unregister_sleep(self.sleep_id);
     }
 }
 

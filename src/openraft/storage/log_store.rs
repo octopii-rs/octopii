@@ -2,19 +2,13 @@
 
 use crate::openraft::types::AppTypeConfig;
 use openraft::{
-    storage::{IOFlushed, LogState, RaftLogStorage},
-    Entry, LogId, OptionalSend, RaftLogReader,
+    storage::{IOFlushed, LogState},
+    Entry, LogId,
 };
 use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::io;
 use std::ops::RangeBounds;
-use std::sync::Arc;
-
-#[derive(Clone, Debug, Default)]
-pub struct MemLogStore {
-    pub(crate) inner: Arc<tokio::sync::Mutex<MemLogStoreInner>>,
-}
 
 #[derive(Debug)]
 pub(crate) struct MemLogStoreInner {
@@ -139,80 +133,5 @@ impl MemLogStoreInner {
         }
 
         Ok(())
-    }
-}
-
-impl MemLogStore {
-    pub fn new() -> Self {
-        Self::default()
-    }
-}
-
-impl RaftLogReader<AppTypeConfig> for MemLogStore {
-    async fn try_get_log_entries<RB: RangeBounds<u64> + Clone + Debug + Send>(
-        &mut self,
-        range: RB,
-    ) -> Result<Vec<Entry<AppTypeConfig>>, io::Error> {
-        let mut inner = self.inner.lock().await;
-        inner.try_get_log_entries(range).await
-    }
-
-    async fn read_vote(&mut self) -> Result<Option<openraft::Vote<AppTypeConfig>>, io::Error> {
-        let mut inner = self.inner.lock().await;
-        inner.read_vote().await
-    }
-}
-
-impl RaftLogStorage<AppTypeConfig> for MemLogStore {
-    type LogReader = Self;
-
-    async fn get_log_state(&mut self) -> Result<LogState<AppTypeConfig>, io::Error> {
-        let mut inner = self.inner.lock().await;
-        inner.get_log_state().await
-    }
-
-    async fn save_committed(
-        &mut self,
-        committed: Option<LogId<AppTypeConfig>>,
-    ) -> Result<(), io::Error> {
-        let mut inner = self.inner.lock().await;
-        inner.save_committed(committed).await
-    }
-
-    async fn read_committed(&mut self) -> Result<Option<LogId<AppTypeConfig>>, io::Error> {
-        let mut inner = self.inner.lock().await;
-        inner.read_committed().await
-    }
-
-    async fn save_vote(&mut self, vote: &openraft::Vote<AppTypeConfig>) -> Result<(), io::Error> {
-        let mut inner = self.inner.lock().await;
-        inner.save_vote(vote).await
-    }
-
-    async fn append<I>(
-        &mut self,
-        entries: I,
-        callback: IOFlushed<AppTypeConfig>,
-    ) -> Result<(), io::Error>
-    where
-        I: IntoIterator<Item = Entry<AppTypeConfig>> + OptionalSend,
-        I::IntoIter: OptionalSend,
-    {
-        let mut inner = self.inner.lock().await;
-        inner.append(entries, callback).await
-    }
-
-    async fn truncate(&mut self, log_id: LogId<AppTypeConfig>) -> Result<(), io::Error> {
-        let mut inner = self.inner.lock().await;
-        inner.truncate(log_id).await
-    }
-
-    async fn purge(&mut self, log_id: LogId<AppTypeConfig>) -> Result<(), io::Error> {
-        let mut inner = self.inner.lock().await;
-        inner.purge(log_id).await
-    }
-
-    async fn get_log_reader(&mut self) -> Self::LogReader {
-        self.clone()
     }
 }

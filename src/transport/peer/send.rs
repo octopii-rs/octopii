@@ -8,24 +8,6 @@ use tokio::io::AsyncWriteExt;
 
 const BUFFER_SIZE: usize = 64 * 1024; // 64KB buffer
 
-pub struct PeerSender<'a> {
-    pub(crate) connection: &'a Connection,
-}
-
-impl<'a> PeerSender<'a> {
-    pub fn new(connection: &'a Connection) -> Self {
-        Self { connection }
-    }
-
-    pub async fn send_message(&self, data: Bytes) -> Result<()> {
-        send_message(self.connection, data).await
-    }
-
-    pub async fn send_chunk_verified(&self, chunk: &ChunkSource) -> Result<u64> {
-        send_chunk_verified(self.connection, chunk).await
-    }
-}
-
 pub async fn send_message(connection: &Connection, data: Bytes) -> Result<()> {
     let (mut send, mut recv) = connection.open_bi().await?;
 
