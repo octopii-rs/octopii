@@ -21,9 +21,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tokio::time::Duration;
 
-#[cfg(feature = "openraft-filters")]
-use crate::openraft::network::OpenRaftFilters;
-use crate::openraft::network::QuinnNetworkFactory;
+use crate::openraft::network::{OpenRaftFilters, QuinnNetworkFactory};
 
 pub(crate) async fn init_wal_stores(
     config: &Config,
@@ -121,7 +119,6 @@ pub(crate) async fn new_with_transport(
     // Start accepting incoming connections
     rpc.spawn_accept_loop(Arc::clone(&transport));
 
-    #[cfg(feature = "openraft-filters")]
     let filters = Arc::new(OpenRaftFilters::new());
 
     let state_machine: StateMachine =
@@ -133,7 +130,6 @@ pub(crate) async fn new_with_transport(
         Arc::clone(&peer_addrs),
         config.node_id,
         Arc::clone(&cluster_namespace),
-        #[cfg(feature = "openraft-filters")]
         Arc::clone(&filters),
     );
 
@@ -161,7 +157,6 @@ pub(crate) async fn new_with_transport(
         peer_addrs,
         peer_addr_wal,
         peer_namespace: Arc::clone(&cluster_namespace),
-        #[cfg(feature = "openraft-filters")]
         filters,
     })
 }

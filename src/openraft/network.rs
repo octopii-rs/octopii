@@ -23,8 +23,7 @@ pub struct QuinnNetwork {
     target: AppNodeId,
     default_addr: Option<SocketAddr>,
     cluster_namespace: Arc<String>,
-    #[cfg(feature = "openraft-filters")]
-    pub(crate) filters: Arc<OpenRaftFilters>,
+    filters: Arc<OpenRaftFilters>,
 }
 
 impl QuinnNetwork {
@@ -35,7 +34,7 @@ impl QuinnNetwork {
         target: AppNodeId,
         default_addr: Option<SocketAddr>,
         cluster_namespace: Arc<String>,
-        #[cfg(feature = "openraft-filters")] filters: Arc<OpenRaftFilters>,
+        filters: Arc<OpenRaftFilters>,
     ) -> Self {
         Self {
             rpc,
@@ -44,7 +43,6 @@ impl QuinnNetwork {
             target,
             default_addr,
             cluster_namespace,
-            #[cfg(feature = "openraft-filters")]
             filters,
         }
     }
@@ -68,43 +66,8 @@ impl QuinnNetwork {
         kind: &str,
         data: Vec<u8>,
     ) -> Result<ResponsePayload, anyhow::Error> {
-        #[cfg(feature = "openraft-filters")]
-        {
-            for (g1, g2) in self.filters.partitions.read().await.iter() {
-                if (g1.contains(&self.self_id) && g2.contains(&self.target))
-                    || (g2.contains(&self.self_id) && g1.contains(&self.target))
-                {
-                    anyhow::bail!(
-                        "openraft-filters: partition drop {}->{}",
-                        self.self_id,
-                        self.target
-                    );
-                }
-            }
-            if self
-                .filters
-                .drop_pairs
-                .read()
-                .await
-                .contains(&(self.self_id, self.target))
-            {
-                anyhow::bail!(
-                    "openraft-filters: drop pair {}->{}",
-                    self.self_id,
-                    self.target
-                );
-            }
-            if let Some(d) = self
-                .filters
-                .delay_pairs
-                .read()
-                .await
-                .get(&(self.self_id, self.target))
-                .copied()
-            {
-                sim_time::sleep(d).await;
-            }
-        }
+        // Apply network filters (partitions, drops, delays)
+        self.filters.apply(self.self_id, self.target).await?;
 
         let Some(addr) = self.peer_addr().await else {
             tracing::warn!(
@@ -207,7 +170,6 @@ pub struct QuinnNetworkFactory {
     peer_addrs: Arc<tokio::sync::RwLock<std::collections::HashMap<AppNodeId, SocketAddr>>>,
     self_id: AppNodeId,
     cluster_namespace: Arc<String>,
-    #[cfg(feature = "openraft-filters")]
     filters: Arc<OpenRaftFilters>,
 }
 
@@ -217,14 +179,13 @@ impl QuinnNetworkFactory {
         peer_addrs: Arc<tokio::sync::RwLock<std::collections::HashMap<AppNodeId, SocketAddr>>>,
         self_id: AppNodeId,
         cluster_namespace: Arc<String>,
-        #[cfg(feature = "openraft-filters")] filters: Arc<OpenRaftFilters>,
+        filters: Arc<OpenRaftFilters>,
     ) -> Self {
         Self {
             rpc,
             peer_addrs,
             self_id,
             cluster_namespace,
-            #[cfg(feature = "openraft-filters")]
             filters,
         }
     }
@@ -246,17 +207,20 @@ impl RaftNetworkFactory<AppTypeConfig> for QuinnNetworkFactory {
             target,
             default_addr,
             Arc::clone(&self.cluster_namespace),
-            #[cfg(feature = "openraft-filters")]
             Arc::clone(&self.filters),
         )
     }
 }
 
-#[cfg(feature = "openraft-filters")]
+/// Network filters for testing partition/delay/drop scenarios.
+/// Always available but only has effect when openraft-filters feature is enabled.
 pub struct OpenRaftFilters {
+    #[cfg(feature = "openraft-filters")]
     pub(crate) drop_pairs: tokio::sync::RwLock<std::collections::HashSet<(AppNodeId, AppNodeId)>>,
+    #[cfg(feature = "openraft-filters")]
     pub(crate) delay_pairs:
         tokio::sync::RwLock<std::collections::HashMap<(AppNodeId, AppNodeId), Duration>>,
+    #[cfg(feature = "openraft-filters")]
     pub(crate) partitions: tokio::sync::RwLock<
         Vec<(
             std::collections::HashSet<AppNodeId>,
@@ -265,19 +229,61 @@ pub struct OpenRaftFilters {
     >,
 }
 
-#[cfg(feature = "openraft-filters")]
 impl OpenRaftFilters {
     pub fn new() -> Self {
         Self {
+            #[cfg(feature = "openraft-filters")]
             drop_pairs: tokio::sync::RwLock::new(Default::default()),
+            #[cfg(feature = "openraft-filters")]
             delay_pairs: tokio::sync::RwLock::new(Default::default()),
+            #[cfg(feature = "openraft-filters")]
             partitions: tokio::sync::RwLock::new(vec![]),
         }
     }
 
+    #[cfg(feature = "openraft-filters")]
     pub async fn clear(&self) {
         self.drop_pairs.write().await.clear();
         self.delay_pairs.write().await.clear();
         self.partitions.write().await.clear();
+    }
+
+    #[cfg(not(feature = "openraft-filters"))]
+    pub async fn clear(&self) {}
+
+    /// Apply filters before sending. Returns Err if message should be dropped.
+    #[cfg(feature = "openraft-filters")]
+    pub(crate) async fn apply(&self, from: AppNodeId, to: AppNodeId) -> Result<(), anyhow::Error> {
+        // Check partitions
+        for (g1, g2) in self.partitions.read().await.iter() {
+            if (g1.contains(&from) && g2.contains(&to)) || (g2.contains(&from) && g1.contains(&to))
+            {
+                anyhow::bail!("openraft-filters: partition drop {}->{}", from, to);
+            }
+        }
+        // Check drop pairs
+        if self.drop_pairs.read().await.contains(&(from, to)) {
+            anyhow::bail!("openraft-filters: drop pair {}->{}", from, to);
+        }
+        // Apply delay
+        if let Some(d) = self.delay_pairs.read().await.get(&(from, to)).copied() {
+            sim_time::sleep(d).await;
+        }
+        Ok(())
+    }
+
+    #[cfg(not(feature = "openraft-filters"))]
+    pub(crate) async fn apply(
+        &self,
+        _from: AppNodeId,
+        _to: AppNodeId,
+    ) -> Result<(), anyhow::Error> {
+        Ok(())
+    }
+}
+
+impl Default for OpenRaftFilters {
+    fn default() -> Self {
+        Self::new()
     }
 }

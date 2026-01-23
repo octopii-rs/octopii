@@ -7,7 +7,6 @@ mod membership;
 mod rpc;
 
 use crate::invariants::sim_assert;
-#[cfg(feature = "openraft-filters")]
 use crate::openraft::network::OpenRaftFilters;
 use crate::openraft::peer_registry::{global_peer_addr, persist_peer_addr};
 use crate::openraft::types::{AppEntry, AppTypeConfig};
@@ -43,7 +42,6 @@ pub struct OpenRaftNode {
     peer_addrs: Arc<RwLock<std::collections::HashMap<u64, SocketAddr>>>,
     peer_addr_wal: Arc<WriteAheadLog>,
     peer_namespace: Arc<String>,
-    #[cfg(feature = "openraft-filters")]
     filters: Arc<OpenRaftFilters>,
 }
 
@@ -296,7 +294,6 @@ impl OpenRaftNode {
         crate::shipping_lane::ShippingLane::new(Arc::clone(transport))
     }
 
-    #[cfg(feature = "openraft-filters")]
     pub async fn clear_send_filters(&self) {
         self.filters.clear().await;
     }

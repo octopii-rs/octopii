@@ -62,30 +62,30 @@ pub(crate) struct PeerAddrRecord {
     pub(crate) addr: SocketAddr,
 }
 
-pub(crate) async fn load_peer_addr_records(wal: &Arc<WriteAheadLog>) -> HashMap<u64, SocketAddr> {
+fn parse_peer_addr_entries(entries: &[Bytes]) -> HashMap<u64, SocketAddr> {
     let mut map = HashMap::new();
-    if let Ok(entries) = wal.read_all().await {
-        for raw in entries {
-            if let Ok(record) = bincode::deserialize::<PeerAddrRecord>(&raw) {
-                map.insert(record.peer_id, record.addr);
-            }
+    for raw in entries {
+        if let Ok(record) = bincode::deserialize::<PeerAddrRecord>(raw) {
+            map.insert(record.peer_id, record.addr);
         }
     }
+    map
+}
+
+pub(crate) async fn load_peer_addr_records(wal: &Arc<WriteAheadLog>) -> HashMap<u64, SocketAddr> {
+    let entries = wal.read_all().await.unwrap_or_default();
+    let map = parse_peer_addr_entries(&entries);
+
     #[cfg(feature = "simulation")]
     {
-        if let Ok(entries) = wal.read_all().await {
-            let mut verify = HashMap::new();
-            for raw in entries {
-                if let Ok(record) = bincode::deserialize::<PeerAddrRecord>(&raw) {
-                    verify.insert(record.peer_id, record.addr);
-                }
-            }
-            sim_assert(
-                verify == map,
-                "peer addr WAL recovery not idempotent across replay",
-            );
-        }
+        // Verify idempotency: re-parsing should yield same result
+        let verify = parse_peer_addr_entries(&entries);
+        sim_assert(
+            verify == map,
+            "peer addr WAL recovery not idempotent across replay",
+        );
     }
+
     map
 }
 

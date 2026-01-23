@@ -1,3 +1,4 @@
+use super::BUFFER_SIZE;
 use crate::chunk::ChunkSource;
 use crate::error::{OctopiiError, Result};
 use bytes::Bytes;
@@ -5,8 +6,6 @@ use quinn::{Connection, SendStream};
 use sha2::{Digest, Sha256};
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
-
-const BUFFER_SIZE: usize = 64 * 1024; // 64KB buffer
 
 pub async fn send_message(connection: &Connection, data: Bytes) -> Result<()> {
     let (mut send, mut recv) = connection.open_bi().await?;

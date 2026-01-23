@@ -1,11 +1,10 @@
+use super::{BUFFER_SIZE, MEMORY_RECEIVE_CAP};
 use crate::error::{OctopiiError, Result};
 use bytes::{Bytes, BytesMut};
 use quinn::Connection;
 use sha2::{Digest, Sha256};
 use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-const BUFFER_SIZE: usize = 64 * 1024;
 
 pub enum RecvChunkResult {
     Memory(Bytes),
@@ -24,7 +23,7 @@ enum ChunkSink {
 
 impl ChunkSink {
     fn memory(total_size: u64) -> Self {
-        let cap = std::cmp::min(total_size as usize, 10 * 1024 * 1024);
+        let cap = std::cmp::min(total_size as usize, MEMORY_RECEIVE_CAP);
         ChunkSink::Memory(BytesMut::with_capacity(cap))
     }
 

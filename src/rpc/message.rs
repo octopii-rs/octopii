@@ -25,8 +25,6 @@ pub struct RpcRequest {
 /// Request payload types
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum RequestPayload {
-    /// Generic Raft message serialized via protobuf
-    RaftMessage { message: Bytes },
     /// OpenRaft generic message (serde) - kind indicates RPC type
     #[cfg(feature = "openraft")]
     OpenRaft { kind: String, data: Bytes },
@@ -44,12 +42,6 @@ pub struct RpcResponse {
 /// Response payload types
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ResponsePayload {
-    /// AppendEntries response
-    AppendEntriesResponse { term: u64, success: bool },
-    /// RequestVote response
-    RequestVoteResponse { term: u64, vote_granted: bool },
-    /// Snapshot response
-    SnapshotResponse { term: u64, success: bool },
     /// OpenRaft generic response (serde) - kind indicates RPC type
     #[cfg(feature = "openraft")]
     OpenRaft { kind: String, data: Bytes },

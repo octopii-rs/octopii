@@ -8,6 +8,24 @@ use std::sync::{Arc, RwLock};
 const TOPIC_STATE_MACHINE: &str = "state_machine";
 const TOPIC_STATE_MACHINE_SNAPSHOT: &str = "state_machine_snapshot";
 const STATE_MACHINE_COMPACTION_THRESHOLD: usize = 5000;
+const ENTRY_BUFFER_SIZE: usize = 256;
+const SNAPSHOT_BUFFER_SIZE: usize = 4096;
+
+/// Serialize and append a state machine entry to WAL
+fn append_state_machine_entry(
+    wal: &WriteAheadLog,
+    key: &str,
+    value: Vec<u8>,
+) -> Result<(), String> {
+    let entry = StateMachineEntry {
+        key: key.to_string(),
+        value,
+    };
+    let bytes = rkyv::to_bytes::<_, ENTRY_BUFFER_SIZE>(&entry)
+        .map_err(|e| format!("Serialization failed: {:?}", e))?;
+    tokio::task::block_in_place(|| wal.walrus.append_for_topic(TOPIC_STATE_MACHINE, &bytes))
+        .map_err(|e| format!("WAL append failed: {}", e))
+}
 
 pub(crate) enum KvCommand<'a> {
     Set { key: &'a str, value: &'a str },
@@ -181,18 +199,7 @@ impl KvStateMachine {
                 let value_bytes = Bytes::from(value.to_string());
 
                 if let Some(wal) = &self.wal {
-                    let sm_entry = StateMachineEntry {
-                        key: key_str.clone(),
-                        value: value_bytes.to_vec(),
-                    };
-
-                    let bytes = rkyv::to_bytes::<_, 256>(&sm_entry)
-                        .map_err(|e| format!("Serialization failed: {:?}", e))?;
-
-                    tokio::task::block_in_place(|| {
-                        wal.walrus.append_for_topic(TOPIC_STATE_MACHINE, &bytes)
-                    })
-                    .map_err(|e| format!("WAL append failed: {}", e))?;
+                    append_state_machine_entry(wal, &key_str, value_bytes.to_vec())?;
                 }
 
                 let mut data = self.data.write().unwrap();
@@ -210,18 +217,7 @@ impl KvStateMachine {
             }
             KvCommand::Delete { key } => {
                 if let Some(wal) = &self.wal {
-                    let sm_entry = StateMachineEntry {
-                        key: key.to_string(),
-                        value: Vec::new(),
-                    };
-
-                    let bytes = rkyv::to_bytes::<_, 256>(&sm_entry)
-                        .map_err(|e| format!("Serialization failed: {:?}", e))?;
-
-                    tokio::task::block_in_place(|| {
-                        wal.walrus.append_for_topic(TOPIC_STATE_MACHINE, &bytes)
-                    })
-                    .map_err(|e| format!("WAL append failed: {}", e))?;
+                    append_state_machine_entry(wal, key, Vec::new())?;
                 }
 
                 let mut data = self.data.write().unwrap();
@@ -246,7 +242,7 @@ impl KvStateMachine {
                 entries: data.iter().map(|(k, v)| (k.clone(), v.to_vec())).collect(),
             };
 
-            let bytes = rkyv::to_bytes::<_, 4096>(&snapshot)
+            let bytes = rkyv::to_bytes::<_, SNAPSHOT_BUFFER_SIZE>(&snapshot)
                 .map_err(|e| format!("Snapshot serialization failed: {:?}", e))?;
 
             tokio::task::block_in_place(|| {
@@ -290,7 +286,7 @@ impl StateMachineTrait for KvStateMachine {
         entries.sort_by(|a, b| a.0.cmp(&b.0));
         let snapshot = StateMachineSnapshot { entries };
 
-        rkyv::to_bytes::<_, 4096>(&snapshot)
+        rkyv::to_bytes::<_, SNAPSHOT_BUFFER_SIZE>(&snapshot)
             .map(|bytes| bytes.to_vec())
             .unwrap_or_default()
     }

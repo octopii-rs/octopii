@@ -8,6 +8,12 @@ use crate::transport::Peer;
 mod receive;
 mod send;
 
+/// Shared buffer size for chunk transfer operations (64KB)
+const BUFFER_SIZE: usize = 64 * 1024;
+
+/// Maximum in-memory allocation for receiving chunks (10MB)
+const MEMORY_RECEIVE_CAP: usize = 10 * 1024 * 1024;
+
 pub struct PeerConnection {
     pub(crate) connection: Connection,
 }

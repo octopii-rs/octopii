@@ -30,7 +30,7 @@ fn parse_args() -> Result<Args, String> {
     let mut jobs = std::thread::available_parallelism()
         .map(|v| v.get())
         .unwrap_or(1);
-    let mut iterations = 5000;
+    let mut iterations = DEFAULT_ITERATIONS;
     let mut error_rate = 0.0;
     let mut partial_writes = false;
     let mut progress_every = None;
@@ -172,6 +172,9 @@ fn spawn_child(seed: u64, args: &Args) -> std::io::Result<Child> {
     cmd.spawn()
 }
 
+const POLL_INTERVAL: Duration = Duration::from_millis(100);
+const DEFAULT_ITERATIONS: usize = 5000;
+
 #[cfg(feature = "simulation")]
 fn wait_any(running: &mut Vec<(u64, Child)>) -> Option<(u64, std::process::ExitStatus)> {
     for idx in 0..running.len() {
@@ -183,6 +186,19 @@ fn wait_any(running: &mut Vec<(u64, Child)>) -> Option<(u64, std::process::ExitS
         }
     }
     None
+}
+
+/// Drain completed children, returning true if any failed
+#[cfg(feature = "simulation")]
+fn drain_completed(running: &mut Vec<(u64, Child)>) -> bool {
+    let mut any_failed = false;
+    while let Some((seed, status)) = wait_any(running) {
+        if !status.success() {
+            eprintln!("seed {} failed: {}", seed, status);
+            any_failed = true;
+        }
+    }
+    any_failed
 }
 
 #[cfg(feature = "simulation")]
@@ -224,14 +240,13 @@ fn main() {
     let mut failed = false;
 
     for seed in seeds {
+        // Wait for a slot to open up
         while running.len() >= args.jobs {
-            if let Some((done_seed, status)) = wait_any(&mut running) {
-                if !status.success() {
-                    eprintln!("seed {} failed: {}", done_seed, status);
-                    failed = true;
-                }
-            } else {
-                std::thread::sleep(Duration::from_millis(100));
+            if drain_completed(&mut running) {
+                failed = true;
+            }
+            if running.len() >= args.jobs {
+                std::thread::sleep(POLL_INTERVAL);
             }
         }
 
@@ -244,14 +259,13 @@ fn main() {
         }
     }
 
+    // Wait for remaining children
     while !running.is_empty() {
-        if let Some((done_seed, status)) = wait_any(&mut running) {
-            if !status.success() {
-                eprintln!("seed {} failed: {}", done_seed, status);
-                failed = true;
-            }
-        } else {
-            std::thread::sleep(Duration::from_millis(100));
+        if drain_completed(&mut running) {
+            failed = true;
+        }
+        if !running.is_empty() {
+            std::thread::sleep(POLL_INTERVAL);
         }
     }
 

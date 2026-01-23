@@ -5,10 +5,13 @@ pub struct SimRng {
     state: u64,
 }
 
+/// Golden ratio constant (2^64 / phi) for PRNG seed mixing
+const GOLDEN_RATIO: u64 = 0x9E3779B97F4A7C15;
+
 impl SimRng {
     pub fn new(seed: u64) -> Self {
         let mut rng = Self { state: 0 };
-        rng.state = seed.wrapping_add(0x9E3779B97F4A7C15);
+        rng.state = seed.wrapping_add(GOLDEN_RATIO);
         rng.next_u64();
         rng
     }
