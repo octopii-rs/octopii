@@ -263,11 +263,15 @@ impl RpcHandler {
     }
 
     async fn ensure_peer_receiver(self: &Arc<Self>, addr: SocketAddr, peer: Arc<dyn Peer>) {
+        let peer_ptr = Arc::as_ptr(&peer) as *const () as usize;
+
         let mut receivers = self.peer_receivers.lock().await;
-        if receivers.contains_key(&addr) {
-            return;
+        if let Some(&existing_ptr) = receivers.get(&addr) {
+            if existing_ptr == peer_ptr {
+                return;
+            }
         }
-        receivers.insert(addr, 0);
+        receivers.insert(addr, peer_ptr);
         drop(receivers);
 
         let rpc = Arc::clone(self);
