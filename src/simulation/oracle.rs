@@ -84,7 +84,6 @@ impl Oracle {
         *cursor += 1;
     }
 
-    /// Verify a batch of entries against oracle history
     pub fn verify_batch_read(&mut self, topic: &str, actual_entries: &[Vec<u8>]) {
         for data in actual_entries {
             self.verify_read(topic, data);
@@ -97,7 +96,6 @@ impl Oracle {
         }
     }
 
-    /// Check that we've reached EOF for a topic
     pub fn check_eof(&self, topic: &str) {
         let history_len = self.history.get(topic).map(|v| v.len()).unwrap_or(0);
         let cursor = *self.read_cursors.get(topic).unwrap_or(&0);
@@ -111,7 +109,6 @@ impl Oracle {
     }
 }
 
-// Tracks entries and durability across crash cycles
 #[derive(Debug, Clone)]
 struct TrackedEntry {
     cycle: usize,
@@ -233,19 +230,16 @@ impl DurabilityOracle {
         self.current_cycle += 1;
     }
 
-    /// Get counts for logging/debugging
     pub fn stats(&self) -> (usize, usize) {
         let must_count: usize = self.must_survive.values().map(|v| v.len()).sum();
         let may_count: usize = self.may_be_lost.values().map(|v| v.len()).sum();
         (must_count, may_count)
     }
 
-    /// Get current cycle number
     pub fn cycle(&self) -> usize {
         self.current_cycle
     }
 
-    /// Clear all state (for new test scenario)
     pub fn clear(&mut self) {
         self.must_survive.clear();
         self.may_be_lost.clear();

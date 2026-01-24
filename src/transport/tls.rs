@@ -15,7 +15,6 @@ fn default_transport_config() -> quinn::TransportConfig {
     transport_config
 }
 
-/// Generate a self-signed certificate
 pub fn generate_self_signed_cert() -> Result<(CertificateDer<'static>, PrivateKeyDer<'static>)> {
     let cert = rcgen::generate_simple_self_signed(vec!["localhost".to_string()])
         .map_err(std::io::Error::other)?;
@@ -26,12 +25,10 @@ pub fn generate_self_signed_cert() -> Result<(CertificateDer<'static>, PrivateKe
     Ok((cert_der, key))
 }
 
-/// Create server config with self-signed certificate
 pub fn create_server_config(
     cert: CertificateDer<'static>,
     key: PrivateKeyDer<'static>,
 ) -> Result<ServerConfig> {
-    // Install crypto provider if not already installed
     ensure_crypto_provider();
 
     let mut crypto = rustls::ServerConfig::builder()
@@ -39,46 +36,36 @@ pub fn create_server_config(
         .with_single_cert(vec![cert], key)
         .map_err(std::io::Error::other)?;
 
-    // Allow TLS 1.3 only for performance
     crypto.alpn_protocols = vec![b"octopii".to_vec()];
 
     let mut server_config = ServerConfig::with_crypto(Arc::new(
         quinn::crypto::rustls::QuicServerConfig::try_from(crypto).map_err(std::io::Error::other)?,
     ));
 
-    // Performance tuning
     server_config.transport_config(Arc::new(default_transport_config()));
 
     Ok(server_config)
 }
 
-/// Create client config that accepts any certificate (for simplicity)
 pub fn create_client_config() -> Result<ClientConfig> {
-    // Install crypto provider if not already installed
     ensure_crypto_provider();
 
-    // For a minimal setup, we'll accept any certificate
-    // In production, you'd want proper certificate validation
     let mut crypto = rustls::ClientConfig::builder()
         .dangerous()
         .with_custom_certificate_verifier(Arc::new(SkipServerVerification::new()))
         .with_no_client_auth();
 
-    // Set ALPN protocol to match server
     crypto.alpn_protocols = vec![b"octopii".to_vec()];
 
     let mut client_config = ClientConfig::new(Arc::new(
         quinn::crypto::rustls::QuicClientConfig::try_from(crypto).map_err(std::io::Error::other)?,
     ));
 
-    // Performance tuning
     client_config.transport_config(Arc::new(default_transport_config()));
 
     Ok(client_config)
 }
 
-/// Certificate verifier that accepts any certificate
-/// WARNING: Only use for testing/development!
 #[derive(Debug)]
 struct SkipServerVerification(Arc<rustls::crypto::CryptoProvider>);
 

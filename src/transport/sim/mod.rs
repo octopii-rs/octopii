@@ -1,5 +1,4 @@
 use crate::transport::{Peer, Transport, TransportFut};
-use bytes::Bytes;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
@@ -31,9 +30,5 @@ impl Transport for SimTransport {
 
     fn accept(&self) -> TransportFut<'_, (SocketAddr, Arc<dyn Peer>)> {
         SimTransport::accept(self)
-    }
-
-    fn send(&self, addr: SocketAddr, data: Bytes) -> TransportFut<'_, ()> {
-        SimTransport::send(self, addr, data)
     }
 }

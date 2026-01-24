@@ -2,8 +2,6 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Application entry payload for OpenRaft.
-/// Keep it simple: raw bytes of a command.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AppEntry(pub Vec<u8>);
 
@@ -13,17 +11,13 @@ impl std::fmt::Display for AppEntry {
     }
 }
 
-/// Application response for writes.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AppResponse(pub Vec<u8>);
 
-/// Snapshot bytes container.
 pub type AppSnapshot = Vec<u8>;
 
-/// Node ID type.
 pub type AppNodeId = u64;
 
-/// OpenRaft type configuration for Octopii.
 #[cfg(feature = "simulation")]
 openraft::declare_raft_types!(
     pub AppTypeConfig:

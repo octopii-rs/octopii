@@ -190,7 +190,6 @@ fn wait_any(running: &mut Vec<(u64, Child)>) -> Option<(u64, std::process::ExitS
     None
 }
 
-/// Drain completed children, returning true if any failed
 #[cfg(feature = "simulation")]
 fn drain_completed(running: &mut Vec<(u64, Child)>) -> bool {
     let mut any_failed = false;
@@ -242,7 +241,6 @@ fn main() {
     let mut failed = false;
 
     for seed in seeds {
-        // Wait for a slot to open up
         while running.len() >= args.jobs {
             if drain_completed(&mut running) {
                 failed = true;
@@ -261,7 +259,6 @@ fn main() {
         }
     }
 
-    // Wait for remaining children
     while !running.is_empty() {
         if drain_completed(&mut running) {
             failed = true;

@@ -115,7 +115,6 @@ pub(crate) async fn new_with_transport(
     let log_store_for_raft = log_store.clone();
     let peer_addrs = init_peer_addrs(&config, &peer_addr_wal, cluster_namespace.as_str()).await?;
 
-    // Start accepting incoming connections
     rpc.spawn_accept_loop(Arc::clone(&transport));
 
     let filters = Arc::new(OpenRaftFilters::new());

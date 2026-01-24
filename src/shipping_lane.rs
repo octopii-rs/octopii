@@ -7,7 +7,6 @@ use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
 
-/// High-level helper for orchestrating chunk transfers between peers.
 pub struct ShippingLane {
     transport: Arc<dyn Transport>,
 }
@@ -30,7 +29,6 @@ impl ShippingLane {
         }
     }
 
-    /// Send a file to a peer, returning a `TransferResult`.
     pub async fn send_file<P: AsRef<Path>>(
         &self,
         addr: SocketAddr,
@@ -40,7 +38,6 @@ impl ShippingLane {
         self.send_chunk(addr, chunk).await
     }
 
-    /// Receive a file from a peer and write it to `dest`.
     pub async fn receive_file<P: AsRef<Path>>(
         &self,
         addr: SocketAddr,
@@ -61,13 +58,11 @@ impl ShippingLane {
         }
     }
 
-    /// Send an in-memory payload to a peer.
     pub async fn send_memory(&self, addr: SocketAddr, payload: Bytes) -> Result<TransferResult> {
         let chunk = ChunkSource::Memory(payload);
         self.send_chunk(addr, chunk).await
     }
 
-    /// Receive a chunk into memory.
     pub async fn receive_memory(
         &self,
         addr: SocketAddr,

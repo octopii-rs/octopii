@@ -115,8 +115,6 @@ pub fn reset(seed: u64, now_ns: u64) {
     });
 }
 
-/// Advance simulated time by the given duration.
-/// Returns the number of sleepers that were woken up.
 pub fn advance_time(duration: Duration) -> usize {
     let delta_ns = duration_to_nanos(duration);
     let ready = SIM_CLOCK.with(|clock| {
@@ -256,7 +254,6 @@ where
                 Poll::Ready(Ok(value))
             }
             Poll::Pending => {
-                // Register a waker so we get woken when the deadline passes
                 register_sleep(this.sleep_id, this.deadline_ns, cx.waker().clone());
                 Poll::Pending
             }

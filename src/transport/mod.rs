@@ -28,7 +28,12 @@ pub trait Transport: Send + Sync {
     fn is_closed(&self) -> bool;
     fn connect(&self, addr: SocketAddr) -> TransportFut<'_, Arc<dyn Peer>>;
     fn accept(&self) -> TransportFut<'_, (SocketAddr, Arc<dyn Peer>)>;
-    fn send(&self, addr: SocketAddr, data: Bytes) -> TransportFut<'_, ()>;
+    fn send(&self, addr: SocketAddr, data: Bytes) -> TransportFut<'_, ()> {
+        Box::pin(async move {
+            let peer = self.connect(addr).await?;
+            peer.send(data).await
+        })
+    }
 }
 
 pub trait Peer: Send + Sync {
@@ -36,9 +41,6 @@ pub trait Peer: Send + Sync {
     fn recv(&self) -> TransportFut<'_, Option<Bytes>>;
     fn is_closed(&self) -> bool;
 
-    /// Send a chunk with checksum verification.
-    /// Returns the number of bytes transferred.
-    /// Default implementation returns "not supported" error.
     fn send_chunk_verified(&self, _chunk: &ChunkSource) -> TransportFut<'_, u64> {
         Box::pin(async {
             Err(OctopiiError::Transport(
@@ -47,8 +49,6 @@ pub trait Peer: Send + Sync {
         })
     }
 
-    /// Receive a chunk with checksum verification into memory.
-    /// Default implementation returns "not supported" error.
     fn recv_chunk_verified(&self) -> TransportFut<'_, Option<Bytes>> {
         Box::pin(async {
             Err(OctopiiError::Transport(
@@ -57,9 +57,6 @@ pub trait Peer: Send + Sync {
         })
     }
 
-    /// Receive a chunk with checksum verification directly to a file.
-    /// Returns the number of bytes written.
-    /// Default implementation returns "not supported" error.
     fn recv_chunk_verified_to_file(&self, _path: &Path) -> TransportFut<'_, Option<u64>> {
         Box::pin(async {
             Err(OctopiiError::Transport(
@@ -69,12 +66,6 @@ pub trait Peer: Send + Sync {
     }
 }
 
-/// QUIC-based transport layer
-///
-/// Features:
-/// - Connection pooling (one connection per peer)
-/// - Bi-directional streams for RPC
-/// - Automatic reconnection
 pub struct QuicTransport {
     endpoint: Endpoint,
     outgoing_peers: Arc<RwLock<HashMap<SocketAddr, Arc<PeerConnection>>>>,
@@ -83,15 +74,11 @@ pub struct QuicTransport {
 }
 
 impl QuicTransport {
-    /// Create a new QUIC transport
     pub async fn new(bind_addr: SocketAddr) -> Result<Self> {
-        // Generate self-signed certificate
         let (cert, key) = tls::generate_self_signed_cert()?;
 
-        // Configure server
         let server_config = tls::create_server_config(cert.clone(), key)?;
 
-        // Create endpoint
         let endpoint = Endpoint::server(server_config, bind_addr)?;
 
         tracing::info!("QUIC transport listening on {}", bind_addr);
@@ -104,9 +91,7 @@ impl QuicTransport {
         })
     }
 
-    /// Get or create a connection to a peer
     pub async fn connect(&self, addr: SocketAddr) -> Result<Arc<PeerConnection>> {
-        // Check if we already have an outgoing connection
         {
             let peers = self.outgoing_peers.read().await;
             if let Some(peer) = peers.get(&addr) {
@@ -119,10 +104,8 @@ impl QuicTransport {
             }
         }
 
-        // Create new connection
         let mut peers = self.outgoing_peers.write().await;
 
-        // Double-check after acquiring write lock
         if let Some(peer) = peers.get(&addr) {
             if !peer.is_closed() {
                 tracing::debug!("Reusing existing connection to {} (after lock)", addr);
@@ -132,7 +115,6 @@ impl QuicTransport {
 
         tracing::debug!("Creating new QUIC connection to {}", addr);
 
-        // Configure client with permissive TLS (accept any cert for simplicity)
         let client_config = tls::create_client_config()?;
 
         let connection = self
@@ -156,7 +138,6 @@ impl QuicTransport {
         Ok(peer)
     }
 
-    /// Accept incoming connections
     pub async fn accept(&self) -> Result<(SocketAddr, Arc<PeerConnection>)> {
         let incoming = self
             .endpoint
@@ -177,26 +158,22 @@ impl QuicTransport {
         Ok((remote_addr, peer))
     }
 
-    /// Send a message to a peer
     pub async fn send(&self, addr: SocketAddr, data: Bytes) -> Result<()> {
         let peer = self.connect(addr).await?;
         peer.send(data).await
     }
 
-    /// Get the local address
     pub fn local_addr(&self) -> Result<SocketAddr> {
         self.endpoint
             .local_addr()
             .map_err(|e| OctopiiError::Transport(e.to_string()))
     }
 
-    /// Close the transport
     pub fn close(&self) {
         self.closed.store(true, Ordering::SeqCst);
         self.endpoint.close(0u32.into(), b"shutdown");
     }
 
-    /// Check if we have an active connection to a peer
     pub async fn has_active_peer(&self, addr: SocketAddr) -> bool {
         {
             let peers = self.outgoing_peers.read().await;
@@ -244,10 +221,6 @@ impl Transport for QuicTransport {
             Ok((addr, peer as Arc<dyn Peer>))
         })
     }
-
-    fn send(&self, addr: SocketAddr, data: Bytes) -> TransportFut<'_, ()> {
-        Box::pin(async move { QuicTransport::send(self, addr, data).await })
-    }
 }
 
 #[cfg(test)]
@@ -264,19 +237,14 @@ mod tests {
 
         let actual_addr2 = transport2.local_addr().unwrap();
 
-        // Spawn a task to accept on transport2
         let t2 = Arc::new(transport2);
         let t2_clone = Arc::clone(&t2);
         tokio::spawn(async move {
             let _ = t2_clone.accept().await;
         });
 
-        // Give accept() time to start
-        // Note: Use tokio::time::sleep directly in unit tests since sim_time::sleep
-        // requires explicit advance_time() calls in simulation mode
         tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
 
-        // Connect from transport1 to transport2
         let peer = transport1.connect(actual_addr2).await.unwrap();
         assert!(!peer.is_closed());
 

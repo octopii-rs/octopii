@@ -29,7 +29,6 @@ pub use crate::openraft::peer_registry::{
     clear_global_peer_addrs, clear_global_peer_addrs_for, peer_namespace_from_base,
 };
 
-/// OpenRaft-based node
 pub struct OpenRaftNode {
     runtime: OctopiiRuntime,
     config: Config,
@@ -45,7 +44,6 @@ pub struct OpenRaftNode {
     filters: Arc<OpenRaftFilters>,
 }
 
-/// Minimal configuration state used by tests
 pub struct ConfStateCompat {
     pub voters: Vec<u64>,
     pub learners: Vec<u64>,

@@ -48,16 +48,9 @@ impl WalLogStore {
         Self::check_committed_invariants(inner);
     }
 
-    /// Check all log-related invariants:
-    /// - Entry indices match map keys
-    /// - All entries are after purge point
-    /// - Purge point is before last log
-    /// - No gaps in log
-    /// - First entry follows purge point
     fn check_log_invariants(inner: &MemLogStoreInner) {
         let last_log_id = inner.log.iter().next_back().map(|(_, entry)| entry.log_id);
 
-        // Check entries against purge point
         if let Some(purged) = inner.last_purged_log_id {
             invariants::sim_assert(
                 last_log_id.is_none_or(|last| purged <= last),
@@ -73,7 +66,6 @@ impl WalLogStore {
                     "log entry is not strictly after last purged log id",
                 );
             }
-            // First entry must immediately follow purged index
             if let Some(first_idx) = inner.log.keys().next().copied() {
                 invariants::sim_assert(
                     first_idx == purged.index + 1,
@@ -89,7 +81,6 @@ impl WalLogStore {
             }
         }
 
-        // Check for gaps in log
         if let (Some(first_idx), Some(last_idx)) = (
             inner.log.keys().next().copied(),
             inner.log.keys().next_back().copied(),
@@ -102,15 +93,10 @@ impl WalLogStore {
         }
     }
 
-    /// Check all committed-related invariants:
-    /// - Committed <= last_log_id (or <= last_purged if log empty)
-    /// - Committed >= purge point
-    /// - Committed entry is accessible (in log or purged)
     fn check_committed_invariants(inner: &MemLogStoreInner) {
         if let Some(committed) = inner.committed {
             let last_log_id = inner.log.iter().next_back().map(|(_, entry)| entry.log_id);
 
-            // Committed must be <= last_log_id, OR if log is empty, <= last_purged
             let committed_valid = match last_log_id {
                 Some(last) => committed <= last,
                 None => inner
@@ -123,7 +109,6 @@ impl WalLogStore {
                 "committed log id is after last log/purged id",
             );
 
-            // Committed must be >= purge point
             if let Some(purged) = inner.last_purged_log_id {
                 invariants::sim_assert(
                     committed.index >= purged.index,
@@ -131,7 +116,6 @@ impl WalLogStore {
                 );
             }
 
-            // Committed entry must be accessible
             let in_log = inner.log.contains_key(&committed.index);
             let is_purged = inner
                 .last_purged_log_id
@@ -173,11 +157,6 @@ impl WalLogStore {
         Ok(())
     }
 
-    /// Repair state after recovery to handle partial writes.
-    /// 1. Remove entries at or before purge point (they shouldn't exist)
-    /// 2. Truncate log at first gap (log must be contiguous)
-    /// 3. Ensure purged <= last_log_id (by clearing invalid purge)
-    /// 4. If committed points to a lost entry, roll it back
     fn repair_state_after_recovery(inner: &mut MemLogStoreInner) {
         Self::drop_entries_before_purge(inner);
         Self::truncate_at_first_gap(inner);
@@ -186,16 +165,12 @@ impl WalLogStore {
     }
 
     fn drop_entries_before_purge(inner: &mut MemLogStoreInner) {
-        // Step 1: Remove entries at or before purge point
-        // Note: Use clone() since LogId doesn't implement Copy
         if let Some(ref purged) = inner.last_purged_log_id {
             inner.remove_through(purged.index);
         }
     }
 
     fn truncate_at_first_gap(inner: &mut MemLogStoreInner) {
-        // Step 2: Find and truncate at first gap in log
-        // Log must be contiguous - if there's a gap, entries after the gap are invalid
         let expected_first = match inner.last_purged_log_id.as_ref() {
             Some(p) => p.index + 1,
             None => inner.log.keys().next().copied().unwrap_or(1),
@@ -216,27 +191,22 @@ impl WalLogStore {
         for (&idx, _) in inner.log.iter() {
             match last_valid_idx {
                 None => {
-                    // First entry - must match expected_first or be removed
                     if idx == expected_first {
                         last_valid_idx = Some(idx);
                     } else {
-                        // Entry before expected_first or gap at start - will be cleaned up
                         break;
                     }
                 }
                 Some(last) => {
                     if idx == last + 1 {
-                        // Contiguous, continue
                         last_valid_idx = Some(idx);
                     } else {
-                        // Gap found - stop here
                         break;
                     }
                 }
             }
         }
 
-        // Remove entries that aren't contiguous from expected_first
         let valid_range = match last_valid_idx {
             Some(last) => expected_first..=last,
             None => expected_first..=0, // Empty range - remove all
@@ -253,23 +223,16 @@ impl WalLogStore {
     }
 
     fn drop_log_if_purge_inconsistent(inner: &mut MemLogStoreInner) {
-        // Step 3: Ensure purged <= last_log_id (clear invalid purge if needed)
         let last_log_id = inner.log.values().next_back().map(|e| e.log_id);
         if let Some(ref purged) = inner.last_purged_log_id {
             let valid = last_log_id.map(|last| *purged <= last).unwrap_or(true);
             if !valid {
-                // purged > last_log_id - this is inconsistent
-                // Can't unpurge, so we must accept the purge and clear the log
                 inner.log.clear();
             }
         }
     }
 
     fn repair_committed_after_recovery(inner: &mut MemLogStoreInner) {
-        // Step 4: Repair committed to point to a valid entry (AFTER truncation)
-        // Must satisfy both:
-        //   - Invariant #4: committed <= last_log_id (LogId comparison)
-        //   - Invariant #8: committed.index in log OR committed.index <= purged.index
         let last_log_id = inner.log.values().next_back().map(|e| e.log_id);
 
         if let Some(committed) = inner.committed {
@@ -283,10 +246,8 @@ impl WalLogStore {
                 .unwrap_or(is_purged); // If no log, must be purged
 
             if !in_log && !is_purged {
-                // Invariant #8 violated: committed index not accessible
                 inner.committed = last_log_id.or(inner.last_purged_log_id);
             } else if !valid_logid {
-                // Invariant #4 violated: committed > last_log_id
                 inner.committed = last_log_id.or(inner.last_purged_log_id);
             }
         }

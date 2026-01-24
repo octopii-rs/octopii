@@ -11,7 +11,6 @@ const STATE_MACHINE_COMPACTION_THRESHOLD: usize = 5000;
 const ENTRY_BUFFER_SIZE: usize = 256;
 const SNAPSHOT_BUFFER_SIZE: usize = 4096;
 
-/// Serialize and append a state machine entry to WAL
 fn append_state_machine_entry(
     wal: &WriteAheadLog,
     key: &str,
@@ -58,7 +57,6 @@ pub(crate) fn parse_kv_command(command: &str) -> std::result::Result<KvCommand<'
     }
 }
 
-/// Trait for application state machines.
 pub trait StateMachineTrait: Send + Sync {
     fn apply(&self, command: &[u8]) -> std::result::Result<Bytes, String>;
     fn snapshot(&self) -> Vec<u8>;
@@ -68,7 +66,6 @@ pub trait StateMachineTrait: Send + Sync {
     }
 }
 
-/// Shared state machine handle type.
 pub type StateMachine = Arc<dyn StateMachineTrait>;
 
 #[derive(Archive, Deserialize, Serialize, Debug, Clone)]
@@ -82,7 +79,6 @@ struct StateMachineSnapshot {
     entries: Vec<(String, Vec<u8>)>,
 }
 
-/// Replay WAL to recover state machine map. Resets read offsets before replay.
 fn replay_wal_to_map(wal: &Arc<WriteAheadLog>) -> HashMap<String, Bytes> {
     let walrus = &wal.walrus;
     let mut recovered = HashMap::new();
@@ -90,7 +86,6 @@ fn replay_wal_to_map(wal: &Arc<WriteAheadLog>) -> HashMap<String, Bytes> {
     let _ = walrus.reset_read_offset_for_topic(TOPIC_STATE_MACHINE_SNAPSHOT);
     let _ = walrus.reset_read_offset_for_topic(TOPIC_STATE_MACHINE);
 
-    // Replay snapshots first
     loop {
         match walrus.read_next(TOPIC_STATE_MACHINE_SNAPSHOT, true) {
             Ok(Some(entry)) => {
@@ -110,7 +105,6 @@ fn replay_wal_to_map(wal: &Arc<WriteAheadLog>) -> HashMap<String, Bytes> {
         }
     }
 
-    // Replay individual entries
     loop {
         match walrus.read_next(TOPIC_STATE_MACHINE, true) {
             Ok(Some(entry)) => {
@@ -135,7 +129,6 @@ fn replay_wal_to_map(wal: &Arc<WriteAheadLog>) -> HashMap<String, Bytes> {
     recovered
 }
 
-/// Simple key-value state machine implementation (durable when WAL is provided).
 pub struct KvStateMachine {
     data: RwLock<HashMap<String, Bytes>>,
     wal: Option<Arc<WriteAheadLog>>,
@@ -168,7 +161,6 @@ impl KvStateMachine {
 
             #[cfg(feature = "simulation")]
             {
-                // Verify idempotency: replay again and check result matches
                 let verify = replay_wal_to_map(wal);
                 sim_assert(
                     verify == recovered,
@@ -281,7 +273,6 @@ impl StateMachineTrait for KvStateMachine {
 
     fn snapshot(&self) -> Vec<u8> {
         let data = self.data.read().unwrap();
-        // Sort entries to ensure deterministic snapshot ordering
         let mut entries: Vec<_> = data.iter().map(|(k, v)| (k.clone(), v.to_vec())).collect();
         entries.sort_by(|a, b| a.0.cmp(&b.0));
         let snapshot = StateMachineSnapshot { entries };
@@ -315,7 +306,6 @@ impl StateMachineTrait for KvStateMachine {
     }
 }
 
-/// WAL-backed wrapper that replays commands on startup and durably appends writes.
 pub struct WalBackedStateMachine {
     inner: StateMachine,
     wal: Arc<WriteAheadLog>,

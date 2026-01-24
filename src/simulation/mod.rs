@@ -9,7 +9,6 @@ mod rng;
 pub use oracle::{DurabilityOracle, Oracle};
 pub use rng::SimRng;
 
-// Deterministic simulation harness for long-running fuzz-style runs
 
 struct Simulation {
     rng: SimRng,
@@ -24,13 +23,11 @@ struct Simulation {
 }
 
 impl Simulation {
-    // Action distribution thresholds (cumulative percentages)
     const WRITE_THRESHOLD: usize = 40; // 0-40: single write (41%)
     const BATCH_WRITE_THRESHOLD: usize = 55; // 41-55: batch write (15%)
     const READ_THRESHOLD: usize = 70; // 56-70: single read (15%)
     const BATCH_READ_THRESHOLD: usize = 85; // 71-85: batch read (15%)
     const TICK_THRESHOLD: usize = 93; // 86-93: tick background (8%)
-                                      // 94-100: crash/recover (7%)
 
     fn new(seed: u64, error_rate: f64, progress_every: Option<usize>) -> Self {
         let root_dir = std::env::temp_dir().join(format!("walrus_sim_{}", seed));

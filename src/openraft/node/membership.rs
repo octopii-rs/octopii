@@ -19,7 +19,6 @@ impl OpenRaftNode {
             || err_str.contains("ChangeMembershipError::InProgress")
     }
 
-    /// Retry a membership operation with backoff on "in progress" errors
     async fn retry_membership_op<F, Fut, E>(&self, op_name: &str, mut op: F) -> Result<()>
     where
         F: FnMut() -> Fut,
@@ -50,7 +49,6 @@ impl OpenRaftNode {
         )))
     }
 
-    /// Get peer replication progress as (matched_index, last_log_index)
     fn get_peer_replication_progress(&self, peer_id: u64) -> Option<(u64, u64)> {
         let metrics = self.raft.metrics().borrow().clone();
         let last_log = metrics.last_log_index?;

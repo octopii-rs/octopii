@@ -16,10 +16,8 @@ use tokio::time::Duration;
 
 pub type RequestHandlerFuture = Pin<Box<dyn Future<Output = ResponsePayload> + Send>>;
 
-/// Callback for handling incoming requests
 pub type RequestHandler = Arc<dyn Fn(RpcRequest) -> RequestHandlerFuture + Send + Sync>;
 
-/// RPC handler that manages request/response correlation
 pub struct RpcHandler {
     transport: Arc<dyn Transport>,
     next_id: AtomicU64,
@@ -29,7 +27,6 @@ pub struct RpcHandler {
 }
 
 impl RpcHandler {
-    /// Create a new RPC handler
     pub fn new(transport: Arc<dyn Transport>) -> Self {
         Self {
             transport: Arc::clone(&transport),
@@ -40,7 +37,6 @@ impl RpcHandler {
         }
     }
 
-    /// Set the request handler callback
     pub async fn set_request_handler<F, Fut>(&self, handler: F)
     where
         F: Fn(RpcRequest) -> Fut + Send + Sync + 'static,
@@ -50,7 +46,6 @@ impl RpcHandler {
         *h = Some(Arc::new(move |req| Box::pin(handler(req))));
     }
 
-    /// Send a request and wait for response
     pub async fn request(
         self: &Arc<Self>,
         addr: SocketAddr,
@@ -70,13 +65,11 @@ impl RpcHandler {
 
         let (tx, rx) = oneshot::channel();
 
-        // Register pending request
         {
             let mut pending = self.pending_requests.write().await;
             pending.insert(id, tx);
         }
 
-        // Serialize and send (ensure receive loop for this peer)
         let data = serialize(&request)?;
 
         tracing::debug!("RPC request {}: connecting to {}", id, addr);
@@ -111,7 +104,6 @@ impl RpcHandler {
             })?;
 
         tracing::debug!("RPC request {}: waiting for response from {}", id, addr);
-        // Wait for response with timeout
         match timeout(timeout_duration, rx).await {
             Ok(Ok(response)) => {
                 tracing::debug!("RPC request {}: received response from {}", id, addr);
@@ -122,7 +114,6 @@ impl RpcHandler {
                 Err(OctopiiError::Rpc("Response channel closed".to_string()))
             }
             Err(_) => {
-                // Timeout - clean up pending request
                 tracing::error!(
                     "RPC request {}: timeout waiting for response from {}",
                     id,
@@ -135,7 +126,6 @@ impl RpcHandler {
         }
     }
 
-    /// Send a one-way message (no response expected)
     pub async fn send_one_way(
         self: &Arc<Self>,
         addr: SocketAddr,
@@ -165,10 +155,7 @@ impl RpcHandler {
                         rpc.register_peer_receiver(addr, peer).await;
                     }
                     Err(e) => {
-                        // Don't break the loop on accept errors - just log and continue
-                        // This can happen during normal operation (e.g., connection refused, handshake failures)
                         tracing::debug!("Failed to accept connection: {}", e);
-                        // Small delay to avoid tight loop on persistent errors
                         if cfg!(feature = "simulation") {
                             tokio::task::yield_now().await;
                         } else {
@@ -180,12 +167,6 @@ impl RpcHandler {
         });
     }
 
-    /// Notify the handler of an incoming message
-    ///
-    /// This method handles the message inline to avoid spawning tasks,
-    /// which prevents context switching starvation with Quinn QUIC.
-    ///
-    /// The peer parameter is used to send responses back on the same connection.
     pub async fn notify_message(
         &self,
         addr: SocketAddr,
@@ -211,13 +192,11 @@ impl RpcHandler {
                 self.handle_response(resp).await;
             }
             RpcMessage::OneWay(_) => {
-                // One-way messages would be handled by application logic
                 tracing::debug!("Received one-way message from {}", addr);
             }
         }
     }
 
-    /// Handle an incoming request
     async fn handle_request(&self, addr: SocketAddr, req: RpcRequest, peer: Option<Arc<dyn Peer>>) {
         let handler = self.request_handler.read().await;
 
@@ -230,8 +209,6 @@ impl RpcHandler {
 
         let response = RpcMessage::new_response(req.id, response_payload);
 
-        // Send response back on the same connection if peer is provided,
-        // otherwise fall back to creating a new connection
         if let Ok(data) = serialize(&response) {
             if let Some(peer) = peer {
                 if let Err(e) = peer.send(data).await {
@@ -243,7 +220,6 @@ impl RpcHandler {
         }
     }
 
-    /// Handle an incoming response
     async fn handle_response(&self, resp: RpcResponse) {
         let mut pending = self.pending_requests.write().await;
         if let Some(tx) = pending.remove(&resp.id) {
@@ -290,8 +266,6 @@ impl RpcHandler {
                 }
             }
 
-            // Only remove entry if our pointer is still registered
-            // This prevents old receivers from removing new receivers' entries
             let mut receivers = rpc.peer_receivers.lock().await;
             if let Some(&registered_ptr) = receivers.get(&addr) {
                 if registered_ptr == peer_ptr {
@@ -302,4 +276,3 @@ impl RpcHandler {
     }
 }
 
-// RPC tests are in tests/rpc_test.rs due to bidirectional communication requirements

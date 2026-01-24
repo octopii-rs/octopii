@@ -1,11 +1,8 @@
-/// Simple XorShift PRNG for deterministic simulation.
-/// Used by both simulation harness and transport/sim router.
 #[derive(Clone)]
 pub struct SimRng {
     state: u64,
 }
 
-/// Golden ratio constant (2^64 / phi) for PRNG seed mixing
 const GOLDEN_RATIO: u64 = 0x9E3779B97F4A7C15;
 
 impl SimRng {
@@ -16,7 +13,6 @@ impl SimRng {
         rng
     }
 
-    /// Generate next random u64
     pub fn next_u64(&mut self) -> u64 {
         let mut x = self.state;
         x ^= x << 13;
@@ -26,7 +22,6 @@ impl SimRng {
         x
     }
 
-    /// Generate random u64 in range [0, upper_exclusive)
     pub fn next_range(&mut self, upper_exclusive: u64) -> u64 {
         if upper_exclusive <= 1 {
             return 0;
@@ -34,7 +29,6 @@ impl SimRng {
         self.next_u64() % upper_exclusive
     }
 
-    /// Generate random usize in range [min, max)
     pub fn range(&mut self, min: usize, max: usize) -> usize {
         let range = max - min;
         if range == 0 {
@@ -43,7 +37,6 @@ impl SimRng {
         min + (self.next_u64() as usize % range)
     }
 
-    /// Generate random payload of 1-20 bytes
     pub fn gen_payload(&mut self) -> Vec<u8> {
         let len = self.range(1, 21);
         let mut buf = Vec::with_capacity(len);

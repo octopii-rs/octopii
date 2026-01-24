@@ -17,7 +17,6 @@ pub mod state_machine;
 pub mod transport;
 pub mod wal;
 
-// Re-export main types
 pub use chunk::{ChunkSource, TransferResult};
 pub use config::Config;
 pub use error::{OctopiiError, Result};

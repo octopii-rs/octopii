@@ -16,7 +16,6 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::time::Duration;
 
-/// QUIC-backed network for OpenRaft messages
 pub struct QuinnNetwork {
     rpc: Arc<RpcHandler>,
     peer_addrs: Arc<tokio::sync::RwLock<std::collections::HashMap<AppNodeId, SocketAddr>>>,
@@ -67,7 +66,6 @@ impl QuinnNetwork {
         kind: &str,
         data: Vec<u8>,
     ) -> Result<ResponsePayload, anyhow::Error> {
-        // Apply network filters (partitions, drops, delays)
         self.filters.apply(self.self_id, self.target).await?;
 
         let Some(addr) = self.peer_addr().await else {
@@ -142,7 +140,6 @@ impl openraft::network::v2::RaftNetworkV2<AppTypeConfig> for QuinnNetwork {
         openraft::raft::SnapshotResponse<AppTypeConfig>,
         openraft::error::StreamingError<AppTypeConfig>,
     > {
-        // For now, return an error - full snapshot streaming not yet implemented
         Err(openraft::error::StreamingError::Unreachable(
             openraft::error::Unreachable::new(&io::Error::other(
                 "full_snapshot not yet implemented",
@@ -213,8 +210,6 @@ impl RaftNetworkFactory<AppTypeConfig> for QuinnNetworkFactory {
     }
 }
 
-/// Network filters for testing partition/delay/drop scenarios.
-/// Always available but only has effect when openraft-filters feature is enabled.
 pub struct OpenRaftFilters {
     #[cfg(feature = "openraft-filters")]
     pub(crate) drop_pairs: tokio::sync::RwLock<std::collections::HashSet<(AppNodeId, AppNodeId)>>,
@@ -242,43 +237,36 @@ impl OpenRaftFilters {
         }
     }
 
-    #[cfg(feature = "openraft-filters")]
     pub async fn clear(&self) {
-        self.drop_pairs.write().await.clear();
-        self.delay_pairs.write().await.clear();
-        self.partitions.write().await.clear();
+        #[cfg(feature = "openraft-filters")]
+        {
+            self.drop_pairs.write().await.clear();
+            self.delay_pairs.write().await.clear();
+            self.partitions.write().await.clear();
+        }
     }
 
-    #[cfg(not(feature = "openraft-filters"))]
-    pub async fn clear(&self) {}
-
-    /// Apply filters before sending. Returns Err if message should be dropped.
-    #[cfg(feature = "openraft-filters")]
     pub(crate) async fn apply(&self, from: AppNodeId, to: AppNodeId) -> Result<(), anyhow::Error> {
-        // Check partitions
-        for (g1, g2) in self.partitions.read().await.iter() {
-            if (g1.contains(&from) && g2.contains(&to)) || (g2.contains(&from) && g1.contains(&to))
-            {
-                anyhow::bail!("openraft-filters: partition drop {}->{}", from, to);
+        #[cfg(feature = "openraft-filters")]
+        {
+            for (g1, g2) in self.partitions.read().await.iter() {
+                if (g1.contains(&from) && g2.contains(&to))
+                    || (g2.contains(&from) && g1.contains(&to))
+                {
+                    anyhow::bail!("openraft-filters: partition drop {}->{}", from, to);
+                }
+            }
+            if self.drop_pairs.read().await.contains(&(from, to)) {
+                anyhow::bail!("openraft-filters: drop pair {}->{}", from, to);
+            }
+            if let Some(d) = self.delay_pairs.read().await.get(&(from, to)).copied() {
+                sim_time::sleep(d).await;
             }
         }
-        // Check drop pairs
-        if self.drop_pairs.read().await.contains(&(from, to)) {
-            anyhow::bail!("openraft-filters: drop pair {}->{}", from, to);
+        #[cfg(not(feature = "openraft-filters"))]
+        {
+            let _ = (from, to);
         }
-        // Apply delay
-        if let Some(d) = self.delay_pairs.read().await.get(&(from, to)).copied() {
-            sim_time::sleep(d).await;
-        }
-        Ok(())
-    }
-
-    #[cfg(not(feature = "openraft-filters"))]
-    pub(crate) async fn apply(
-        &self,
-        _from: AppNodeId,
-        _to: AppNodeId,
-    ) -> Result<(), anyhow::Error> {
         Ok(())
     }
 }

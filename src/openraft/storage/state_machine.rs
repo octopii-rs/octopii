@@ -17,7 +17,6 @@ use std::io::{self, Cursor};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
-/// In-memory snapshot wrapper.
 #[derive(Debug, Clone)]
 pub struct StoredSnapshot {
     pub meta: SnapshotMeta<AppTypeConfig>,
@@ -31,37 +30,27 @@ pub struct StateMachineData {
     pub data: BTreeMap<String, String>,
 }
 
-/// WAL record for state machine metadata (membership and snapshot)
 #[derive(Serialize, Deserialize)]
 enum SmMetaRecord {
-    /// Membership change: (log_id, membership)
     Membership {
         log_id: Option<LogId<AppTypeConfig>>,
         membership: openraft::Membership<AppTypeConfig>,
     },
-    /// Snapshot data (meta + serialized state)
     Snapshot {
         meta: SnapshotMeta<AppTypeConfig>,
         data: Vec<u8>,
     },
 }
 
-/// State machine wrapper for OpenRaft with WAL-backed membership persistence.
-///
-/// When constructed with a WAL (`new_with_wal`), membership changes are persisted
-/// and recovered on restart. This ensures nodes remember their voter/learner status
-/// across crash/recovery cycles.
 pub struct MemStateMachine {
     sm: StateMachine,
     state_machine: tokio::sync::RwLock<StateMachineData>,
     snapshot_idx: AtomicU64,
     current_snapshot: tokio::sync::RwLock<Option<StoredSnapshot>>,
-    /// Optional WAL for persisting membership. If None, membership is in-memory only.
     meta_wal: Option<Arc<WriteAheadLog>>,
 }
 
 impl MemStateMachine {
-    /// Create a new state machine without WAL persistence (membership is in-memory only).
     pub fn new(sm: StateMachine) -> Arc<Self> {
         Arc::new(Self {
             sm,
@@ -72,14 +61,11 @@ impl MemStateMachine {
         })
     }
 
-    /// Create a new state machine with WAL-backed membership persistence.
-    /// Recovers last_membership and last_applied_log from WAL on construction.
     pub async fn new_with_wal(sm: StateMachine, wal: Arc<WriteAheadLog>) -> Arc<Self> {
         let mut data = StateMachineData::default();
         let mut snapshot: Option<StoredSnapshot> = None;
         let mut snapshot_state: Option<BTreeMap<String, String>> = None;
 
-        // Recover metadata from WAL
         if let Ok(entries) = wal.read_all().await {
             for raw in entries {
                 if let Ok(record) = bincode::deserialize::<SmMetaRecord>(&raw) {
@@ -125,7 +111,6 @@ impl MemStateMachine {
         })
     }
 
-    /// Persist a metadata record to WAL (if WAL is configured).
     async fn persist_meta(&self, record: &SmMetaRecord) -> io::Result<()> {
         if let Some(ref wal) = self.meta_wal {
             let data = bincode::serialize(record).map_err(io::Error::other)?;
@@ -204,7 +189,6 @@ impl RaftStateMachine<AppTypeConfig> for Arc<MemStateMachine> {
         Strm:
             Stream<Item = Result<EntryResponder<AppTypeConfig>, io::Error>> + Unpin + OptionalSend,
     {
-        // Collect membership updates to persist after releasing the lock
         let mut membership_to_persist: Option<(
             Option<LogId<AppTypeConfig>>,
             openraft::Membership<AppTypeConfig>,
@@ -224,7 +208,6 @@ impl RaftStateMachine<AppTypeConfig> for Arc<MemStateMachine> {
                     }
                     EntryPayload::Membership(ref mem) => {
                         sm.last_membership = StoredMembership::new(Some(entry.log_id), mem.clone());
-                        // Queue for persistence (only persist the last membership in this batch)
                         membership_to_persist = Some((Some(entry.log_id), mem.clone()));
                         AppResponse(Vec::new())
                     }
@@ -236,7 +219,6 @@ impl RaftStateMachine<AppTypeConfig> for Arc<MemStateMachine> {
             }
         }
 
-        // Persist membership updates outside the lock
         if let Some((log_id, membership)) = membership_to_persist {
             self.persist_meta(&SmMetaRecord::Membership { log_id, membership })
                 .await?;
@@ -271,7 +253,6 @@ impl RaftStateMachine<AppTypeConfig> for Arc<MemStateMachine> {
             data: updated_state_machine_data.clone(),
         };
 
-        // Extract membership info for persistence before taking locks
         let membership_to_persist = meta.last_membership.membership().clone();
         let membership_log_id = *meta.last_membership.log_id();
 
@@ -282,7 +263,6 @@ impl RaftStateMachine<AppTypeConfig> for Arc<MemStateMachine> {
 
         let mut current_snapshot = self.current_snapshot.write().await;
 
-        // Also restore into the state machine
         let snapshot_bytes = bincode::serialize(&updated_state_machine_data)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         self.sm.restore(&snapshot_bytes).map_err(io::Error::other)?;
@@ -290,7 +270,6 @@ impl RaftStateMachine<AppTypeConfig> for Arc<MemStateMachine> {
         *current_snapshot = Some(new_snapshot);
         drop(current_snapshot);
 
-        // Persist membership from snapshot
         self.persist_meta(&SmMetaRecord::Membership {
             log_id: membership_log_id,
             membership: membership_to_persist,

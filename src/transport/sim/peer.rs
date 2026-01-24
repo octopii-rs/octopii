@@ -168,7 +168,6 @@ impl Peer for SimPeer {
             || self.router.is_closed(self.remote, self.remote_epoch)
     }
 
-    /// Wire format: [SIZE:8][DATA:N][SHA256:32], ACK: 0=ok, 1=fail
     fn send_chunk_verified(&self, chunk: &ChunkSource) -> TransportFut<'_, u64> {
         let router = self.router.clone();
         let local = self.local;

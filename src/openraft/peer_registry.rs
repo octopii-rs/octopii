@@ -78,7 +78,6 @@ pub(crate) async fn load_peer_addr_records(wal: &Arc<WriteAheadLog>) -> HashMap<
 
     #[cfg(feature = "simulation")]
     {
-        // Verify idempotency: re-parsing should yield same result
         let verify = parse_peer_addr_entries(&entries);
         sim_assert(
             verify == map,
@@ -126,8 +125,6 @@ pub(crate) async fn persist_peer_addr(
         append_res?;
         #[cfg(feature = "simulation")]
         {
-            // Disable faults during verification read to avoid false positives
-            // from I/O errors causing count mismatches in the WAL invariant check
             let prev_rate = sim::get_io_error_rate();
             let prev_partial = sim::get_partial_writes_enabled();
             sim::set_io_error_rate(0.0);

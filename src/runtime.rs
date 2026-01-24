@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use tokio::runtime::{Builder, Handle, Runtime};
 
+#[derive(Clone)]
 pub struct OctopiiRuntime {
     runtime: Option<Arc<Runtime>>,
     handle: Handle,
@@ -47,15 +48,6 @@ impl OctopiiRuntime {
 impl Default for OctopiiRuntime {
     fn default() -> Self {
         Self::new(4)
-    }
-}
-
-impl Clone for OctopiiRuntime {
-    fn clone(&self) -> Self {
-        Self {
-            runtime: self.runtime.as_ref().map(Arc::clone),
-            handle: self.handle.clone(),
-        }
     }
 }
 
