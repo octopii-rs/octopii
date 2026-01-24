@@ -126,10 +126,10 @@ async fn test_varying_chunk_sizes_parallel() {
 
     // Create chunks of varying sizes: 1KB, 10KB, 100KB, 1MB, 5MB, 10MB
     let sizes = vec![
-        1 * 1024,         // 1KB
+        1024,             // 1KB
         10 * 1024,        // 10KB
         100 * 1024,       // 100KB
-        1 * 1024 * 1024,  // 1MB
+        1024 * 1024,      // 1MB
         5 * 1024 * 1024,  // 5MB
         10 * 1024 * 1024, // 10MB
     ];
@@ -140,8 +140,8 @@ async fn test_varying_chunk_sizes_parallel() {
         .enumerate()
         .map(|(i, &size)| {
             let mut data = vec![0u8; size];
-            for j in 0..size {
-                data[j] = ((i + j) % 256) as u8;
+            for (j, byte) in data.iter_mut().enumerate() {
+                *byte = ((i + j) % 256) as u8;
             }
             Bytes::from(data)
         })

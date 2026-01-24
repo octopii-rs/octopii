@@ -2,9 +2,9 @@
 
 use crate::error::OctopiiError;
 use crate::invariants;
-use crate::openraft::storage::log_store::MemLogStoreInner;
-use crate::openraft::storage::wal::append_wal_record;
 use crate::openraft::types::AppTypeConfig;
+#[cfg(feature = "simulation")]
+use crate::sim_runtime;
 use crate::wal::WriteAheadLog;
 use bytes::Bytes;
 use openraft::{
@@ -17,6 +17,10 @@ use std::fmt::Debug;
 use std::io;
 use std::ops::RangeBounds;
 use std::sync::Arc;
+#[cfg(feature = "simulation")]
+use std::time::Duration;
+#[cfg(feature = "simulation")]
+use tokio::task::yield_now;
 
 #[derive(Clone)]
 pub struct WalLogStore {
@@ -245,9 +249,7 @@ impl WalLogStore {
                 .map(|last| committed <= last)
                 .unwrap_or(is_purged); // If no log, must be purged
 
-            if !in_log && !is_purged {
-                inner.committed = last_log_id.or(inner.last_purged_log_id);
-            } else if !valid_logid {
+            if (!in_log && !is_purged) || !valid_logid {
                 inner.committed = last_log_id.or(inner.last_purged_log_id);
             }
         }
@@ -441,6 +443,150 @@ impl RaftLogStorage<AppTypeConfig> for WalLogStore {
 
     async fn get_log_reader(&mut self) -> Self::LogReader {
         self.clone()
+    }
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct MemLogStoreInner {
+    pub(crate) last_purged_log_id: Option<LogId<AppTypeConfig>>,
+    pub(crate) log: BTreeMap<u64, Entry<AppTypeConfig>>,
+    pub(crate) committed: Option<LogId<AppTypeConfig>>,
+    pub(crate) vote: Option<openraft::Vote<AppTypeConfig>>,
+}
+
+impl MemLogStoreInner {
+    pub(crate) fn remove_through(&mut self, end: u64) {
+        let keys = self.log.range(..=end).map(|(k, _v)| *k).collect::<Vec<_>>();
+        for key in keys {
+            self.log.remove(&key);
+        }
+    }
+
+    pub(crate) fn remove_from(&mut self, start: u64) {
+        let keys = self
+            .log
+            .range(start..)
+            .map(|(k, _v)| *k)
+            .collect::<Vec<_>>();
+        for key in keys {
+            self.log.remove(&key);
+        }
+    }
+
+    pub(crate) async fn try_get_log_entries<RB: RangeBounds<u64> + Clone + Debug>(
+        &mut self,
+        range: RB,
+    ) -> Result<Vec<Entry<AppTypeConfig>>, io::Error> {
+        let response = self
+            .log
+            .range(range.clone())
+            .map(|(_, val)| val.clone())
+            .collect::<Vec<_>>();
+        Ok(response)
+    }
+
+    pub(crate) async fn get_log_state(&mut self) -> Result<LogState<AppTypeConfig>, io::Error> {
+        let last = self.log.iter().next_back().map(|(_, ent)| ent.log_id);
+
+        let last_purged = self.last_purged_log_id;
+
+        let last = match last {
+            None => last_purged,
+            Some(x) => Some(x),
+        };
+
+        Ok(LogState {
+            last_purged_log_id: last_purged,
+            last_log_id: last,
+        })
+    }
+
+    pub(crate) async fn save_committed(
+        &mut self,
+        committed: Option<LogId<AppTypeConfig>>,
+    ) -> Result<(), io::Error> {
+        self.committed = committed;
+        Ok(())
+    }
+
+    pub(crate) async fn read_committed(
+        &mut self,
+    ) -> Result<Option<LogId<AppTypeConfig>>, io::Error> {
+        Ok(self.committed)
+    }
+
+    pub(crate) async fn save_vote(
+        &mut self,
+        vote: &openraft::Vote<AppTypeConfig>,
+    ) -> Result<(), io::Error> {
+        self.vote = Some(*vote);
+        Ok(())
+    }
+
+    pub(crate) async fn read_vote(
+        &mut self,
+    ) -> Result<Option<openraft::Vote<AppTypeConfig>>, io::Error> {
+        Ok(self.vote)
+    }
+
+    pub(crate) async fn append<I>(
+        &mut self,
+        entries: I,
+        callback: IOFlushed<AppTypeConfig>,
+    ) -> Result<(), io::Error>
+    where
+        I: IntoIterator<Item = Entry<AppTypeConfig>>,
+    {
+        for entry in entries {
+            self.log.insert(entry.log_id.index, entry);
+        }
+        callback.io_completed(Ok(())).await;
+        Ok(())
+    }
+
+    pub(crate) async fn truncate(&mut self, log_id: LogId<AppTypeConfig>) -> Result<(), io::Error> {
+        self.remove_from(log_id.index);
+        Ok(())
+    }
+
+    pub(crate) async fn purge(&mut self, log_id: LogId<AppTypeConfig>) -> Result<(), io::Error> {
+        {
+            let ld = &mut self.last_purged_log_id;
+            assert!(ld.as_ref() <= Some(&log_id));
+            *ld = Some(log_id);
+        }
+
+        {
+            self.remove_through(log_id.index);
+        }
+
+        Ok(())
+    }
+}
+
+pub(crate) async fn append_wal_record(wal: &WriteAheadLog, data: Bytes) -> io::Result<()> {
+    #[cfg(feature = "simulation")]
+    {
+        for attempt in 0..20 {
+            match wal.append(data.clone()).await {
+                Ok(_) => return Ok(()),
+                Err(e) => {
+                    if attempt == 19 {
+                        return Err(io::Error::other(e.to_string()));
+                    }
+                    sim_runtime::advance_time(Duration::from_millis(10));
+                    yield_now().await;
+                }
+            }
+        }
+        Ok(())
+    }
+    #[cfg(not(feature = "simulation"))]
+    {
+        wal.append(data)
+            .await
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+        Ok(())
     }
 }
 

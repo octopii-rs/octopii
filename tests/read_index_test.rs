@@ -41,7 +41,7 @@ fn test_read_index_enforces_leadership() {
         .unwrap();
 
     rt.block_on(async {
-        let base = PathBuf::from(std::env::temp_dir()).join("octopii_read_index");
+        let base = std::env::temp_dir().join("octopii_read_index");
         let _ = std::fs::remove_dir_all(&base);
 
         let addr1 = "127.0.0.1:9461".parse().unwrap();

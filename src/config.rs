@@ -17,6 +17,16 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Self {
-        Self { node_id: 1, bind_addr: "127.0.0.1:5000".parse().unwrap(), peers: Vec::new(), wal_dir: PathBuf::from("./data"), worker_threads: 4, wal_batch_size: 100, wal_flush_interval_ms: 100, is_initial_leader: false, snapshot_lag_threshold: 500 }
+        Self {
+            node_id: 1,
+            bind_addr: "127.0.0.1:5000".parse().unwrap(),
+            peers: Vec::new(),
+            wal_dir: PathBuf::from("./data"),
+            worker_threads: 4,
+            wal_batch_size: 100,
+            wal_flush_interval_ms: 100,
+            is_initial_leader: false,
+            snapshot_lag_threshold: 500,
+        }
     }
 }

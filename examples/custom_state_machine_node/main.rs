@@ -55,6 +55,12 @@ impl TrackedCounterStateMachine {
     }
 }
 
+impl Default for TrackedCounterStateMachine {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl StateMachineTrait for TrackedCounterStateMachine {
     fn apply(&self, command: &[u8]) -> Result<Bytes, String> {
         // Increment the call counter to prove this method was called
@@ -120,12 +126,14 @@ pub async fn run_custom_state_machine_example() -> Result<ExampleResult, Box<dyn
     let wal_dir = data_dir.path().join("custom_sm_node");
     std::fs::create_dir_all(&wal_dir)?;
 
-    let mut config = Config::default();
-    config.bind_addr = "127.0.0.1:0".parse()?;
-    config.peers = Vec::new();
-    config.wal_dir = wal_dir;
-    config.is_initial_leader = true;
-    config.worker_threads = 2;
+    let config = Config {
+        bind_addr: "127.0.0.1:0".parse()?,
+        peers: Vec::new(),
+        wal_dir,
+        is_initial_leader: true,
+        worker_threads: 2,
+        ..Default::default()
+    };
 
     // Create our custom state machine
     let custom_sm = Arc::new(TrackedCounterStateMachine::new());
@@ -194,12 +202,14 @@ mod tests {
         let wal_dir = data_dir.path().join(test_name);
         std::fs::create_dir_all(&wal_dir).unwrap();
 
-        let mut config = Config::default();
-        config.bind_addr = "127.0.0.1:0".parse().unwrap();
-        config.peers = Vec::new();
-        config.wal_dir = wal_dir;
-        config.is_initial_leader = true;
-        config.worker_threads = 2;
+        let config = Config {
+            bind_addr: "127.0.0.1:0".parse().unwrap(),
+            peers: Vec::new(),
+            wal_dir,
+            is_initial_leader: true,
+            worker_threads: 2,
+            ..Default::default()
+        };
 
         let custom_sm = Arc::new(TrackedCounterStateMachine::new());
         let sm_for_node: StateMachine = custom_sm.clone();

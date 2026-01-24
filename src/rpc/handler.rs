@@ -77,18 +77,12 @@ impl RpcHandler {
 
         timeout(timeout_duration, peer.send(data))
             .await
-            .map_err(|_| {
-                OctopiiError::Rpc("Request send timeout".to_string())
-            })?
-            .map_err(|e| {
-                OctopiiError::Rpc(format!("Transport send failed: {}", e))
-            })?;
+            .map_err(|_| OctopiiError::Rpc("Request send timeout".to_string()))?
+            .map_err(|e| OctopiiError::Rpc(format!("Transport send failed: {}", e)))?;
 
         match timeout(timeout_duration, rx).await {
             Ok(Ok(response)) => Ok(response),
-            Ok(Err(_)) => {
-                Err(OctopiiError::Rpc("Response channel closed".to_string()))
-            }
+            Ok(Err(_)) => Err(OctopiiError::Rpc("Response channel closed".to_string())),
             Err(_) => {
                 let mut pending = self.pending_requests.write().await;
                 pending.remove(&id);

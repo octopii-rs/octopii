@@ -1,7 +1,7 @@
 use bytes::Bytes;
 use octopii::{Config, OctopiiNode, OctopiiRuntime};
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::Path;
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -32,7 +32,7 @@ fn single_node_config(base: &TempDir, port: u16) -> Config {
 }
 
 fn cluster_config(
-    base: &PathBuf,
+    base: &Path,
     node_id: u64,
     addr: SocketAddr,
     peers: Vec<SocketAddr>,
@@ -106,7 +106,7 @@ async fn wait_for_value(node: &OctopiiNode, key: &[u8], expected: &str, timeout:
     let start = Instant::now();
     while start.elapsed() < timeout {
         if let Ok(value) = node.query(key).await {
-            if value == Bytes::from(expected.to_string()) {
+            if value.as_ref() == expected.as_bytes() {
                 return true;
             }
         }
@@ -124,7 +124,7 @@ fn test_three_node_leader_restart_preserves_wal() {
         .unwrap();
 
     rt.block_on(async {
-        let base = PathBuf::from(std::env::temp_dir()).join("octopii_wal_cluster");
+        let base = std::env::temp_dir().join("octopii_wal_cluster");
         let _ = std::fs::remove_dir_all(&base);
 
         let port_block = next_port_block();

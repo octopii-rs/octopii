@@ -993,6 +993,10 @@ impl File {
         }
     }
 
+    pub fn is_empty(&self) -> io::Result<bool> {
+        self.len().map(|len| len == 0)
+    }
+
     /// Get a reference to the underlying std::fs::File
     ///
     /// Use sparingly - this bypasses simulation fault injection
@@ -1677,7 +1681,7 @@ mod tests {
 
             for _ in 0..10000 {
                 let val = rng.next_f64();
-                assert!(val >= 0.0 && val < 1.0);
+                assert!((0.0..1.0).contains(&val));
                 sum += val;
             }
 

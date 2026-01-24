@@ -67,45 +67,35 @@ async fn test_rpc_storm_with_handler_flaps() {
     let t2_clone = Arc::clone(&transport2);
     let rpc2_clone = Arc::clone(&rpc2);
     tokio::spawn(async move {
-        loop {
-            match t2_clone.accept().await {
-                Ok((addr, peer)) => {
-                    let rpc = Arc::clone(&rpc2_clone);
-                    let peer = peer as Arc<dyn octopii::transport::Peer>;
-                    tokio::spawn(async move {
-                        while let Ok(Some(data)) = peer.recv().await {
-                            if let Ok(msg) = deserialize::<RpcMessage>(&data) {
-                                if rand::random::<u8>() % 5 == 0 {
-                                    continue;
-                                }
-                                rpc.notify_message(addr, msg, Some(Arc::clone(&peer))).await;
-                            }
+        while let Ok((addr, peer)) = t2_clone.accept().await {
+            let rpc = Arc::clone(&rpc2_clone);
+            let peer = peer as Arc<dyn octopii::transport::Peer>;
+            tokio::spawn(async move {
+                while let Ok(Some(data)) = peer.recv().await {
+                    if let Ok(msg) = deserialize::<RpcMessage>(&data) {
+                        if rand::random::<u8>().is_multiple_of(5) {
+                            continue;
                         }
-                    });
+                        rpc.notify_message(addr, msg, Some(Arc::clone(&peer))).await;
+                    }
                 }
-                Err(_) => break,
-            }
+            });
         }
     });
 
     let t1_clone = Arc::clone(&transport1);
     let rpc1_clone = Arc::clone(&rpc1);
     tokio::spawn(async move {
-        loop {
-            match t1_clone.accept().await {
-                Ok((addr, peer)) => {
-                    let rpc = Arc::clone(&rpc1_clone);
-                    let peer = peer as Arc<dyn octopii::transport::Peer>;
-                    tokio::spawn(async move {
-                        while let Ok(Some(data)) = peer.recv().await {
-                            if let Ok(msg) = deserialize::<RpcMessage>(&data) {
-                                rpc.notify_message(addr, msg, Some(Arc::clone(&peer))).await;
-                            }
-                        }
-                    });
+        while let Ok((addr, peer)) = t1_clone.accept().await {
+            let rpc = Arc::clone(&rpc1_clone);
+            let peer = peer as Arc<dyn octopii::transport::Peer>;
+            tokio::spawn(async move {
+                while let Ok(Some(data)) = peer.recv().await {
+                    if let Ok(msg) = deserialize::<RpcMessage>(&data) {
+                        rpc.notify_message(addr, msg, Some(Arc::clone(&peer))).await;
+                    }
                 }
-                Err(_) => break,
-            }
+            });
         }
     });
 
@@ -217,7 +207,7 @@ async fn test_shipping_lane_retries_under_flaky_receiver() {
             while collected.len() < total_successes {
                 let (_, peer) = transport.accept().await.unwrap();
                 let attempt = fail_counter.fetch_add(1, Ordering::SeqCst);
-                if attempt % 3 == 0 {
+                if attempt.is_multiple_of(3) {
                     // Drop connection without reading to force the sender to retry.
                     drop(peer);
                     continue;

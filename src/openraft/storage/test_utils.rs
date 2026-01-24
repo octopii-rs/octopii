@@ -22,7 +22,7 @@ pub fn sync_oracle_from_store(
     let state = rt
         .block_on(store.get_log_state())
         .expect("read log state failed");
-    *oracle_last_purged = state.last_purged_log_id.clone();
+    *oracle_last_purged = state.last_purged_log_id;
 
     let first_index = state.last_purged_log_id.map(|p| p.index + 1).unwrap_or(1);
     let last_index = state.last_log_id.map(|l| l.index).unwrap_or(0);

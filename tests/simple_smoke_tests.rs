@@ -76,7 +76,7 @@ fn test_smoke_three_nodes_manual_election_after_shutdown() {
         .unwrap();
 
     rt.block_on(async {
-        let base = PathBuf::from(std::env::temp_dir()).join("octopii_simple_smoke_three");
+        let base = std::env::temp_dir().join("octopii_simple_smoke_three");
         let _ = std::fs::remove_dir_all(&base);
 
         // Use fixed high ports to avoid dependence on discovering ephemeral ports
@@ -166,7 +166,7 @@ fn test_three_nodes_graceful_shutdown_auto_election() {
         .unwrap();
 
     rt.block_on(async {
-        let base = PathBuf::from(std::env::temp_dir()).join("octopii_simple_smoke_auto");
+        let base = std::env::temp_dir().join("octopii_simple_smoke_auto");
         let _ = std::fs::remove_dir_all(&base);
 
         let addr1 = "127.0.0.1:9331".parse().unwrap();
@@ -325,7 +325,7 @@ fn test_add_learner_under_load_and_promote() {
         .unwrap();
 
     rt.block_on(async {
-        let base = PathBuf::from(std::env::temp_dir()).join("octopii_simple_smoke_learner");
+        let base = std::env::temp_dir().join("octopii_simple_smoke_learner");
         let _ = std::fs::remove_dir_all(&base);
 
         // Use fixed ports
@@ -510,7 +510,7 @@ fn test_snapshot_during_heavy_load_keeps_followers_caught_up() {
         .unwrap();
 
     rt.block_on(async {
-        let base = PathBuf::from(std::env::temp_dir()).join("octopii_snapshot_heavy_load");
+        let base = std::env::temp_dir().join("octopii_snapshot_heavy_load");
         let _ = std::fs::remove_dir_all(&base);
 
         let addr1 = "127.0.0.1:9361".parse().unwrap();
@@ -601,7 +601,7 @@ fn test_three_nodes_crash_leader_with_load_and_restart_auto_election() {
         .unwrap();
 
     rt.block_on(async {
-        let base = PathBuf::from(std::env::temp_dir()).join("octopii_simple_smoke_crash_restart");
+        let base = std::env::temp_dir().join("octopii_simple_smoke_crash_restart");
         let _ = std::fs::remove_dir_all(&base);
 
         let addr1 = "127.0.0.1:9341".parse().unwrap();
@@ -788,7 +788,7 @@ fn test_transfer_leader_noop_is_safe() {
         .unwrap();
 
     rt.block_on(async {
-        let base = PathBuf::from(std::env::temp_dir()).join("octopii_transfer_leader_noop");
+        let base = std::env::temp_dir().join("octopii_transfer_leader_noop");
         let _ = std::fs::remove_dir_all(&base);
 
         let addr1 = "127.0.0.1:9371".parse().unwrap();

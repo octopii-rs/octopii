@@ -1,3 +1,4 @@
+#[allow(clippy::module_inception)]
 pub mod wal;
 
 use crate::error::{OctopiiError, Result};
@@ -173,33 +174,19 @@ impl WriteAheadLog {
             let mut consecutive_empty_reads = 0;
 
             // Read in batches, checkpointing to advance the reader
-            loop {
-                match walrus.batch_read_for_topic_with_mode(
-                    &topic,
-                    10 * 1024 * 1024,
-                    checkpoint,
-                    false,
-                ) {
-                    Ok(batch) => {
-                        if batch.is_empty() {
-                            consecutive_empty_reads += 1;
-                            // If we get 2 empty reads in a row, we're truly done
-                            if consecutive_empty_reads >= 2 {
-                                break;
-                            }
-                            continue;
-                        }
-                        consecutive_empty_reads = 0;
-
-                        // Convert to Bytes and append
-                        for entry in batch {
-                            all_entries.push(Bytes::from(entry.data));
-                        }
-                    }
-                    Err(_e) => {
-                        // Error reading - stop here
+            while let Ok(batch) =
+                walrus.batch_read_for_topic_with_mode(&topic, 10 * 1024 * 1024, checkpoint, false)
+            {
+                if batch.is_empty() {
+                    consecutive_empty_reads += 1;
+                    if consecutive_empty_reads >= 2 {
                         break;
                     }
+                    continue;
+                }
+                consecutive_empty_reads = 0;
+                for entry in batch {
+                    all_entries.push(Bytes::from(entry.data));
                 }
             }
 
@@ -208,26 +195,21 @@ impl WriteAheadLog {
                 let _ = walrus.reset_read_offset_for_topic(WAL_META_TOPIC);
                 let mut meta_count = 0usize;
                 let mut empty_reads = 0usize;
-                loop {
-                    match walrus.batch_read_for_topic_with_mode(
-                        WAL_META_TOPIC,
-                        1024 * 1024,
-                        checkpoint,
-                        false,
-                    ) {
-                        Ok(batch) => {
-                            if batch.is_empty() {
-                                empty_reads += 1;
-                                if empty_reads >= 2 {
-                                    break;
-                                }
-                                continue;
-                            }
-                            empty_reads = 0;
-                            meta_count += batch.len();
+                while let Ok(batch) = walrus.batch_read_for_topic_with_mode(
+                    WAL_META_TOPIC,
+                    1024 * 1024,
+                    checkpoint,
+                    false,
+                ) {
+                    if batch.is_empty() {
+                        empty_reads += 1;
+                        if empty_reads >= 2 {
+                            break;
                         }
-                        Err(_) => break,
+                        continue;
                     }
+                    empty_reads = 0;
+                    meta_count += batch.len();
                 }
                 if meta_count > 0 {
                     sim_assert(

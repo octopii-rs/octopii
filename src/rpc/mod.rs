@@ -24,8 +24,14 @@ pub struct RpcRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum RequestPayload {
     #[cfg(feature = "openraft")]
-    OpenRaft { kind: String, data: Bytes },
-    Custom { operation: String, data: Bytes },
+    OpenRaft {
+        kind: String,
+        data: Bytes,
+    },
+    Custom {
+        operation: String,
+        data: Bytes,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -37,9 +43,17 @@ pub struct RpcResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ResponsePayload {
     #[cfg(feature = "openraft")]
-    OpenRaft { kind: String, data: Bytes },
-    CustomResponse { success: bool, data: Bytes },
-    Error { message: String },
+    OpenRaft {
+        kind: String,
+        data: Bytes,
+    },
+    CustomResponse {
+        success: bool,
+        data: Bytes,
+    },
+    Error {
+        message: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

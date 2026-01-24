@@ -752,13 +752,7 @@ impl Walrus {
         let buffers = if is_io_uring_enabled() {
             // io_uring path - try to initialize, fall back to mmap if not supported
             let ring_size = (plan.len() + 64).min(4096) as u32;
-            let ring = match io_uring::IoUring::new(ring_size) {
-                Ok(r) => Some(r),
-                Err(_) => {
-                    // io_uring not supported, will fall back to mmap path below
-                    None
-                }
-            };
+            let ring = io_uring::IoUring::new(ring_size).ok();
 
             if let Some(mut ring) = ring {
                 // io_uring is available, use it

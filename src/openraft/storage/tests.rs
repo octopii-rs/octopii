@@ -86,7 +86,7 @@ fn strictly_at_once_wal_log_store_recovery() {
             for _ in 0..OPS_PER_CYCLE {
                 let action = rng.next_usize(7);
                 match action {
-                    0 | 1 | 2 => {
+                    0..=2 => {
                         let term = (rng.next_u64() % 10) + 1;
                         let node_id = (rng.next_u64() % 5) + 1;
                         let leader_id = CommittedLeaderIdOf::<AppTypeConfig>::new(term, node_id);
@@ -112,7 +112,7 @@ fn strictly_at_once_wal_log_store_recovery() {
                         let node_id = (rng.next_u64() % 5) + 1;
                         let vote = openraft::Vote::<AppTypeConfig>::new(term, node_id);
                         if rt
-                            .block_on(store.persist_record(&WalLogRecord::Vote(vote.clone())))
+                            .block_on(store.persist_record(&WalLogRecord::Vote(vote)))
                             .is_ok()
                         {
                             oracle_vote = Some(vote);

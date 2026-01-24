@@ -1,5 +1,4 @@
-use super::config::SimConfig;
-use super::fault::{BandwidthCap, FaultRule, ReorderConfig};
+use super::{BandwidthCap, FaultRule, ReorderConfig, SimConfig};
 use crate::error::{OctopiiError, Result};
 use crate::simulation::SimRng;
 use bytes::Bytes;

@@ -85,6 +85,7 @@ impl Block {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn write_with_trailer(
         &self,
         in_block_offset: u64,

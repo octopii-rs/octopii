@@ -192,10 +192,10 @@ impl ClusterHarness {
         sim::setup(VfsSimConfig {
             seed: params.seed,
             io_error_rate: params.io_error_rate,
-            initial_time_ns: 1700000000_000_000_000,
+            initial_time_ns: 1_700_000_000_000_000_000,
             enable_partial_writes: params.enable_partial_writes,
         });
-        sim_runtime::reset(params.seed, 1700000000_000_000_000);
+        sim_runtime::reset(params.seed, 1_700_000_000_000_000_000);
 
         let router = SimRouter::new(SimConfig {
             seed: params.seed ^ 0xdead_beef,
@@ -287,7 +287,7 @@ impl ClusterHarness {
             self.oracle.set_tick(self.tick_count);
             if self.invariants_enabled {
                 self.invariants.set_tick(self.tick_count);
-                if self.tick_count % self.invariant_interval == 0 {
+                if self.tick_count.is_multiple_of(self.invariant_interval) {
                     self.check_invariants_light();
                 }
             }
@@ -892,20 +892,16 @@ impl ClusterHarness {
             }
         }
 
-        if let Ok(committed) = leader.read_committed().await {
-            if let Some(log_id) = committed {
-                self.log_oracle
-                    .record_committed(leader_id, log_id.index, must_survive);
-            }
+        if let Ok(Some(log_id)) = leader.read_committed().await {
+            self.log_oracle
+                .record_committed(leader_id, log_id.index, must_survive);
         }
 
-        if let Ok(vote) = leader.read_vote().await {
-            if let Some(vote) = vote {
-                let term = vote.leader_id.term();
-                let node_id = vote.leader_id.node_id().copied().unwrap_or_default();
-                self.log_oracle
-                    .record_vote(leader_id, term, node_id, must_survive);
-            }
+        if let Ok(Some(vote)) = leader.read_vote().await {
+            let term = vote.leader_id.term();
+            let node_id = vote.leader_id.node_id().copied().unwrap_or_default();
+            self.log_oracle
+                .record_vote(leader_id, term, node_id, must_survive);
         }
     }
 
@@ -1317,7 +1313,7 @@ impl ClusterHarness {
                         entry.log_id.index
                     );
                 }
-                let term = entry.log_id.leader_id.term as u64;
+                let term = entry.log_id.leader_id.term;
                 let payload_hash = hash_payload(&entry.payload);
                 fingerprint.push((entry.log_id.index, term, payload_hash));
             }

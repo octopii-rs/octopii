@@ -290,27 +290,21 @@ impl Walrus {
                 let mut in_block_off: u64 = 0;
                 #[cfg(feature = "simulation")]
                 let mut entry_count_in_block: usize = 0;
-                loop {
-                    match block_stub.read(in_block_off) {
-                        Ok((_entry, consumed)) => {
-                            sim_assert(consumed > 0, "startup recovery consumed zero bytes");
-                            used += consumed as u64;
-                            in_block_off += consumed as u64;
-                            sim_assert(
-                                in_block_off <= DEFAULT_BLOCK_SIZE,
-                                "startup recovery read past block limit",
-                            );
-                            #[cfg(feature = "simulation")]
-                            {
-                                entry_count_in_block += 1;
-                                // Check for crash after N entries recovered
-                                crate::wal::wal::vfs::sim::recovery_entry_recovered();
-                            }
-                            if in_block_off >= DEFAULT_BLOCK_SIZE {
-                                break;
-                            }
-                        }
-                        Err(_) => break,
+                while let Ok((_entry, consumed)) = block_stub.read(in_block_off) {
+                    sim_assert(consumed > 0, "startup recovery consumed zero bytes");
+                    used += consumed as u64;
+                    in_block_off += consumed as u64;
+                    sim_assert(
+                        in_block_off <= DEFAULT_BLOCK_SIZE,
+                        "startup recovery read past block limit",
+                    );
+                    #[cfg(feature = "simulation")]
+                    {
+                        entry_count_in_block += 1;
+                        crate::wal::wal::vfs::sim::recovery_entry_recovered();
+                    }
+                    if in_block_off >= DEFAULT_BLOCK_SIZE {
+                        break;
                     }
                 }
                 if used == 0 {

@@ -45,7 +45,7 @@ fn test_cluster() {
         .unwrap();
 
     rt.block_on(async {
-        let base = PathBuf::from(std::env::temp_dir()).join("octopii_example_test_cluster");
+        let base = std::env::temp_dir().join("octopii_example_test_cluster");
         let _ = std::fs::remove_dir_all(&base);
 
         let addr1 = "127.0.0.1:9501".parse().unwrap();
@@ -200,7 +200,7 @@ fn test_follower_read() {
         .unwrap();
 
     rt.block_on(async {
-        let base = PathBuf::from(std::env::temp_dir()).join("octopii_example_follower_read");
+        let base = std::env::temp_dir().join("octopii_example_follower_read");
         let _ = std::fs::remove_dir_all(&base);
 
         let addr1 = "127.0.0.1:9511".parse().unwrap();
@@ -336,7 +336,7 @@ fn test_write_forwarding() {
         .unwrap();
 
     rt.block_on(async {
-        let base = PathBuf::from(std::env::temp_dir()).join("octopii_example_write_forwarding");
+        let base = std::env::temp_dir().join("octopii_example_write_forwarding");
         let _ = std::fs::remove_dir_all(&base);
 
         let addr1 = "127.0.0.1:9521".parse().unwrap();
@@ -455,7 +455,7 @@ fn test_membership_change_removal() {
         .unwrap();
 
     rt.block_on(async {
-        let base = PathBuf::from(std::env::temp_dir()).join("octopii_example_removal");
+        let base = std::env::temp_dir().join("octopii_example_removal");
         let _ = std::fs::remove_dir_all(&base);
 
         let addr1 = "127.0.0.1:9531".parse().unwrap();
@@ -574,7 +574,7 @@ fn test_large_entries_replication() {
         .unwrap();
 
     rt.block_on(async {
-        let base = PathBuf::from(std::env::temp_dir()).join("octopii_example_large_entries");
+        let base = std::env::temp_dir().join("octopii_example_large_entries");
         let _ = std::fs::remove_dir_all(&base);
 
         let addr1 = "127.0.0.1:9541".parse().unwrap();
@@ -629,7 +629,7 @@ fn test_large_entries_replication() {
             let payload = format!("SET key_{} {}_{}", i, large_value, i);
             n1.propose(payload.into_bytes())
                 .await
-                .expect(&format!("write key_{}", i));
+                .unwrap_or_else(|_| panic!("write key_{}", i));
         }
 
         // Wait for replication to complete
@@ -669,7 +669,7 @@ fn test_snapshot_transfer() {
         .unwrap();
 
     rt.block_on(async {
-        let base = PathBuf::from(std::env::temp_dir()).join("octopii_example_snapshot");
+        let base = std::env::temp_dir().join("octopii_example_snapshot");
         let _ = std::fs::remove_dir_all(&base);
 
         let addr1 = "127.0.0.1:9551".parse().unwrap();
@@ -703,7 +703,7 @@ fn test_snapshot_transfer() {
             let payload = format!("SET foo{} bar{}", i, i);
             n1.propose(payload.into_bytes())
                 .await
-                .expect(&format!("write {}", i));
+                .unwrap_or_else(|_| panic!("write {}", i));
         }
         sleep(Duration::from_millis(500)).await;
 

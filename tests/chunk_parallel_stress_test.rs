@@ -24,8 +24,8 @@ async fn test_parallel_transfers_to_single_peer() {
     let chunks: Vec<Bytes> = (0..num_chunks)
         .map(|i| {
             let mut data = vec![0u8; chunk_size];
-            for j in 0..chunk_size {
-                data[j] = ((i + j) % 256) as u8;
+            for (j, byte) in data.iter_mut().enumerate() {
+                *byte = ((i + j) % 256) as u8;
             }
             Bytes::from(data)
         })
@@ -136,8 +136,8 @@ async fn test_parallel_transfers_to_multiple_peers() {
         .map(|i| {
             let size = chunk_size_mb * 1024 * 1024;
             let mut data = vec![0u8; size];
-            for j in 0..size {
-                data[j] = ((i * 1000 + j) % 256) as u8;
+            for (j, byte) in data.iter_mut().enumerate() {
+                *byte = ((i * 1000 + j) % 256) as u8;
             }
             Bytes::from(data)
         })
@@ -234,8 +234,8 @@ async fn test_high_concurrency_stress() {
     let chunks: Vec<Bytes> = (0..num_concurrent)
         .map(|i| {
             let mut data = vec![0u8; chunk_size];
-            for j in 0..chunk_size {
-                data[j] = ((i * 100 + j) % 256) as u8;
+            for (j, byte) in data.iter_mut().enumerate() {
+                *byte = ((i * 100 + j) % 256) as u8;
             }
             Bytes::from(data)
         })
@@ -336,8 +336,8 @@ async fn test_burst_transfers() {
     for burst in 0..bursts {
         for i in 0..chunks_per_burst {
             let mut data = vec![0u8; chunk_size];
-            for j in 0..chunk_size {
-                data[j] = ((burst * 1000 + i * 100 + j) % 256) as u8;
+            for (j, byte) in data.iter_mut().enumerate() {
+                *byte = ((burst * 1000 + i * 100 + j) % 256) as u8;
             }
             all_chunks.push(Bytes::from(data));
         }

@@ -14,12 +14,14 @@ pub async fn run_node_example() -> Result<String, Box<dyn Error>> {
     let wal_dir = data_dir.path().join("node");
     std::fs::create_dir_all(&wal_dir)?;
 
-    let mut config = Config::default();
-    config.bind_addr = "127.0.0.1:0".parse()?;
-    config.peers = Vec::new();
-    config.wal_dir = wal_dir;
-    config.is_initial_leader = true;
-    config.worker_threads = 2;
+    let config = Config {
+        bind_addr: "127.0.0.1:0".parse()?,
+        peers: Vec::new(),
+        wal_dir,
+        is_initial_leader: true,
+        worker_threads: 2,
+        ..Default::default()
+    };
 
     let runtime = OctopiiRuntime::from_handle(tokio::runtime::Handle::current());
     let node = OctopiiNode::new(config, runtime).await?;

@@ -34,7 +34,7 @@ mod sim_tests {
     use openraft::{Entry, EntryPayload, LogId, Membership};
     use rkyv::{Archive, Deserialize, Serialize};
     use std::collections::{BTreeMap, BTreeSet, HashMap};
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::sync::Arc;
     use std::time::Duration;
     use tokio::runtime::Builder;
@@ -406,8 +406,8 @@ mod sim_tests {
         );
     }
 
-    fn init_strict_walrus(root_dir: &PathBuf, key: &str) -> Walrus {
-        octopii::wal::wal::__set_thread_wal_data_dir_for_tests(root_dir.clone());
+    fn init_strict_walrus(root_dir: &Path, key: &str) -> Walrus {
+        octopii::wal::wal::__set_thread_wal_data_dir_for_tests(root_dir.to_path_buf());
         Walrus::with_consistency_and_schedule_for_key(
             key,
             ReadConsistency::StrictlyAtOnce,
@@ -3136,7 +3136,7 @@ mod sim_tests {
                 // fire if recovery violated any invariants
                 let log_state = rt.block_on(store.get_log_state()).expect("log state");
                 // Update last_purged_index from recovered state
-                if let Some(purged_id) = log_state.last_purged_log_id.clone() {
+                if let Some(purged_id) = log_state.last_purged_log_id {
                     last_purged_index = purged_id.index;
                 }
                 // next_index must be > last_purged_index (can't append at or before purge point)
@@ -3165,7 +3165,7 @@ mod sim_tests {
                         // Append entries (70% of ops)
                         0..=6 => {
                             let entry = Entry::<AppTypeConfig> {
-                                log_id: LogId::new(leader_id.clone(), next_index),
+                                log_id: LogId::new(leader_id, next_index),
                                 payload: EntryPayload::Normal(AppEntry(b"data".to_vec())),
                             };
 
@@ -3179,7 +3179,7 @@ mod sim_tests {
                             // Purge to next_index - 2 to leave at least one entry
                             if next_index > last_purged_index + 2 {
                                 let purge_to = last_purged_index + 1;
-                                let log_id = LogId::new(leader_id.clone(), purge_to);
+                                let log_id = LogId::new(leader_id, purge_to);
 
                                 if rt.block_on(store.purge(log_id)).is_ok() {
                                     last_purged_index = purge_to;

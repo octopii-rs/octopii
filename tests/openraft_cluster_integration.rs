@@ -15,7 +15,7 @@ fn next_addr_with_suffix(suffix: u16) -> SocketAddr {
         // Allocate ports in predictable groups of 10 to guarantee the desired suffix.
         let group = NEXT_PORT_GROUP.fetch_add(1, Ordering::SeqCst);
         let port = group.saturating_mul(10).saturating_add(suffix);
-        if port < 1024 || port > 65000 {
+        if !(1024..=65000).contains(&port) {
             NEXT_PORT_GROUP.store(4000, Ordering::SeqCst);
             continue;
         }

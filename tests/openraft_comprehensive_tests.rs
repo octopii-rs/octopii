@@ -532,12 +532,14 @@ fn test_five_node_cluster_majority_requirement() {
             let node = Arc::new(
                 OctopiiNode::new(config, runtime.clone())
                     .await
-                    .expect(&format!("create n{}", id)),
+                    .unwrap_or_else(|_| panic!("create n{}", id)),
             );
-            node.start().await.expect(&format!("start n{}", id));
+            node.start()
+                .await
+                .unwrap_or_else(|_| panic!("start n{}", id));
             n1.add_learner(id, addr)
                 .await
-                .expect(&format!("add n{} as learner", id));
+                .unwrap_or_else(|_| panic!("add n{} as learner", id));
 
             for (existing_id, existing_addr) in address_book.iter() {
                 let existing = if *existing_id == 1 {
@@ -559,7 +561,7 @@ fn test_five_node_cluster_majority_requirement() {
 
             n1.promote_learner(id)
                 .await
-                .expect(&format!("promote n{}", id));
+                .unwrap_or_else(|_| panic!("promote n{}", id));
             wait_until_voter(n1.as_ref(), "n1", id).await;
             wait_until_voter(node.as_ref(), &format!("n{}", id), id).await;
             node_handles.insert(id, node);

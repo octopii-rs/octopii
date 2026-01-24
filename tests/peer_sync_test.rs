@@ -1,6 +1,6 @@
 use octopii::{Config, OctopiiNode, OctopiiRuntime};
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::time::Duration;
 use tokio::time::sleep;
@@ -12,7 +12,7 @@ fn next_port() -> u16 {
 }
 
 fn node_config(
-    base: &PathBuf,
+    base: &Path,
     node_id: u64,
     addr: SocketAddr,
     peers: Vec<SocketAddr>,

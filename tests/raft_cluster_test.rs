@@ -105,12 +105,8 @@ fn test_three_node_cluster_basic() {
         println!("Query result from node1: {:?}", query_result);
 
         // If the proposal succeeded, verify we can read it
-        if query_result.is_ok() {
-            assert_eq!(
-                query_result.unwrap(),
-                bytes::Bytes::from("bar"),
-                "GET should return bar"
-            );
+        if let Ok(value) = query_result {
+            assert_eq!(value, bytes::Bytes::from("bar"), "GET should return bar");
             println!("✓ Value successfully stored and retrieved on leader");
         }
 
