@@ -389,7 +389,7 @@ mod sim_tests {
         sim::setup(SimConfig {
             seed,
             io_error_rate: error_rate,
-            initial_time_ns: 1700000000_000_000_000,
+            initial_time_ns: 1_700_000_000_000_000_000,
             enable_partial_writes: partial_writes,
         });
 
@@ -664,7 +664,7 @@ mod sim_tests {
         sim::setup(SimConfig {
             seed: 4242,
             io_error_rate: 0.0,
-            initial_time_ns: 1700000000_000_000_000,
+            initial_time_ns: 1_700_000_000_000_000_000,
             enable_partial_writes: false,
         });
 
@@ -706,7 +706,7 @@ mod sim_tests {
         sim::setup(SimConfig {
             seed: 4243,
             io_error_rate: 0.0,
-            initial_time_ns: 1700000000_000_000_000,
+            initial_time_ns: 1_700_000_000_000_000_000,
             enable_partial_writes: false,
         });
 
@@ -746,7 +746,7 @@ mod sim_tests {
         sim::setup(SimConfig {
             seed: 4244,
             io_error_rate: 0.0,
-            initial_time_ns: 1700000000_000_000_000,
+            initial_time_ns: 1_700_000_000_000_000_000,
             enable_partial_writes: false,
         });
 
@@ -796,7 +796,7 @@ mod sim_tests {
         sim::setup(SimConfig {
             seed: 9101,
             io_error_rate: 0.0,
-            initial_time_ns: 1700000000_000_000_000,
+            initial_time_ns: 1_700_000_000_000_000_000,
             enable_partial_writes: false,
         });
 
@@ -884,7 +884,7 @@ mod sim_tests {
         sim::setup(SimConfig {
             seed: 9102,
             io_error_rate: 0.0,
-            initial_time_ns: 1700000000_000_000_000,
+            initial_time_ns: 1_700_000_000_000_000_000,
             enable_partial_writes: false,
         });
 
@@ -959,7 +959,7 @@ mod sim_tests {
         sim::setup(SimConfig {
             seed: 9107,
             io_error_rate: 0.0,
-            initial_time_ns: 1700000000_000_000_000,
+            initial_time_ns: 1_700_000_000_000_000_000,
             enable_partial_writes: false,
         });
 
@@ -1184,7 +1184,7 @@ mod sim_tests {
         sim::setup(SimConfig {
             seed: 9105,
             io_error_rate: 0.0,
-            initial_time_ns: 1700000000_000_000_000,
+            initial_time_ns: 1_700_000_000_000_000_000,
             enable_partial_writes: false,
         });
 
@@ -1234,7 +1234,7 @@ mod sim_tests {
         sim::setup(SimConfig {
             seed: 9106,
             io_error_rate: 0.0,
-            initial_time_ns: 1700000000_000_000_000,
+            initial_time_ns: 1_700_000_000_000_000_000,
             enable_partial_writes: false,
         });
 

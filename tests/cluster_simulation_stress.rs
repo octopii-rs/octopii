@@ -50,6 +50,7 @@ mod cluster_sim_stress {
         (jobs.max(1), start, count)
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn run_seed(
         size: usize,
         seed: u64,
@@ -160,7 +161,7 @@ mod cluster_sim_stress {
     fn stress_cluster_parallel_seed_sweep() {
         let (jobs, start, count) = parallel_config();
         let seeds: Vec<u64> = (start..(start + count)).collect();
-        let chunk_size = ((count as usize) + jobs - 1) / jobs;
+        let chunk_size = (count as usize).div_ceil(jobs);
         let mut handles = Vec::new();
         for chunk in seeds.chunks(chunk_size) {
             let chunk = chunk.to_vec();

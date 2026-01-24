@@ -585,7 +585,7 @@ pub(crate) async fn append_wal_record(wal: &WriteAheadLog, data: Bytes) -> io::R
     {
         wal.append(data)
             .await
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+            .map_err(|e| io::Error::other(e.to_string()))?;
         Ok(())
     }
 }

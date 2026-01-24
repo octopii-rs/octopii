@@ -273,9 +273,9 @@ pub(super) fn start_background_workers(fsync_schedule: FsyncSchedule) -> Backgro
             thread::sleep(Duration::from_millis(sleep_millis));
             worker.tick();
         });
-        return BackgroundHandle {
+        BackgroundHandle {
             tx: tx_arc,
             worker: None,
-        };
+        }
     }
 }

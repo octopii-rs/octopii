@@ -475,7 +475,7 @@ mod comprehensive_tests {
             harness.run_oracle_workload(small_ops_count() / 2).await;
 
             // Crash a random node
-            let crash_idx = (cycle % harness.nodes.len()) as usize;
+            let crash_idx = cycle % harness.nodes.len();
             harness
                 .crash_and_recover_node(crash_idx, CrashReason::Scheduled)
                 .await;
@@ -502,7 +502,7 @@ mod comprehensive_tests {
 
             harness.run_oracle_workload(small_ops_count() / 2).await;
 
-            let crash_idx = ((cycle * 3) % harness.nodes.len()) as usize;
+            let crash_idx = (cycle * 3) % harness.nodes.len();
             harness
                 .crash_and_recover_node(crash_idx, CrashReason::Scheduled)
                 .await;
@@ -530,7 +530,7 @@ mod comprehensive_tests {
             harness.run_oracle_workload(small_ops_count() / 3).await;
 
             // Crash a random node
-            let crash_idx = ((cycle * 7) % harness.nodes.len()) as usize;
+            let crash_idx = (cycle * 7) % harness.nodes.len();
             harness
                 .crash_and_recover_node(crash_idx, CrashReason::Scheduled)
                 .await;

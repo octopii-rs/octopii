@@ -444,6 +444,7 @@ pub(crate) struct QueuedMsg {
 }
 
 impl QueuedMsg {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         from: SocketAddr,
         to: SocketAddr,

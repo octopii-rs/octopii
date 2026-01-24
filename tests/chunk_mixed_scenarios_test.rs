@@ -43,7 +43,7 @@ async fn test_mixed_file_and_memory_transfers() {
     let mem2 = Bytes::from(vec![2u8; 6 * 1024 * 1024]); // 6MB
     let mem3 = Bytes::from(vec![3u8; 2 * 1024 * 1024]); // 2MB
 
-    let sources = vec![
+    let sources = [
         ChunkSource::File(file1.clone()),
         ChunkSource::Memory(mem1.clone()),
         ChunkSource::File(file2.clone()),
@@ -125,7 +125,7 @@ async fn test_varying_chunk_sizes_parallel() {
     let actual_addr2 = transport2.local_addr().unwrap();
 
     // Create chunks of varying sizes: 1KB, 10KB, 100KB, 1MB, 5MB, 10MB
-    let sizes = vec![
+    let sizes = [
         1024,             // 1KB
         10 * 1024,        // 10KB
         100 * 1024,       // 100KB
@@ -233,8 +233,8 @@ async fn test_rapid_small_chunks() {
     let chunks: Vec<Bytes> = (0..num_chunks)
         .map(|i| {
             let mut data = vec![0u8; chunk_size];
-            for j in 0..chunk_size {
-                data[j] = ((i + j) % 256) as u8;
+            for (j, byte) in data.iter_mut().take(chunk_size).enumerate() {
+                *byte = ((i + j) % 256) as u8;
             }
             Bytes::from(data)
         })

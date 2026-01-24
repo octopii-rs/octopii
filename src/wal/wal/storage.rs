@@ -303,17 +303,17 @@ impl SharedMmapKeeper {
 
         // Double-check with a fresh read lock to avoid unnecessary write lock
         {
-            let keeper = keeper_lock.read().map_err(|_| {
-                std::io::Error::new(std::io::ErrorKind::Other, "mmap keeper read lock poisoned")
-            })?;
+            let keeper = keeper_lock
+                .read()
+                .map_err(|_| std::io::Error::other("mmap keeper read lock poisoned"))?;
             if let Some(existing) = keeper.data.get(path) {
                 return Ok(existing.clone());
             }
         }
 
-        let mut keeper = keeper_lock.write().map_err(|_| {
-            std::io::Error::new(std::io::ErrorKind::Other, "mmap keeper write lock poisoned")
-        })?;
+        let mut keeper = keeper_lock
+            .write()
+            .map_err(|_| std::io::Error::other("mmap keeper write lock poisoned"))?;
         if let Some(existing) = keeper.data.get(path) {
             return Ok(existing.clone());
         }
