@@ -1,5 +1,6 @@
 pub mod runtime;
 
+pub mod blob_store;
 pub mod chunk;
 pub mod config;
 pub mod error;
@@ -17,6 +18,7 @@ pub mod state_machine;
 pub mod transport;
 pub mod wal;
 
+pub use blob_store::BlobStore;
 pub use chunk::{ChunkSource, TransferResult};
 pub use config::Config;
 pub use error::{OctopiiError, Result};

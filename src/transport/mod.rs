@@ -64,6 +64,31 @@ pub trait Peer: Send + Sync {
             ))
         })
     }
+
+    /// Send chunk with hash-first deduplication.
+    /// Returns (bytes_transferred, was_needed).
+    /// If !was_needed, peer already had it - no data sent.
+    fn send_chunk_dedup(&self, _chunk: ChunkSource) -> TransportFut<'_, (u64, bool)> {
+        Box::pin(async {
+            Err(OctopiiError::Transport(
+                "send_chunk_dedup not supported".to_string(),
+            ))
+        })
+    }
+
+    /// Receive chunk with hash-first deduplication.
+    /// Checks BlobStore, skips transfer if exists.
+    /// Returns hash of received/existing chunk.
+    fn recv_chunk_dedup<'a>(
+        &'a self,
+        _store: &'a crate::blob_store::BlobStore,
+    ) -> TransportFut<'a, Option<[u8; 32]>> {
+        Box::pin(async {
+            Err(OctopiiError::Transport(
+                "recv_chunk_dedup not supported".to_string(),
+            ))
+        })
+    }
 }
 
 pub struct QuicTransport {
