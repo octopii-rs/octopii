@@ -38,7 +38,7 @@ impl PeerConnection {
         self.connection.stats()
     }
 
-    pub async fn send_chunk_verified(&self, chunk: &ChunkSource) -> Result<u64> {
+    pub async fn send_chunk_verified(&self, chunk: ChunkSource) -> Result<u64> {
         send_chunk_verified(&self.connection, chunk).await
     }
 
@@ -68,9 +68,8 @@ impl Peer for PeerConnection {
         PeerConnection::is_closed(self)
     }
 
-    fn send_chunk_verified(&self, chunk: &ChunkSource) -> super::TransportFut<'_, u64> {
-        let chunk = chunk.clone();
-        Box::pin(async move { PeerConnection::send_chunk_verified(self, &chunk).await })
+    fn send_chunk_verified(&self, chunk: ChunkSource) -> super::TransportFut<'_, u64> {
+        Box::pin(async move { PeerConnection::send_chunk_verified(self, chunk).await })
     }
 
     fn recv_chunk_verified(&self) -> super::TransportFut<'_, Option<Bytes>> {
@@ -100,32 +99,59 @@ pub async fn send_message(connection: &Connection, data: Bytes) -> Result<()> {
     Ok(())
 }
 
-pub async fn send_chunk_verified(connection: &Connection, chunk: &ChunkSource) -> Result<u64> {
+pub async fn send_chunk_verified(connection: &Connection, chunk: ChunkSource) -> Result<u64> {
+    use tokio::io::AsyncReadExt;
+
     let (mut send_stream, mut recv_stream) = connection.open_bi().await?;
 
-    let (data, size, checksum) = match chunk {
+    let (size, final_checksum) = match chunk {
         ChunkSource::Memory(bytes) => {
             let mut hasher = Sha256::new();
-            hasher.update(bytes);
-            let hash = hasher.finalize();
-            (Some(bytes.clone()), bytes.len() as u64, hash.to_vec())
+            hasher.update(&bytes);
+            let checksum = hasher.finalize().to_vec();
+            let size = bytes.len() as u64;
+
+            send_stream.write_all(&size.to_le_bytes()).await?;
+            send_stream.write_all(&bytes).await?;
+
+            (size, checksum)
         }
         ChunkSource::File(path) => {
-            let metadata = tokio::fs::metadata(path).await?;
+            let metadata = tokio::fs::metadata(&path).await?;
             let size = metadata.len();
-            (None, size, Vec::new())
+
+            send_stream.write_all(&size.to_le_bytes()).await?;
+            let checksum = stream_file(&mut send_stream, &path).await?;
+
+            (size, checksum)
         }
-    };
+        ChunkSource::Stream { size, mut reader } => {
+            send_stream.write_all(&size.to_le_bytes()).await?;
 
-    send_stream.write_all(&size.to_le_bytes()).await?;
+            let mut hasher = Sha256::new();
+            let mut buffer = vec![0u8; BUFFER_SIZE];
+            let mut remaining = size;
 
-    let final_checksum = if let Some(bytes) = data {
-        send_stream.write_all(&bytes).await?;
-        checksum
-    } else if let ChunkSource::File(path) = chunk {
-        stream_file(&mut send_stream, path).await?
-    } else {
-        unreachable!()
+            while remaining > 0 {
+                let to_read = std::cmp::min(BUFFER_SIZE as u64, remaining) as usize;
+                let n = reader
+                    .read(&mut buffer[..to_read])
+                    .await
+                    .map_err(|e| OctopiiError::Transport(format!("Stream read error: {}", e)))?;
+                if n == 0 {
+                    return Err(OctopiiError::Transport(format!(
+                        "Stream ended early: expected {} more bytes",
+                        remaining
+                    )));
+                }
+                hasher.update(&buffer[..n]);
+                send_stream.write_all(&buffer[..n]).await?;
+                remaining -= n as u64;
+            }
+
+            let checksum = hasher.finalize().to_vec();
+            (size, checksum)
+        }
     };
 
     send_stream.write_all(&final_checksum).await?;

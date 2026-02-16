@@ -22,7 +22,7 @@ async fn test_nonexistent_file() {
     // Connection might fail or file open might fail - either is acceptable
     // The key is it doesn't panic and handles the error gracefully
     if let Ok(peer) = peer_result {
-        let result = peer.send_chunk_verified(&chunk).await;
+        let result = peer.send_chunk_verified(chunk).await;
         assert!(result.is_err(), "Should fail when file doesn't exist");
     }
 
@@ -54,7 +54,7 @@ async fn test_empty_chunk() {
 
     // Send empty chunk
     let peer = transport1.connect(actual_addr2).await.unwrap();
-    let result = peer.send_chunk_verified(&chunk).await.unwrap();
+    let result = peer.send_chunk_verified(chunk).await.unwrap();
 
     assert_eq!(result, 0, "Empty chunk should transfer 0 bytes");
 
@@ -116,7 +116,7 @@ async fn test_very_small_chunks_edge_cases() {
 
         // Send
         let peer = transport1.connect(actual_addr2).await.unwrap();
-        let bytes_sent = peer.send_chunk_verified(&chunk).await.unwrap();
+        let bytes_sent = peer.send_chunk_verified(chunk).await.unwrap();
 
         assert_eq!(bytes_sent, size as u64);
 
@@ -157,7 +157,7 @@ async fn test_rapid_connect_disconnect() {
         // Send
         let peer = transport1.connect(actual_addr2).await.unwrap();
         let result = peer
-            .send_chunk_verified(&ChunkSource::Memory(chunk.clone()))
+            .send_chunk_verified(ChunkSource::Memory(chunk.clone()))
             .await;
 
         assert!(result.is_ok(), "Transfer {} should succeed", i);
@@ -197,7 +197,7 @@ async fn test_transfer_with_exactly_buffer_size() {
 
     // Send
     let peer = transport1.connect(actual_addr2).await.unwrap();
-    let bytes_sent = peer.send_chunk_verified(&chunk).await.unwrap();
+    let bytes_sent = peer.send_chunk_verified(chunk).await.unwrap();
 
     assert_eq!(bytes_sent, size as u64);
 
@@ -236,7 +236,7 @@ async fn test_transfer_multiple_of_buffer_size() {
 
     // Send
     let peer = transport1.connect(actual_addr2).await.unwrap();
-    let bytes_sent = peer.send_chunk_verified(&chunk).await.unwrap();
+    let bytes_sent = peer.send_chunk_verified(chunk).await.unwrap();
 
     assert_eq!(bytes_sent, size as u64);
 
@@ -275,7 +275,7 @@ async fn test_transfer_not_multiple_of_buffer_size() {
 
     // Send
     let peer = transport1.connect(actual_addr2).await.unwrap();
-    let bytes_sent = peer.send_chunk_verified(&chunk).await.unwrap();
+    let bytes_sent = peer.send_chunk_verified(chunk).await.unwrap();
 
     assert_eq!(bytes_sent, size as u64);
 

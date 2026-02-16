@@ -168,20 +168,29 @@ impl Peer for SimPeer {
             || self.router.is_closed(self.remote, self.remote_epoch)
     }
 
-    fn send_chunk_verified(&self, chunk: &ChunkSource) -> TransportFut<'_, u64> {
+    fn send_chunk_verified(&self, chunk: ChunkSource) -> TransportFut<'_, u64> {
+        use tokio::io::AsyncReadExt;
+
         let router = self.router.clone();
         let local = self.local;
         let remote = self.remote;
         let local_epoch = self.local_epoch;
         let remote_epoch = self.remote_epoch;
-        let chunk = chunk.clone();
 
         Box::pin(async move {
-            let data = match &chunk {
+            let data = match chunk {
                 ChunkSource::File(path) => tokio::fs::read(path)
                     .await
                     .map_err(|e| OctopiiError::Transport(format!("read file: {}", e)))?,
                 ChunkSource::Memory(bytes) => bytes.to_vec(),
+                ChunkSource::Stream { size, mut reader } => {
+                    let mut buf = Vec::with_capacity(size as usize);
+                    reader
+                        .read_to_end(&mut buf)
+                        .await
+                        .map_err(|e| OctopiiError::Transport(format!("read stream: {}", e)))?;
+                    buf
+                }
             };
 
             let size = data.len() as u64;

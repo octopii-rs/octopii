@@ -6,6 +6,7 @@ use bytes::Bytes;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
+use tokio::io::AsyncRead;
 
 pub struct ShippingLane {
     transport: Arc<dyn Transport>,
@@ -19,7 +20,7 @@ impl ShippingLane {
     async fn send_chunk(&self, addr: SocketAddr, chunk: ChunkSource) -> Result<TransferResult> {
         let peer = self.transport.connect(addr).await?;
         let start = sim_time::now();
-        match peer.send_chunk_verified(&chunk).await {
+        match peer.send_chunk_verified(chunk).await {
             Ok(bytes) => Ok(TransferResult::success(
                 addr,
                 bytes,
@@ -60,6 +61,26 @@ impl ShippingLane {
 
     pub async fn send_memory(&self, addr: SocketAddr, payload: Bytes) -> Result<TransferResult> {
         let chunk = ChunkSource::Memory(payload);
+        self.send_chunk(addr, chunk).await
+    }
+
+    /// Send data from an AsyncRead stream.
+    ///
+    /// The size must be known upfront (e.g., from HTTP Content-Length header).
+    /// Data is streamed in 64KB chunks while computing the checksum.
+    pub async fn send_stream<R>(
+        &self,
+        addr: SocketAddr,
+        size: u64,
+        reader: R,
+    ) -> Result<TransferResult>
+    where
+        R: AsyncRead + Send + Sync + 'static,
+    {
+        let chunk = ChunkSource::Stream {
+            size,
+            reader: Box::pin(reader),
+        };
         self.send_chunk(addr, chunk).await
     }
 
