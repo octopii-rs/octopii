@@ -168,20 +168,29 @@ impl Peer for SimPeer {
             || self.router.is_closed(self.remote, self.remote_epoch)
     }
 
-    fn send_chunk_verified(&self, chunk: &ChunkSource) -> TransportFut<'_, u64> {
+    fn send_chunk_verified(&self, chunk: ChunkSource) -> TransportFut<'_, u64> {
+        use tokio::io::AsyncReadExt;
+
         let router = self.router.clone();
         let local = self.local;
         let remote = self.remote;
         let local_epoch = self.local_epoch;
         let remote_epoch = self.remote_epoch;
-        let chunk = chunk.clone();
 
         Box::pin(async move {
-            let data = match &chunk {
+            let data = match chunk {
                 ChunkSource::File(path) => tokio::fs::read(path)
                     .await
                     .map_err(|e| OctopiiError::Transport(format!("read file: {}", e)))?,
                 ChunkSource::Memory(bytes) => bytes.to_vec(),
+                ChunkSource::Stream { size, mut reader } => {
+                    let mut buf = Vec::with_capacity(size as usize);
+                    reader
+                        .read_to_end(&mut buf)
+                        .await
+                        .map_err(|e| OctopiiError::Transport(format!("read stream: {}", e)))?;
+                    buf
+                }
             };
 
             let size = data.len() as u64;
@@ -372,6 +381,186 @@ impl Peer for SimPeer {
             )?;
 
             Ok(Some(size as u64))
+        })
+    }
+
+    fn send_chunk_dedup(&self, chunk: ChunkSource) -> TransportFut<'_, (u64, bool)> {
+        use tokio::io::AsyncReadExt;
+
+        let router = self.router.clone();
+        let local = self.local;
+        let remote = self.remote;
+        let local_epoch = self.local_epoch;
+        let remote_epoch = self.remote_epoch;
+
+        Box::pin(async move {
+            let data = match chunk {
+                ChunkSource::File(path) => tokio::fs::read(path)
+                    .await
+                    .map_err(|e| OctopiiError::Transport(format!("read file: {}", e)))?,
+                ChunkSource::Memory(bytes) => bytes.to_vec(),
+                ChunkSource::Stream { size, mut reader } => {
+                    let mut buf = Vec::with_capacity(size as usize);
+                    reader
+                        .read_to_end(&mut buf)
+                        .await
+                        .map_err(|e| OctopiiError::Transport(format!("read stream: {}", e)))?;
+                    buf
+                }
+            };
+
+            let size = data.len() as u64;
+            let hash: [u8; 32] = Sha256::digest(&data).into();
+
+            let mut header = BytesMut::with_capacity(40);
+            header.put_slice(&hash);
+            header.put_u64(size);
+            router.enqueue(local, local_epoch, remote, remote_epoch, header.freeze())?;
+
+            let response = loop {
+                if router.is_closed(local, local_epoch) || router.is_closed(remote, remote_epoch) {
+                    return Err(OctopiiError::Transport("connection closed".to_string()));
+                }
+                if let Some(data) = router.recv_from(local, local_epoch, remote)? {
+                    break data;
+                }
+                if let Some(notify) = router.notify_handle(local, local_epoch) {
+                    notify.notified().await;
+                }
+            };
+
+            if response.len() == 1 && response[0] == 1 {
+                return Ok((0, false));
+            }
+
+            router.enqueue(
+                local,
+                local_epoch,
+                remote,
+                remote_epoch,
+                Bytes::from(data),
+            )?;
+
+            let ack = loop {
+                if router.is_closed(local, local_epoch) || router.is_closed(remote, remote_epoch) {
+                    return Err(OctopiiError::Transport("connection closed".to_string()));
+                }
+                if let Some(data) = router.recv_from(local, local_epoch, remote)? {
+                    break data;
+                }
+                if let Some(notify) = router.notify_handle(local, local_epoch) {
+                    notify.notified().await;
+                }
+            };
+
+            if ack.len() == 1 && ack[0] == 0 {
+                Ok((size, true))
+            } else {
+                Err(OctopiiError::Transport(
+                    "hash verification failed on peer".to_string(),
+                ))
+            }
+        })
+    }
+
+    fn recv_chunk_dedup<'a>(
+        &'a self,
+        store: &'a crate::blob_store::BlobStore,
+    ) -> TransportFut<'a, Option<[u8; 32]>> {
+        let router = self.router.clone();
+        let local = self.local;
+        let remote = self.remote;
+        let local_epoch = self.local_epoch;
+        let remote_epoch = self.remote_epoch;
+
+        Box::pin(async move {
+            let header = loop {
+                if router.is_closed(local, local_epoch) || router.is_closed(remote, remote_epoch) {
+                    return Ok(None);
+                }
+                if let Some(data) = router.recv_from(local, local_epoch, remote)? {
+                    break data;
+                }
+                if let Some(notify) = router.notify_handle(local, local_epoch) {
+                    notify.notified().await;
+                }
+            };
+
+            if header.len() != 40 {
+                return Err(OctopiiError::Transport(
+                    "invalid dedup header length".to_string(),
+                ));
+            }
+
+            let mut hash = [0u8; 32];
+            hash.copy_from_slice(&header[..32]);
+            let size = (&header[32..]).get_u64() as usize;
+
+            if store.exists(&hash) {
+                router.enqueue(
+                    local,
+                    local_epoch,
+                    remote,
+                    remote_epoch,
+                    Bytes::from_static(&[1]),
+                )?;
+                return Ok(Some(hash));
+            }
+
+            router.enqueue(
+                local,
+                local_epoch,
+                remote,
+                remote_epoch,
+                Bytes::from_static(&[0]),
+            )?;
+
+            let data = loop {
+                if router.is_closed(local, local_epoch) || router.is_closed(remote, remote_epoch) {
+                    return Err(OctopiiError::Transport("connection closed".to_string()));
+                }
+                if let Some(data) = router.recv_from(local, local_epoch, remote)? {
+                    break data;
+                }
+                if let Some(notify) = router.notify_handle(local, local_epoch) {
+                    notify.notified().await;
+                }
+            };
+
+            if data.len() != size {
+                router.enqueue(
+                    local,
+                    local_epoch,
+                    remote,
+                    remote_epoch,
+                    Bytes::from_static(&[1]),
+                )?;
+                return Err(OctopiiError::Transport("size mismatch".to_string()));
+            }
+
+            let computed: [u8; 32] = Sha256::digest(&data).into();
+            if computed != hash {
+                router.enqueue(
+                    local,
+                    local_epoch,
+                    remote,
+                    remote_epoch,
+                    Bytes::from_static(&[1]),
+                )?;
+                return Err(OctopiiError::Transport("hash mismatch".to_string()));
+            }
+
+            store.put_with_hash(&hash, &data)?;
+
+            router.enqueue(
+                local,
+                local_epoch,
+                remote,
+                remote_epoch,
+                Bytes::from_static(&[0]),
+            )?;
+
+            Ok(Some(hash))
         })
     }
 }

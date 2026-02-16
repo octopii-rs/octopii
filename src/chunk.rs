@@ -1,12 +1,17 @@
 use bytes::Bytes;
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::time::Duration;
+use tokio::io::AsyncRead;
 
-#[derive(Debug, Clone)]
 pub enum ChunkSource {
     File(PathBuf),
     Memory(Bytes),
+    Stream {
+        size: u64,
+        reader: Pin<Box<dyn AsyncRead + Send + Sync>>,
+    },
 }
 
 #[derive(Debug, Clone)]

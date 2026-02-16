@@ -76,7 +76,7 @@ async fn test_shipping_lane_receive_file_from_peer() {
         let source_path = source_path.clone();
         tokio::spawn(async move {
             let (_, peer) = transport.accept().await.unwrap();
-            peer.send_chunk_verified(&ChunkSource::File(source_path))
+            peer.send_chunk_verified(ChunkSource::File(source_path))
                 .await
                 .unwrap();
         })
@@ -162,7 +162,7 @@ async fn test_shipping_lane_receive_memory() {
         let transport = Arc::clone(&server);
         tokio::spawn(async move {
             let (_, peer) = transport.accept().await.unwrap();
-            peer.send_chunk_verified(&ChunkSource::Memory(payload))
+            peer.send_chunk_verified(ChunkSource::Memory(payload))
                 .await
                 .unwrap();
         })
@@ -336,6 +336,53 @@ async fn test_shipping_lane_concurrent_memory_transfers() {
     expected.sort();
     actual.sort();
     assert_eq!(expected, actual);
+
+    sender.close();
+    receiver.close();
+}
+
+#[tokio::test]
+async fn test_shipping_lane_send_stream() {
+    let sender = Arc::new(
+        QuicTransport::new("127.0.0.1:0".parse().unwrap())
+            .await
+            .unwrap(),
+    );
+    let receiver = Arc::new(
+        QuicTransport::new("127.0.0.1:0".parse().unwrap())
+            .await
+            .unwrap(),
+    );
+
+    let receiver_addr = receiver.local_addr().unwrap();
+    let payload: Vec<u8> = (0..64 * 1024).map(|i| (i % 251) as u8).collect();
+    let expected = payload.clone();
+
+    let recv_handle = {
+        let transport = Arc::clone(&receiver);
+        tokio::spawn(async move {
+            let (_, peer) = transport.accept().await.unwrap();
+            peer.recv_chunk_verified().await.unwrap().unwrap()
+        })
+    };
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let lane = ShippingLane::new(Arc::clone(&sender) as Arc<dyn Transport>);
+
+    // Create an AsyncRead from the payload using std::io::Cursor
+    let reader = std::io::Cursor::new(payload.clone());
+    let result = lane
+        .send_stream(receiver_addr, payload.len() as u64, reader)
+        .await
+        .unwrap();
+
+    assert!(result.success);
+    assert_eq!(result.bytes_transferred, expected.len() as u64);
+    assert!(result.checksum_verified);
+
+    let received = recv_handle.await.unwrap();
+    assert_eq!(received.as_ref(), expected.as_slice());
 
     sender.close();
     receiver.close();

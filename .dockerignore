@@ -1,0 +1,23 @@
+# Build artifacts
+**/target
+**/.git
+**/.gitignore
+
+# Test artifacts
+octopii_test_artifacts/
+_octopii_wal_files/
+
+# IDE/OS
+.DS_Store
+**/.idea
+**/.vscode
+*.swp
+*.swo
+
+# Documentation build
+**/docs/build
+
+# Local data (be specific to avoid excluding source code)
+/data
+examples/*/data
+**/*.log

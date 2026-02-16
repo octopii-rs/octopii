@@ -38,7 +38,7 @@ impl PeerConnection {
         self.connection.stats()
     }
 
-    pub async fn send_chunk_verified(&self, chunk: &ChunkSource) -> Result<u64> {
+    pub async fn send_chunk_verified(&self, chunk: ChunkSource) -> Result<u64> {
         send_chunk_verified(&self.connection, chunk).await
     }
 
@@ -52,6 +52,20 @@ impl PeerConnection {
 
     pub async fn recv_chunk_to_path<P: AsRef<Path>>(&self, path: P) -> Result<Option<u64>> {
         self.recv_chunk_verified_to_file(path.as_ref()).await
+    }
+
+    /// Send chunk with hash-first deduplication.
+    /// Returns (bytes_transferred, was_needed).
+    pub async fn send_chunk_dedup(&self, chunk: ChunkSource) -> Result<(u64, bool)> {
+        send_chunk_dedup(&self.connection, chunk).await
+    }
+
+    /// Receive chunk with hash-first deduplication.
+    pub async fn recv_chunk_dedup(
+        &self,
+        store: &crate::blob_store::BlobStore,
+    ) -> Result<Option<[u8; 32]>> {
+        recv_chunk_dedup(&self.connection, store).await
     }
 }
 
@@ -68,9 +82,8 @@ impl Peer for PeerConnection {
         PeerConnection::is_closed(self)
     }
 
-    fn send_chunk_verified(&self, chunk: &ChunkSource) -> super::TransportFut<'_, u64> {
-        let chunk = chunk.clone();
-        Box::pin(async move { PeerConnection::send_chunk_verified(self, &chunk).await })
+    fn send_chunk_verified(&self, chunk: ChunkSource) -> super::TransportFut<'_, u64> {
+        Box::pin(async move { PeerConnection::send_chunk_verified(self, chunk).await })
     }
 
     fn recv_chunk_verified(&self) -> super::TransportFut<'_, Option<Bytes>> {
@@ -80,6 +93,17 @@ impl Peer for PeerConnection {
     fn recv_chunk_verified_to_file(&self, path: &Path) -> super::TransportFut<'_, Option<u64>> {
         let path = path.to_path_buf();
         Box::pin(async move { PeerConnection::recv_chunk_verified_to_file(self, &path).await })
+    }
+
+    fn send_chunk_dedup(&self, chunk: ChunkSource) -> super::TransportFut<'_, (u64, bool)> {
+        Box::pin(async move { PeerConnection::send_chunk_dedup(self, chunk).await })
+    }
+
+    fn recv_chunk_dedup<'a>(
+        &'a self,
+        store: &'a crate::blob_store::BlobStore,
+    ) -> super::TransportFut<'a, Option<[u8; 32]>> {
+        Box::pin(async move { PeerConnection::recv_chunk_dedup(self, store).await })
     }
 }
 
@@ -100,32 +124,59 @@ pub async fn send_message(connection: &Connection, data: Bytes) -> Result<()> {
     Ok(())
 }
 
-pub async fn send_chunk_verified(connection: &Connection, chunk: &ChunkSource) -> Result<u64> {
+pub async fn send_chunk_verified(connection: &Connection, chunk: ChunkSource) -> Result<u64> {
+    use tokio::io::AsyncReadExt;
+
     let (mut send_stream, mut recv_stream) = connection.open_bi().await?;
 
-    let (data, size, checksum) = match chunk {
+    let (size, final_checksum) = match chunk {
         ChunkSource::Memory(bytes) => {
             let mut hasher = Sha256::new();
-            hasher.update(bytes);
-            let hash = hasher.finalize();
-            (Some(bytes.clone()), bytes.len() as u64, hash.to_vec())
+            hasher.update(&bytes);
+            let checksum = hasher.finalize().to_vec();
+            let size = bytes.len() as u64;
+
+            send_stream.write_all(&size.to_le_bytes()).await?;
+            send_stream.write_all(&bytes).await?;
+
+            (size, checksum)
         }
         ChunkSource::File(path) => {
-            let metadata = tokio::fs::metadata(path).await?;
+            let metadata = tokio::fs::metadata(&path).await?;
             let size = metadata.len();
-            (None, size, Vec::new())
+
+            send_stream.write_all(&size.to_le_bytes()).await?;
+            let checksum = stream_file(&mut send_stream, &path).await?;
+
+            (size, checksum)
         }
-    };
+        ChunkSource::Stream { size, mut reader } => {
+            send_stream.write_all(&size.to_le_bytes()).await?;
 
-    send_stream.write_all(&size.to_le_bytes()).await?;
+            let mut hasher = Sha256::new();
+            let mut buffer = vec![0u8; BUFFER_SIZE];
+            let mut remaining = size;
 
-    let final_checksum = if let Some(bytes) = data {
-        send_stream.write_all(&bytes).await?;
-        checksum
-    } else if let ChunkSource::File(path) = chunk {
-        stream_file(&mut send_stream, path).await?
-    } else {
-        unreachable!()
+            while remaining > 0 {
+                let to_read = std::cmp::min(BUFFER_SIZE as u64, remaining) as usize;
+                let n = reader
+                    .read(&mut buffer[..to_read])
+                    .await
+                    .map_err(|e| OctopiiError::Transport(format!("Stream read error: {}", e)))?;
+                if n == 0 {
+                    return Err(OctopiiError::Transport(format!(
+                        "Stream ended early: expected {} more bytes",
+                        remaining
+                    )));
+                }
+                hasher.update(&buffer[..n]);
+                send_stream.write_all(&buffer[..n]).await?;
+                remaining -= n as u64;
+            }
+
+            let checksum = hasher.finalize().to_vec();
+            (size, checksum)
+        }
     };
 
     send_stream.write_all(&final_checksum).await?;
@@ -339,4 +390,136 @@ async fn recv_chunk_impl(
     }
 
     sink.finish(received).await.map(Some)
+}
+
+/// Send chunk with hash-first dedup. Returns (bytes_sent, was_needed).
+pub async fn send_chunk_dedup(connection: &Connection, chunk: ChunkSource) -> Result<(u64, bool)> {
+    let (mut send_stream, mut recv_stream) = connection.open_bi().await?;
+
+    let (data, size, hash) = match chunk {
+        ChunkSource::Memory(bytes) => {
+            let hash: [u8; 32] = Sha256::digest(&bytes).into();
+            (bytes.to_vec(), bytes.len() as u64, hash)
+        }
+        ChunkSource::File(path) => {
+            let data = tokio::fs::read(&path).await?;
+            let hash: [u8; 32] = Sha256::digest(&data).into();
+            let size = data.len() as u64;
+            (data, size, hash)
+        }
+        ChunkSource::Stream { size, mut reader } => {
+            let mut data = Vec::with_capacity(size as usize);
+            reader
+                .read_to_end(&mut data)
+                .await
+                .map_err(|e| OctopiiError::Transport(format!("Stream read error: {}", e)))?;
+            let hash: [u8; 32] = Sha256::digest(&data).into();
+            (data, size, hash)
+        }
+    };
+
+    send_stream.write_all(&hash).await?;
+    send_stream.write_all(&size.to_le_bytes()).await?;
+
+    let mut response = [0u8; 1];
+    recv_stream
+        .read_exact(&mut response)
+        .await
+        .map_err(|e| OctopiiError::Transport(format!("Failed to read dedup response: {}", e)))?;
+
+    if response[0] == 1 {
+        send_stream
+            .finish()
+            .map_err(|e| OctopiiError::Transport(format!("Stream closed: {}", e)))?;
+        return Ok((0, false));
+    }
+
+    send_stream.write_all(&data).await?;
+    send_stream
+        .finish()
+        .map_err(|e| OctopiiError::Transport(format!("Stream closed: {}", e)))?;
+
+    recv_stream
+        .read_exact(&mut response)
+        .await
+        .map_err(|e| OctopiiError::Transport(format!("Failed to read final ACK: {}", e)))?;
+
+    if response[0] != 0 {
+        return Err(OctopiiError::Transport(
+            "Hash verification failed on peer".to_string(),
+        ));
+    }
+
+    Ok((size, true))
+}
+
+/// Receive chunk with hash-first dedup into BlobStore.
+pub async fn recv_chunk_dedup(
+    connection: &Connection,
+    store: &crate::blob_store::BlobStore,
+) -> Result<Option<[u8; 32]>> {
+    let (mut send_stream, mut recv_stream) = match connection.accept_bi().await {
+        Ok(stream) => stream,
+        Err(quinn::ConnectionError::ApplicationClosed(_)) => return Ok(None),
+        Err(e) => return Err(e.into()),
+    };
+
+    let mut hash = [0u8; 32];
+    recv_stream
+        .read_exact(&mut hash)
+        .await
+        .map_err(|e| OctopiiError::Transport(format!("Failed to read hash: {}", e)))?;
+
+    let mut size_buf = [0u8; 8];
+    recv_stream
+        .read_exact(&mut size_buf)
+        .await
+        .map_err(|e| OctopiiError::Transport(format!("Failed to read size: {}", e)))?;
+    let size = u64::from_le_bytes(size_buf);
+
+    if store.exists(&hash) {
+        send_stream
+            .write_all(&[1u8])
+            .await
+            .map_err(|e| OctopiiError::Transport(format!("Failed to send 'have it': {}", e)))?;
+        send_stream
+            .finish()
+            .map_err(|e| OctopiiError::Transport(format!("Stream closed: {}", e)))?;
+        return Ok(Some(hash));
+    }
+
+    send_stream
+        .write_all(&[0u8])
+        .await
+        .map_err(|e| OctopiiError::Transport(format!("Failed to send 'need it': {}", e)))?;
+
+    let mut data = vec![0u8; size as usize];
+    recv_stream
+        .read_exact(&mut data)
+        .await
+        .map_err(|e| OctopiiError::Transport(format!("Failed to read data: {}", e)))?;
+
+    let computed: [u8; 32] = Sha256::digest(&data).into();
+    if computed != hash {
+        send_stream
+            .write_all(&[1u8])
+            .await
+            .map_err(|e| OctopiiError::Transport(format!("Failed to send failure ACK: {}", e)))?;
+        send_stream
+            .finish()
+            .map_err(|e| OctopiiError::Transport(format!("Stream closed: {}", e)))?;
+        return Err(OctopiiError::Transport("Hash mismatch".to_string()));
+    }
+
+    store.put_with_hash(&hash, &data)?;
+
+    send_stream
+        .write_all(&[0u8])
+        .await
+        .map_err(|e| OctopiiError::Transport(format!("Failed to send success ACK: {}", e)))?;
+    send_stream
+        .finish()
+        .map_err(|e| OctopiiError::Transport(format!("Stream closed: {}", e)))?;
+
+    Ok(Some(hash))
 }

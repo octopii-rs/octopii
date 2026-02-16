@@ -143,7 +143,7 @@ jobs:
         run: rm -rf /tmp/octopii_test_* /tmp/walrus_* /tmp/custom_sm_test_* || true
 
   openraft-cluster-integration:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -215,7 +215,7 @@ jobs:
         run: rm -rf /tmp/octopii_test_* /tmp/walrus_* || true
 
   simple-smoke-tests:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -251,7 +251,7 @@ jobs:
         run: rm -rf /tmp/test_walrus_* /tmp/walrus_* || true
 
   simulation-test:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions-rust-lang/setup-rust-toolchain@v1
