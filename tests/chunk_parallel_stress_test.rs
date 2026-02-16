@@ -56,7 +56,7 @@ async fn test_parallel_transfers_to_single_peer() {
             let peer = Arc::clone(&peer1);
             let chunk = chunk.clone();
             tokio::spawn(async move {
-                peer.send_chunk_verified(&ChunkSource::Memory(chunk))
+                peer.send_chunk_verified(ChunkSource::Memory(chunk))
                     .await
                     .unwrap()
             })
@@ -173,7 +173,7 @@ async fn test_parallel_transfers_to_multiple_peers() {
             let addr = *addr;
             tokio::spawn(async move {
                 let peer = transport.connect(addr).await.unwrap();
-                peer.send_chunk_verified(&ChunkSource::Memory(chunk))
+                peer.send_chunk_verified(ChunkSource::Memory(chunk))
                     .await
                     .unwrap()
             })
@@ -265,7 +265,7 @@ async fn test_high_concurrency_stress() {
             let peer = Arc::clone(&peer1);
             let chunk = chunk.clone();
             tokio::spawn(async move {
-                peer.send_chunk_verified(&ChunkSource::Memory(chunk))
+                peer.send_chunk_verified(ChunkSource::Memory(chunk))
                     .await
                     .unwrap()
             })
@@ -373,7 +373,7 @@ async fn test_burst_transfers() {
                 let peer = Arc::clone(&peer1);
                 let chunk = chunk.clone();
                 tokio::spawn(async move {
-                    peer.send_chunk_verified(&ChunkSource::Memory(chunk))
+                    peer.send_chunk_verified(ChunkSource::Memory(chunk))
                         .await
                         .unwrap()
                 })

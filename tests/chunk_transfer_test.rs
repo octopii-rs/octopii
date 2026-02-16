@@ -29,7 +29,7 @@ async fn test_chunk_transfer_memory() {
     let chunk = ChunkSource::Memory(test_data.clone());
 
     let peer1 = transport1.connect(actual_addr2).await.unwrap();
-    let bytes_sent = peer1.send_chunk_verified(&chunk).await.unwrap();
+    let bytes_sent = peer1.send_chunk_verified(chunk).await.unwrap();
 
     assert_eq!(bytes_sent, test_data.len() as u64);
 
@@ -69,7 +69,7 @@ async fn test_chunk_transfer_file() {
     // Send chunk from file
     let chunk = ChunkSource::File(test_file.clone());
     let peer1 = transport1.connect(actual_addr2).await.unwrap();
-    let bytes_sent = peer1.send_chunk_verified(&chunk).await.unwrap();
+    let bytes_sent = peer1.send_chunk_verified(chunk).await.unwrap();
 
     assert_eq!(bytes_sent, test_data.len() as u64);
 
@@ -109,7 +109,7 @@ async fn test_chunk_transfer_checksum_verification() {
     // Send chunk
     let chunk = ChunkSource::Memory(test_data.clone());
     let peer1 = transport1.connect(actual_addr2).await.unwrap();
-    let result = peer1.send_chunk_verified(&chunk).await;
+    let result = peer1.send_chunk_verified(chunk).await;
 
     assert!(result.is_ok());
     assert_eq!(result.unwrap(), 1024 * 1024);
@@ -148,7 +148,7 @@ async fn test_chunk_transfer_stream_to_disk() {
     let payload = Bytes::from(vec![5u8; 8 * 1024]);
     let chunk = ChunkSource::Memory(payload.clone());
     let sender = transport1.connect(actual_addr2).await.unwrap();
-    let bytes_sent = sender.send_chunk_verified(&chunk).await.unwrap();
+    let bytes_sent = sender.send_chunk_verified(chunk).await.unwrap();
     assert_eq!(bytes_sent, payload.len() as u64);
 
     let written = receiver.await.unwrap().unwrap();

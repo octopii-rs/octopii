@@ -41,7 +41,7 @@ pub trait Peer: Send + Sync {
     fn recv(&self) -> TransportFut<'_, Option<Bytes>>;
     fn is_closed(&self) -> bool;
 
-    fn send_chunk_verified(&self, _chunk: &ChunkSource) -> TransportFut<'_, u64> {
+    fn send_chunk_verified(&self, _chunk: ChunkSource) -> TransportFut<'_, u64> {
         Box::pin(async {
             Err(OctopiiError::Transport(
                 "send_chunk_verified not supported".to_string(),

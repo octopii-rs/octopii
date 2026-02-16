@@ -45,7 +45,7 @@ async fn test_large_chunk_10mb() {
     let start = std::time::Instant::now();
     let chunk = ChunkSource::File(test_file.clone());
     let peer1 = transport1.connect(actual_addr2).await.unwrap();
-    let bytes_sent = peer1.send_chunk_verified(&chunk).await.unwrap();
+    let bytes_sent = peer1.send_chunk_verified(chunk).await.unwrap();
     let duration = start.elapsed();
 
     println!(
@@ -97,7 +97,7 @@ async fn test_large_chunk_100mb() {
     let start = std::time::Instant::now();
     let chunk = ChunkSource::File(test_file.clone());
     let peer1 = transport1.connect(actual_addr2).await.unwrap();
-    let bytes_sent = peer1.send_chunk_verified(&chunk).await.unwrap();
+    let bytes_sent = peer1.send_chunk_verified(chunk).await.unwrap();
     let duration = start.elapsed();
 
     println!(
@@ -163,7 +163,7 @@ async fn test_large_memory_chunk_50mb() {
     let start = std::time::Instant::now();
     let chunk = ChunkSource::Memory(test_data.clone());
     let peer1 = transport1.connect(actual_addr2).await.unwrap();
-    let bytes_sent = peer1.send_chunk_verified(&chunk).await.unwrap();
+    let bytes_sent = peer1.send_chunk_verified(chunk).await.unwrap();
     let duration = start.elapsed();
 
     println!(
@@ -232,7 +232,7 @@ async fn test_sequential_large_transfers() {
         tokio::time::sleep(Duration::from_millis(10)).await;
 
         let chunk = ChunkSource::File(path.clone());
-        let bytes_sent = peer1.send_chunk_verified(&chunk).await.unwrap();
+        let bytes_sent = peer1.send_chunk_verified(chunk).await.unwrap();
         assert_eq!(bytes_sent, 10 * 1024 * 1024);
 
         let _received = receiver_handle.await.unwrap().unwrap();

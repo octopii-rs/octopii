@@ -1,0 +1,76 @@
+services:
+  node1:
+    build:
+      context: ../..
+      dockerfile: examples/kv-http/Dockerfile
+    environment:
+      - NODE_ID=1
+      - BIND_ADDR=0.0.0.0:5001
+      - HTTP_ADDR=0.0.0.0:8001
+      - PEERS=10.5.0.12:5002,10.5.0.13:5003
+      - INITIAL_LEADER=true
+      - DATA_DIR=/data
+      - RUST_LOG=info
+    ports:
+      - "8001:8001"
+    volumes:
+      - node1-data:/data
+    networks:
+      kv-network:
+        ipv4_address: 10.5.0.11
+
+  node2:
+    build:
+      context: ../..
+      dockerfile: examples/kv-http/Dockerfile
+    environment:
+      - NODE_ID=2
+      - BIND_ADDR=0.0.0.0:5002
+      - HTTP_ADDR=0.0.0.0:8002
+      - PEERS=10.5.0.11:5001,10.5.0.13:5003
+      - INITIAL_LEADER=false
+      - DATA_DIR=/data
+      - RUST_LOG=info
+    ports:
+      - "8002:8002"
+    volumes:
+      - node2-data:/data
+    networks:
+      kv-network:
+        ipv4_address: 10.5.0.12
+    depends_on:
+      - node1
+
+  node3:
+    build:
+      context: ../..
+      dockerfile: examples/kv-http/Dockerfile
+    environment:
+      - NODE_ID=3
+      - BIND_ADDR=0.0.0.0:5003
+      - HTTP_ADDR=0.0.0.0:8003
+      - PEERS=10.5.0.11:5001,10.5.0.12:5002
+      - INITIAL_LEADER=false
+      - DATA_DIR=/data
+      - RUST_LOG=info
+    ports:
+      - "8003:8003"
+    volumes:
+      - node3-data:/data
+    networks:
+      kv-network:
+        ipv4_address: 10.5.0.13
+    depends_on:
+      - node1
+
+volumes:
+  node1-data:
+  node2-data:
+  node3-data:
+
+networks:
+  kv-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.5.0.0/24
