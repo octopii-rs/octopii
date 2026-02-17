@@ -2,6 +2,7 @@ pub mod runtime;
 
 pub mod blob_store;
 pub mod chunk;
+pub mod placement;
 pub mod config;
 pub mod error;
 mod invariants;
@@ -19,6 +20,7 @@ pub mod transport;
 pub mod wal;
 
 pub use blob_store::BlobStore;
+pub use placement::get_placement_group;
 pub use chunk::{ChunkSource, TransferResult};
 pub use config::Config;
 pub use error::{OctopiiError, Result};
