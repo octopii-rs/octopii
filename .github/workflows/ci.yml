@@ -33,6 +33,19 @@ jobs:
       - name: Run placement distribution tests (100k samples each)
         run: cargo test --lib placement::tests::test_uniform -- --nocapture
 
+  sharded-kv-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          cache: true
+      - name: Run sharded KV tests (includes WAL persistence)
+        run: cargo test --lib sharded_kv --no-fail-fast
+      - if: always()
+        run: rm -rf /tmp/sharded_kv_* /tmp/walrus_* || true
+
   chunk-dedup-test:
     runs-on: ubuntu-latest
     steps:

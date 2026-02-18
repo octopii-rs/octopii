@@ -1,8 +1,11 @@
-/// Returns a deterministic placement group for the given hash.
-/// The same hash always produces the same ordering of nodes.
-///
-/// Uses a custom Fisher-Yates shuffle with a simple splitmix64 PRNG
-/// to guarantee identical results on any platform/version.
+//! Deterministic placement groups for sharding.
+//!
+//! get_placement_group(nodes, hash, size) returns a deterministic ordering of nodes
+//! for any given hash. Uses Fisher-Yates shuffle with splitmix64 PRNG to guarantee
+//! identical results on any platform/version.
+//!
+//! splitmix64 reference: https://prng.di.unimi.it/splitmix64.c
+
 pub fn get_placement_group(nodes: &[u64], hash: u64, size: usize) -> Vec<u64> {
     if nodes.is_empty() || size == 0 {
         return Vec::new();
@@ -11,7 +14,6 @@ pub fn get_placement_group(nodes: &[u64], hash: u64, size: usize) -> Vec<u64> {
     let mut shuffled = nodes.to_vec();
     let mut state = hash;
 
-    // Fisher-Yates shuffle with splitmix64 PRNG
     for i in (1..shuffled.len()).rev() {
         state = splitmix64(state);
         let j = (state as usize) % (i + 1);
@@ -21,8 +23,6 @@ pub fn get_placement_group(nodes: &[u64], hash: u64, size: usize) -> Vec<u64> {
     (0..size).map(|i| shuffled[i % shuffled.len()]).collect()
 }
 
-/// splitmix64 - simple, fast, well-defined PRNG
-/// https://prng.di.unimi.it/splitmix64.c
 fn splitmix64(mut x: u64) -> u64 {
     x = x.wrapping_add(0x9e3779b97f4a7c15);
     x = (x ^ (x >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
@@ -55,7 +55,6 @@ mod tests {
         let nodes = vec![1, 2, 3, 4, 5];
         let pg = get_placement_group(&nodes, 42, 7);
         assert_eq!(pg.len(), 7);
-        // First 5 unique, then wraps
         assert_eq!(pg[5], pg[0]);
         assert_eq!(pg[6], pg[1]);
     }
@@ -92,9 +91,6 @@ mod tests {
         }
 
         let expected = num_samples as f64 / nodes.len() as f64;
-
-        // Chi-squared test: sum of (observed - expected)^2 / expected
-        // For 2 degrees of freedom (3 nodes - 1), critical value at p=0.01 is 9.21
         let chi_squared: f64 = nodes
             .iter()
             .map(|n| {
@@ -111,11 +107,7 @@ mod tests {
         }
         println!("Chi-squared: {:.4} (critical value at p=0.01: 9.21)", chi_squared);
 
-        assert!(
-            chi_squared < 9.21,
-            "Distribution not uniform! Chi-squared {} >= 9.21",
-            chi_squared
-        );
+        assert!(chi_squared < 9.21, "Distribution not uniform! Chi-squared {} >= 9.21", chi_squared);
     }
 
     #[test]
@@ -130,8 +122,6 @@ mod tests {
         }
 
         let expected = num_samples as f64 / nodes.len() as f64;
-
-        // For 4 degrees of freedom (5 nodes - 1), critical value at p=0.01 is 13.28
         let chi_squared: f64 = nodes
             .iter()
             .map(|n| {
@@ -148,11 +138,7 @@ mod tests {
         }
         println!("Chi-squared: {:.4} (critical value at p=0.01: 13.28)", chi_squared);
 
-        assert!(
-            chi_squared < 13.28,
-            "Distribution not uniform! Chi-squared {} >= 13.28",
-            chi_squared
-        );
+        assert!(chi_squared < 13.28, "Distribution not uniform! Chi-squared {} >= 13.28", chi_squared);
     }
 
     #[test]
@@ -164,7 +150,6 @@ mod tests {
         let num_samples = 100_000usize;
         let mut counts = std::collections::HashMap::new();
 
-        // Use random-ish string keys like real usage
         for i in 0..num_samples {
             let key = format!("user:{}:profile:data:key{}", i * 7 + 13, i);
             let mut hasher = DefaultHasher::new();
@@ -176,7 +161,6 @@ mod tests {
         }
 
         let expected = num_samples as f64 / nodes.len() as f64;
-
         let chi_squared: f64 = nodes
             .iter()
             .map(|n| {
@@ -193,10 +177,6 @@ mod tests {
         }
         println!("Chi-squared: {:.4} (critical value at p=0.01: 9.21)", chi_squared);
 
-        assert!(
-            chi_squared < 9.21,
-            "Distribution not uniform! Chi-squared {} >= 9.21",
-            chi_squared
-        );
+        assert!(chi_squared < 9.21, "Distribution not uniform! Chi-squared {} >= 9.21", chi_squared);
     }
 }
