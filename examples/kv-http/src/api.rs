@@ -6,16 +6,25 @@ use axum::{
 use octopii::OctopiiNode;
 use std::sync::Arc;
 
-use crate::types::{GetResponse, HealthResponse, SetRequest, StatusResponse};
+use crate::sharded::ShardedStore;
+use crate::types::{
+    GetResponse, HealthResponse, InternalGetResponse, InternalPutRequest, SetRequest,
+    ShardedDeleteResponse, ShardedGetResponse, ShardedPutResponse, StatusResponse,
+};
+
+pub struct AppState {
+    pub node: Arc<OctopiiNode>,
+    pub sharded: Arc<ShardedStore>,
+}
 
 pub async fn put_key(
-    State(node): State<Arc<OctopiiNode>>,
+    State(state): State<Arc<AppState>>,
     Path(key): Path<String>,
     Json(body): Json<SetRequest>,
 ) -> (StatusCode, Json<StatusResponse>) {
     let command = format!("SET {} {}", key, body.value);
 
-    match node.propose(command.into_bytes()).await {
+    match state.node.propose(command.into_bytes()).await {
         Ok(_) => (
             StatusCode::OK,
             Json(StatusResponse {
@@ -32,12 +41,12 @@ pub async fn put_key(
 }
 
 pub async fn get_key(
-    State(node): State<Arc<OctopiiNode>>,
+    State(state): State<Arc<AppState>>,
     Path(key): Path<String>,
 ) -> (StatusCode, Json<GetResponse>) {
     let command = format!("GET {}", key);
 
-    match node.query(command.as_bytes()).await {
+    match state.node.query(command.as_bytes()).await {
         Ok(result) => {
             let value = String::from_utf8_lossy(&result);
             if value == "NOT_FOUND" {
@@ -69,12 +78,12 @@ pub async fn get_key(
 }
 
 pub async fn delete_key(
-    State(node): State<Arc<OctopiiNode>>,
+    State(state): State<Arc<AppState>>,
     Path(key): Path<String>,
 ) -> (StatusCode, Json<StatusResponse>) {
     let command = format!("DELETE {}", key);
 
-    match node.propose(command.into_bytes()).await {
+    match state.node.propose(command.into_bytes()).await {
         Ok(_) => (
             StatusCode::OK,
             Json(StatusResponse {
@@ -90,10 +99,64 @@ pub async fn delete_key(
     }
 }
 
-pub async fn health(State(node): State<Arc<OctopiiNode>>) -> Json<HealthResponse> {
+pub async fn health(State(state): State<Arc<AppState>>) -> Json<HealthResponse> {
     Json(HealthResponse {
-        node_id: node.id(),
-        is_leader: node.is_leader().await,
-        has_leader: node.has_leader().await,
+        node_id: state.node.id(),
+        is_leader: state.node.is_leader().await,
+        has_leader: state.node.has_leader().await,
     })
+}
+
+// Sharded KV endpoints
+
+pub async fn sharded_get(
+    State(state): State<Arc<AppState>>,
+    Path(key): Path<String>,
+) -> Json<ShardedGetResponse> {
+    let (value, routing) = state.sharded.get(&key).await;
+    Json(ShardedGetResponse { value, routing })
+}
+
+pub async fn sharded_put(
+    State(state): State<Arc<AppState>>,
+    Path(key): Path<String>,
+    Json(body): Json<SetRequest>,
+) -> Json<ShardedPutResponse> {
+    let (ok, routing) = state.sharded.put(&key, &body.value).await;
+    Json(ShardedPutResponse { ok, routing })
+}
+
+pub async fn sharded_delete(
+    State(state): State<Arc<AppState>>,
+    Path(key): Path<String>,
+) -> Json<ShardedDeleteResponse> {
+    let (deleted, routing) = state.sharded.delete(&key).await;
+    Json(ShardedDeleteResponse { deleted, routing })
+}
+
+// Internal endpoints for node-to-node forwarding
+
+pub async fn sharded_internal_get(
+    State(state): State<Arc<AppState>>,
+    Path(key): Path<String>,
+) -> Json<InternalGetResponse> {
+    let value = state.sharded.local_get(&key);
+    Json(InternalGetResponse { value })
+}
+
+pub async fn sharded_internal_put(
+    State(state): State<Arc<AppState>>,
+    Path(key): Path<String>,
+    Json(body): Json<InternalPutRequest>,
+) -> StatusCode {
+    state.sharded.local_put(&key, &body.value);
+    StatusCode::OK
+}
+
+pub async fn sharded_internal_delete(
+    State(state): State<Arc<AppState>>,
+    Path(key): Path<String>,
+) -> StatusCode {
+    state.sharded.local_delete(&key);
+    StatusCode::OK
 }

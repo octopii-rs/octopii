@@ -9,6 +9,7 @@ mod invariants;
 #[cfg(feature = "openraft")]
 pub mod openraft;
 pub mod rpc;
+pub mod sharded_kv;
 pub mod shipping_lane;
 #[cfg(all(feature = "simulation", feature = "openraft"))]
 pub mod sim_runtime;
@@ -28,6 +29,7 @@ pub use error::{OctopiiError, Result};
 pub use openraft::node::OpenRaftNode as OctopiiNode;
 pub use rpc::RpcHandler;
 pub use runtime::OctopiiRuntime;
+pub use sharded_kv::{RpcClient, ShardedKV};
 pub use shipping_lane::ShippingLane;
 pub use state_machine::{KvStateMachine, StateMachine, StateMachineTrait, WalBackedStateMachine};
 pub use transport::{QuicTransport, Transport};

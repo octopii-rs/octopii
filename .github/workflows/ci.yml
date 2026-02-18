@@ -22,6 +22,29 @@ jobs:
           cache: true
       - run: cargo test --lib --no-fail-fast
 
+  placement-distribution-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          cache: true
+      - name: Run placement distribution tests (100k samples each)
+        run: cargo test --lib placement::tests::test_uniform -- --nocapture
+
+  chunk-dedup-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          cache: true
+      - run: cargo test --test chunk_dedup_test --no-fail-fast
+      - if: always()
+        run: rm -rf /tmp/chunk_dedup_* /tmp/octopii_test_* || true
+
   transport-test:
     runs-on: ubuntu-latest
     steps:

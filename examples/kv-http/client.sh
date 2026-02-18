@@ -11,18 +11,26 @@ NODES=(1 2 3)
 print_help() {
     cat <<'EOF'
 KV Store REPL Commands:
-  set <key> <value>   - Store a value
-  get <key>           - Retrieve a value
-  del <key>           - Delete a key
-  health              - Show current node status
-  nodes               - Show all nodes status
-  leader              - Find and switch to the leader
-  use <1|2|3>         - Switch to node 1, 2, or 3
-  help                - Show this help
-  quit/exit           - Exit the REPL
 
-Adaptive mode: Commands auto-retry on other nodes if current node fails.
-Writes automatically find the leader.
+  Replicated KV (Raft consensus - all nodes have all data):
+    set <key> <value>   - Store a value (goes through leader)
+    get <key>           - Retrieve a value
+    del <key>           - Delete a key
+
+  Sharded KV (no consensus - keys distributed across nodes):
+    sset <key> <value>  - Store in sharded store (routes to owner)
+    sget <key>          - Retrieve from sharded store
+    sdel <key>          - Delete from sharded store
+
+  Cluster:
+    health              - Show current node status
+    nodes               - Show all nodes status
+    leader              - Find and switch to the leader
+    use <1|2|3>         - Switch to node 1, 2, or 3
+    help                - Show this help
+    quit/exit           - Exit the REPL
+
+Sharded KV shows routing info: which node owns the key, placement group, etc.
 EOF
 }
 
@@ -163,6 +171,107 @@ do_del() {
     fi
 }
 
+# Sharded KV commands - show routing info
+
+do_sset() {
+    local key="$1"
+    local value="$2"
+    if [[ -z "$key" || -z "$value" ]]; then
+        echo "Usage: sset <key> <value>"
+        return 1
+    fi
+
+    if adaptive_request "PUT" "/sharded/$key" "{\"value\":\"$value\"}"; then
+        local ok=$(echo "$RESULT" | jq -r '.ok')
+        local owner=$(echo "$RESULT" | jq -r '.routing.owner_node')
+        local is_local=$(echo "$RESULT" | jq -r '.routing.is_local')
+        local forwarded=$(echo "$RESULT" | jq -r '.routing.forwarded_to // empty')
+        local hash=$(echo "$RESULT" | jq -r '.routing.key_hash')
+        local pg=$(echo "$RESULT" | jq -c '.routing.placement_group')
+
+        echo "Key:    $key"
+        echo "Hash:   $hash"
+        echo "Owner:  node $owner"
+        echo "PG:     $pg"
+        if [[ "$is_local" == "true" ]]; then
+            echo "Route:  LOCAL (handled by node $NODE)"
+        else
+            echo "Route:  FORWARDED to $forwarded"
+        fi
+        if [[ "$ok" == "true" ]]; then
+            echo "Status: OK"
+        else
+            echo "Status: FAILED"
+        fi
+    else
+        echo "Error: all nodes unavailable"
+    fi
+}
+
+do_sget() {
+    local key="$1"
+    if [[ -z "$key" ]]; then
+        echo "Usage: sget <key>"
+        return 1
+    fi
+
+    if adaptive_request "GET" "/sharded/$key"; then
+        local value=$(echo "$RESULT" | jq -r '.value // "(nil)"')
+        local owner=$(echo "$RESULT" | jq -r '.routing.owner_node')
+        local is_local=$(echo "$RESULT" | jq -r '.routing.is_local')
+        local forwarded=$(echo "$RESULT" | jq -r '.routing.forwarded_to // empty')
+        local hash=$(echo "$RESULT" | jq -r '.routing.key_hash')
+        local pg=$(echo "$RESULT" | jq -c '.routing.placement_group')
+
+        echo "Key:    $key"
+        echo "Hash:   $hash"
+        echo "Owner:  node $owner"
+        echo "PG:     $pg"
+        if [[ "$is_local" == "true" ]]; then
+            echo "Route:  LOCAL (handled by node $NODE)"
+        else
+            echo "Route:  FORWARDED to $forwarded"
+        fi
+        echo "Value:  $value"
+    else
+        echo "Error: all nodes unavailable"
+    fi
+}
+
+do_sdel() {
+    local key="$1"
+    if [[ -z "$key" ]]; then
+        echo "Usage: sdel <key>"
+        return 1
+    fi
+
+    if adaptive_request "DELETE" "/sharded/$key"; then
+        local deleted=$(echo "$RESULT" | jq -r '.deleted')
+        local owner=$(echo "$RESULT" | jq -r '.routing.owner_node')
+        local is_local=$(echo "$RESULT" | jq -r '.routing.is_local')
+        local forwarded=$(echo "$RESULT" | jq -r '.routing.forwarded_to // empty')
+        local hash=$(echo "$RESULT" | jq -r '.routing.key_hash')
+        local pg=$(echo "$RESULT" | jq -c '.routing.placement_group')
+
+        echo "Key:    $key"
+        echo "Hash:   $hash"
+        echo "Owner:  node $owner"
+        echo "PG:     $pg"
+        if [[ "$is_local" == "true" ]]; then
+            echo "Route:  LOCAL (handled by node $NODE)"
+        else
+            echo "Route:  FORWARDED to $forwarded"
+        fi
+        if [[ "$deleted" == "true" ]]; then
+            echo "Status: DELETED"
+        else
+            echo "Status: NOT FOUND"
+        fi
+    else
+        echo "Error: all nodes unavailable"
+    fi
+}
+
 do_health() {
     if adaptive_request "GET" "/health"; then
         local node_id=$(echo "$RESULT" | jq -r '.node_id')
@@ -253,6 +362,17 @@ while true; do
             ;;
         del|delete)
             do_del "$args"
+            ;;
+        sset)
+            key=$(echo "$args" | awk '{print $1}')
+            value=$(echo "$args" | cut -d' ' -f2-)
+            do_sset "$key" "$value"
+            ;;
+        sget)
+            do_sget "$args"
+            ;;
+        sdel|sdelete)
+            do_sdel "$args"
             ;;
         health)
             do_health

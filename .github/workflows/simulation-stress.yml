@@ -12,17 +12,18 @@ env:
 jobs:
   simulation-stress:
     runs-on: ubuntu-latest
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - name: Set vendored protoc
         run: echo "PROTOC=$(cargo run --quiet --bin protoc_path)" >> "$GITHUB_ENV"
       - name: Run stress simulation tests
-        run: cargo test --features simulation --test simulation --no-fail-fast stress_ -- --test-threads=2
+        run: cargo test --features simulation --test simulation --no-fail-fast stress_ -- --test-threads=1
       - name: Run stress cluster simulation tests
         env:
           CLUSTER_SEED_START: "0"
           CLUSTER_SEED_COUNT: "20"
-        run: cargo test --features simulation,openraft --test cluster_simulation_stress --no-fail-fast stress_cluster_ -- --test-threads=10
+        run: cargo test --features simulation,openraft --test cluster_simulation_stress --no-fail-fast stress_cluster_ -- --test-threads=1
       - if: always()
         run: rm -rf /tmp/octopii_sim_cluster_* /tmp/walrus_sim_* || true

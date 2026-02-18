@@ -8,6 +8,8 @@ services:
       - BIND_ADDR=0.0.0.0:5001
       - HTTP_ADDR=0.0.0.0:8001
       - PEERS=10.5.0.12:5002,10.5.0.13:5003
+      - CLUSTER_NODES=1,2,3
+      - CLUSTER_HTTP=1=http://10.5.0.11:8001,2=http://10.5.0.12:8002,3=http://10.5.0.13:8003
       - INITIAL_LEADER=true
       - DATA_DIR=/data
       - RUST_LOG=info
@@ -28,6 +30,8 @@ services:
       - BIND_ADDR=0.0.0.0:5002
       - HTTP_ADDR=0.0.0.0:8002
       - PEERS=10.5.0.11:5001,10.5.0.13:5003
+      - CLUSTER_NODES=1,2,3
+      - CLUSTER_HTTP=1=http://10.5.0.11:8001,2=http://10.5.0.12:8002,3=http://10.5.0.13:8003
       - INITIAL_LEADER=false
       - DATA_DIR=/data
       - RUST_LOG=info
@@ -50,6 +54,8 @@ services:
       - BIND_ADDR=0.0.0.0:5003
       - HTTP_ADDR=0.0.0.0:8003
       - PEERS=10.5.0.11:5001,10.5.0.12:5002
+      - CLUSTER_NODES=1,2,3
+      - CLUSTER_HTTP=1=http://10.5.0.11:8001,2=http://10.5.0.12:8002,3=http://10.5.0.13:8003
       - INITIAL_LEADER=false
       - DATA_DIR=/data
       - RUST_LOG=info

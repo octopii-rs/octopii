@@ -1,11 +1,15 @@
 mod api;
+mod sharded;
 mod types;
 
+use api::AppState;
 use axum::{
     routing::{delete, get, put},
     Router,
 };
 use octopii::{Config, OctopiiNode, OctopiiRuntime};
+use sharded::ShardedStore;
+use std::collections::HashMap;
 use std::env;
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -58,6 +62,27 @@ fn http_addr_from_env() -> SocketAddr {
         .expect("HTTP_ADDR must be a valid socket address")
 }
 
+fn cluster_nodes_from_env() -> Vec<u64> {
+    env::var("CLUSTER_NODES")
+        .unwrap_or_else(|_| "1".into())
+        .split(',')
+        .filter_map(|s| s.trim().parse().ok())
+        .collect()
+}
+
+fn cluster_http_from_env() -> HashMap<u64, String> {
+    let mut map = HashMap::new();
+    let s = env::var("CLUSTER_HTTP").unwrap_or_default();
+    for part in s.split(',') {
+        if let Some((id, addr)) = part.split_once('=') {
+            if let Ok(id) = id.trim().parse::<u64>() {
+                map.insert(id, addr.trim().to_string());
+            }
+        }
+    }
+    map
+}
+
 #[tokio::main(flavor = "multi_thread", worker_threads = 4)]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
@@ -69,6 +94,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let config = config_from_env();
     let http_addr = http_addr_from_env();
+    let cluster_nodes = cluster_nodes_from_env();
+    let cluster_http = cluster_http_from_env();
 
     tracing::info!(
         "Starting node {} at {} (HTTP: {})",
@@ -77,6 +104,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         http_addr
     );
     tracing::info!("Peers: {:?}", config.peers);
+    tracing::info!("Cluster nodes: {:?}", cluster_nodes);
+    tracing::info!("Cluster HTTP: {:?}", cluster_http);
     tracing::info!("Initial leader: {}", config.is_initial_leader);
 
     std::fs::create_dir_all(&config.wal_dir)?;
@@ -84,6 +113,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let runtime = OctopiiRuntime::from_handle(tokio::runtime::Handle::current());
     let peers = config.peers.clone();
     let node = Arc::new(OctopiiNode::new(config.clone(), runtime).await?);
+
+    let sharded = Arc::new(ShardedStore::new(config.node_id, cluster_nodes, cluster_http));
 
     node.start().await?;
 
@@ -126,12 +157,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    let state = Arc::new(AppState {
+        node: node.clone(),
+        sharded,
+    });
+
     let app = Router::new()
+        // Replicated KV (Raft consensus)
         .route("/kv/:key", get(api::get_key))
         .route("/kv/:key", put(api::put_key))
         .route("/kv/:key", delete(api::delete_key))
+        // Sharded KV (no consensus, horizontal scaling)
+        .route("/sharded/:key", get(api::sharded_get))
+        .route("/sharded/:key", put(api::sharded_put))
+        .route("/sharded/:key", delete(api::sharded_delete))
+        // Internal endpoints for node-to-node forwarding
+        .route("/sharded/internal/:key", get(api::sharded_internal_get))
+        .route("/sharded/internal/:key", put(api::sharded_internal_put))
+        .route("/sharded/internal/:key", delete(api::sharded_internal_delete))
         .route("/health", get(api::health))
-        .with_state(node.clone());
+        .with_state(state);
 
     tracing::info!("HTTP server listening on {}", http_addr);
 

@@ -21,7 +21,6 @@ jobs:
         run: echo "PROTOC=$(cargo run --quiet --bin protoc_path)" >> "$GITHUB_ENV"
       - name: Run StrictlyAtOnce Walrus invariants
         run: |
-          ulimit -n 1048576
           cargo test --features simulation --test simulation openraft_wal_log_store_recovery_roundtrip -- --test-threads=1
           cargo test --features simulation --test simulation openraft_wal_log_store_truncate_and_purge_recovery -- --test-threads=1
           cargo test --features simulation --test simulation wal_backed_state_machine_recovery_roundtrip -- --test-threads=1
